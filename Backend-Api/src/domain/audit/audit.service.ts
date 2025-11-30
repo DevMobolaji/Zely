@@ -59,7 +59,7 @@ class AuditLogger {
     };
 
     const update = {
-      $inc: { attemptCount: 1 }, // increment attempt count
+      $inc: { attemptCount: 1 }, // increment attempt 
       $set: {
         lastAttempt: new Date(),
         status, // latest status
