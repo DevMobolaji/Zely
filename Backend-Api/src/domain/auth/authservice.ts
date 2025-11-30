@@ -1,13 +1,14 @@
-import { User } from "@/domain/auth/authmodel"
+import User from "@/domain/auth/authmodel"
 import { hashedPassword } from "@/config/password";
 import AuditLogger from "../audit/audit.service";
-import { Model } from "mongoose";
+import { IRequestContext } from "@/interfaces/RequestContext";
+import BadRequestError from "@/core/errors/badRequest";
 
 
 
 class userService {
 
-    private userModel: Model<User> = User;
+    private userModel = User
 
     /**
    * Registers a new user
@@ -18,35 +19,32 @@ class userService {
    * @param userAgent Optional User-Agent for audit logging
    */
 
-    public async Register(name: string, email: string, password: string, ip?: string, userAgent?: string) {
+    public async Register(
+        name: string, 
+        email: string, 
+        password: string, 
+        context: IRequestContext
+    ) {
         const alreadyExist = await this.userModel.findOne({ email })
 
         if (alreadyExist) {
-            await AuditLogger.logEvent({
-                userId: "",
-                action: "USER_REGISTER_ATTEMPT",
-                status: "DUPLICATE_EMAIL",
-                ip: ip,
-                userAgent: userAgent,
-                metadata: { email: email }
-
-            })
-            throw new Error("Error ")
+            const UserId = alreadyExist._id.toString()
+            await AuditLogger.logRegistrationAttempt(context, UserId,"ALREADY_EXISTS");
+            throw new BadRequestError("User already Exist with that email")
         }
 
-        const pass = hashedPassword(password)
         const newUser = await this.userModel.create({
             name,
             email,
-            password: pass
+            password
         })
+        await AuditLogger.logRegistrationAttempt(context, newUser._id.toString(),"USER_CREATED");
         
         return {
             user: newUser
         }
     }
-
-
 }
+
 
 export default userService; 

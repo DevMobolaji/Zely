@@ -1,5 +1,7 @@
 import dotenv from "dotenv";
 
+require('dotenv').config();
+
 class PepperService {
     private static instance: string | null = null;
     static getPepper(): string {

@@ -21,6 +21,12 @@ function validateEnvVariables(): void {
   MONGO_USER: str({ default: "" }),
   MONGO_PASSWORD: str({ default: "" }),
 
+  // DB_USER: str({default: ""}),
+  // DB_HOST: str({default: ""}),
+  // DB_NAME: str({default: ""}),
+  // DB_PASSWORD: str({default: ""}),
+  // DB_PORT: port({default: 5432}),
+
   // Authentication
   JWT_SECRET: str({ desc: "Secret key for JWT tokens", default: 'changeme'}),
 
