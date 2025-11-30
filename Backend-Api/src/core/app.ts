@@ -1,11 +1,10 @@
 import express, { Application } from 'express';
 import Controller from "@/interfaces/controller.interfaces"
-import { Pool, PoolClient } from "pg"
-import { mongoConnect } from '@/config/mongo';
 import ErrorMiddleware from '@/app/middleware/errorHandler';
 import { requestLogger } from '@/app/logging/request-logger';
 import { requestIdMiddleware } from '@/app/middleware/requestId.middleware.';
 import logger from '@/app/logging/logger';
+import { mongoConnect } from '@/config/mongo';
 
 
 class App {
@@ -18,11 +17,11 @@ class App {
         this.port = port;
         
 
+        this.initializeDbConnection();
         this.initializeMiddleware();
         this.initializeRoutes(controllers);
         this.initializeGraphql();
         this.initializeErrorMiddleware();
-        this.initializeDbConnection();
         this.gracefulShutdown()
     }
 
@@ -44,6 +43,7 @@ class App {
                 process.exit(1);
             });
         });
+
     }
 
         private initializeMiddleware(): void {
@@ -67,34 +67,14 @@ class App {
         }
 
         public async initializeDbConnection(): Promise<void> {
-            await mongoConnect() // implement your DB connection logic here
-            // const pool = new Pool({
-            //     user: process.env.DB_USER,
-            //     host: process.env.DB_HOST,
-            //     database: process.env.DB_NAME,
-            //     password: process.env.DB_PASSWORD,
-            //     port: process.env.DB_PORT ? +process.env.DB_PORT : undefined
-            //     });
-
-            //     // 3. Test the connection and start the server
-            //     pool.connect((err: Error | undefined, client: PoolClient | undefined, release: (release?: any) => void) => {
-            //     if (err) {
-            //         // Log the error and exit if the database connection fails
-            //         return console.error('Error acquiring client', err.stack);
-            //     }
-            //     console.log('Successfully connected to the PostgreSQL database!');
-            //     release(); // Release the client connection
-            //         // 
-            //         })
-                }
-
-        // 1. Handle Unhandled Promise Rejections
-        
-
-
-
-        
-
+            // implement your DB connection logic here
+            await mongoConnect();
+            // const client = await connectDB()
+            // //GraceFul shutdown
+            process.on('SIGINT', async () => {
+            console.log('SIGINT signal received. Closing MongoDB connection...');
+            })
+        }
 
         public listen(): void {
             this.express.listen(this.port, () => {
