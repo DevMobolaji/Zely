@@ -2,8 +2,10 @@
 
 import { Request, Response, NextFunction, Router } from "express"
 import userService from "./authservice";
-import asyncWrapper from "@/app/middleware/restmiddleware/async.wrapper";
+import asyncWrapper from "@/app/middleware/async.wrapper";
 import Controller from "@/interfaces/controller.interfaces";
+import { IRequestContext } from "@/interfaces/RequestContext";
+import { StatusCodes } from "http-status-codes";
 
 
 
@@ -22,11 +24,36 @@ class AuthController implements Controller {
     }
 
 
-    private register = asyncWrapper( async (req: Request, res: Response): Promise<Response | void> => {
-        const { email, password, name, ip, userAgent } = req.body 
-        const tk = await this.userService.Register(email, password, name, ip, userAgent);
+    private register = asyncWrapper( async (req: Request, res: Response, next: NextFunction): Promise<Response | void> => {
 
-        res.status(201).json({token: tk});
+        const { email, password, name } = req.body 
+        const requestId = (req as any).requestId;
+
+        const context: IRequestContext = {
+        requestId,
+        ip: req.ip || '',
+        userAgent: req.get("User-Agent") || '',
+        email: email,
+    };
+    
+        const tk = await this.userService.Register(
+            name, 
+            email, 
+            password,
+            context
+        );
+
+        const frtres = {
+            name: tk.user.name,
+            email: tk.user.email,
+            emailVerified: tk.user.isEmailVerified,
+            mfaEnabled: tk.user.mfaEnabled,
+            role: tk.user.role,
+            id: tk.user._id,
+
+        }
+
+        res.status(StatusCodes.CREATED).json({token: frtres});
     })
 
     // private login = async (req: Request, res: Response, next: NextFunction): Promise<Response | void> => {
@@ -38,3 +65,4 @@ class AuthController implements Controller {
 }
 
 export default AuthController;
+
