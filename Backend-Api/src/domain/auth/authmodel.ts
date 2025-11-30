@@ -9,7 +9,6 @@ const userSchema = new Schema<User> ({
         type: String,
         required: true
     },
-    // In your userSchema definition:
     password: {
         type: String,
         required: true,
@@ -17,10 +16,6 @@ const userSchema = new Schema<User> ({
 
         validate: {
             validator: function(v: string) {
-                console.log(v)
-                // Updated RegEx: 
-                // 1. Lookaheads check for at least one of each class: Lowercase, Uppercase, Digit, and Special Symbol (including _).
-                // 2. The final consuming group [] includes ALL allowed characters (letters, digits, and your specific symbols).
                 return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*_])([A-Za-z\d!@#$%^&*_]){8,}$/.test(v);
             },
             message: 'Password must contain at least 1 uppercase, 1 lowercase, 1 number, and 1 symbol.',
