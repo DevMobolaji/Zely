@@ -1,0 +1,23 @@
+{"level":"error","message":"[API_ERROR] 400 - Validation failed: Password must contain at least 1 uppercase, 1 lowercase, 1 number, and 1 symbol.","timestamp":"2025-12-01T04:47:28.365Z"}
+{"level":"error","message":"[API_ERROR] 400 - Validation failed: Please use a valid email address","timestamp":"2025-12-01T04:48:08.186Z"}
+{"level":"error","message":"[API_ERROR] 400 - Validation failed: Please use a valid email address","timestamp":"2025-12-01T05:03:04.609Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T05:03:25.784Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T05:22:34.452Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T05:31:46.606Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T05:47:33.366Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T05:54:52.758Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:01:47.312Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:02:15.256Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:02:18.764Z"}
+{"error":"Updating the path 'attemptCount' would create a conflict at 'attemptCount'","filter":{"action":"USER_REGISTER_ATTEMPT","trackedEmail":"joknmbhdjnnnnjnl@gmial.com"},"level":"error","message":"AUDIT_LOG_FAILED: Registration upsert error","timestamp":"2025-12-01T06:20:27.416Z","update":{"$inc":{"attemptCount":1},"$set":{"ip":"::1","lastAttempt":"2025-12-01T06:20:27.404Z","requestId":"21704f3c-1f16-467c-8b42-140fad07eb4a","status":"REGISTRATION_SUCCESS","userAgent":"PostmanRuntime/7.49.1","userId":"692d33abdff25c6dcdcccda8"},"$setOnInsert":{"attemptCount":0,"createdAt":"2025-12-01T06:20:27.404Z","initialStatus":"USER_REGISTER_ATTEMPT","severity":"WARN"}}}
+{"error":"Updating the path 'attemptCount' would create a conflict at 'attemptCount'","filter":{"action":"USER_REGISTER_ATTEMPT","trackedEmail":"joknmbhdjnnnnjnl@gmial.com"},"level":"error","message":"AUDIT_LOG_FAILED: Registration upsert error","timestamp":"2025-12-01T06:21:24.130Z","update":{"$inc":{"attemptCount":1},"$set":{"ip":"::1","lastAttempt":"2025-12-01T06:21:24.122Z","requestId":"2a963662-51aa-4d97-8ca6-799149ef551e","status":"REGISTRATION_BLOCKED_ALREADY_EXISTS","userAgent":"PostmanRuntime/7.49.1","userId":"692d33abdff25c6dcdcccda8"},"$setOnInsert":{"attemptCount":0,"createdAt":"2025-12-01T06:21:24.122Z","initialStatus":"USER_REGISTER_ATTEMPT","severity":"WARN"}}}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:21:24.132Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:21:45.462Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:22:20.440Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:30:52.736Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:34:39.221Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:35:52.548Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:36:53.012Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:38:04.656Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:38:21.181Z"}
+{"level":"error","message":"[API_ERROR] 400 - User already Exist with that email","timestamp":"2025-12-01T06:39:59.334Z"}

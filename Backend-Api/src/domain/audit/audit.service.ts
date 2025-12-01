@@ -2,8 +2,8 @@ import logger from '@/app/logging/logger';
 import { AuditModel } from './audit.model';
 import { IRequestContext } from '@/interfaces/RequestContext';
 import { v4 as uuidv4 } from 'uuid';
+import { AuditSeverity } from './audit.interface';
 
-type AuditSeverity = "INFO" | "WARN" | "CRITICAL";
 
 export type AuditEvent = {
   userId?: string | null;
@@ -14,11 +14,13 @@ export type AuditEvent = {
   userAgent?: string;
   metadata?: Record<string, any>;
   severity?: AuditSeverity;
+  trackedEmail?: string;
 };
 
 class AuditLogger {
   /**
-   * Generic audit event logger (writes to DB + Winston)
+   * GenerIC AUDIT lOGGER (writes to DB + Winston)
+   * For High scale production this Db should be moved to a queue system(KAFKA, BULLMQ)
    */
   static async logEvent(event: AuditEvent) {
     const entry = {
@@ -27,11 +29,14 @@ class AuditLogger {
       requestId: event.requestId || uuidv4(),
       createdAt: new Date(),
       lastAttempt: new Date(),
+      ip: event.ip ?? 'UNKNOWN', 
+      userAgent: event.userAgent ?? 'UNKNOWN', 
+      trackedEmail: event.trackedEmail ?? 'N/A',
     };
 
     // Log to application logger
     try {
-      logger.info("AUDIT_EVENT", entry);
+      logger.info(`AUDIT_EVENT: ${event.action} - ${event.status}`, entry);
     } catch (err) {
       logger.error("Failed to write audit to app logger", err);
     }
@@ -44,35 +49,40 @@ class AuditLogger {
     }
   }
 
-  /**
-   * Specialized method for user registration attempts.
-   * Tracks attempt count, first status, latest status, and context info.
-   */
   static async logRegistrationAttempt(
     context: IRequestContext,
     userIdToLog: string | null = null,
-    status: string = "PENDING"
+    status: string = "USER_REGISTER_ATTEMPT"
   ) {
+
+    const requestId = context.requestId ?? uuidv4();
+    const ip = context.ip ?? 'UNKNOWN_IP';
+    const userAgent = context.userAgent ?? 'UNKNOWN_AGENT';
+
     const filter = {
       trackedEmail: context.email,
       action: "USER_REGISTER_ATTEMPT",
     };
 
+    const previous = await AuditModel.findOne(filter);
+    console.log(previous)
+    const initialStatus = previous?.status || "USER_REGISTER_ATTEMPT";
+
     const update = {
-      $inc: { attemptCount: 1 }, // increment attempt 
+      $inc: { attemptCount: 1 }, // increment attempt
       $set: {
         lastAttempt: new Date(),
         status, // latest status
-        requestId: context.requestId || uuidv4(),
-        ip: context.ip,
-        userAgent: context.userAgent,
+        requestId,
+        ip,
+        userAgent,
         userId: userIdToLog,
+        initialStatus
       },
       $setOnInsert: {
         createdAt: new Date(),
         severity: "WARN",
-        initialStatus: status, // store first attempt status
-      },
+      }, 
     };
 
     const options = { upsert: true, new: true };
@@ -96,6 +106,10 @@ class AuditLogger {
         attemptCount: doc.attemptCount,
         requestId: doc.requestId,
       });
+
+      if (status === "SUCCESS" && userIdToLog) {
+          await this.logUserAction(context, "USER_CREATED", "COMPLETED", userIdToLog, { relatedRequestId: requestId }, "CRITICAL");
+      }
     } catch (error) {
       logger.error('AUDIT_LOG_FAILED: Registration upsert error', {
         error: (error as Error).message,
@@ -117,15 +131,21 @@ class AuditLogger {
     metadata: Record<string, any> = {},
     severity: AuditSeverity = "INFO"
   ) {
+    const requestId = context.requestId ?? uuidv4();
+    const ip = context.ip ?? 'UNKNOWN_IP';
+    const userAgent = context.userAgent ?? 'UNKNOWN_AGENT';
+
+
     const entry: AuditEvent = {
       action,
       status,
       userId: userIdToLog,
-      requestId: context.requestId || uuidv4(),
-      ip: context.ip,
-      userAgent: context.userAgent,
+      requestId,
+      ip,
+      userAgent,
       metadata,
       severity,
+      trackedEmail: context.email,
     };
 
     // Special handling for registration attempts to track attemptCount

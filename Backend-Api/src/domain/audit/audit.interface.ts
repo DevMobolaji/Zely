@@ -12,7 +12,7 @@ export interface IAudit extends Document {
   userId?: string | null;
   ip?: string;
   userAgent?: string;
-  severity: 'INFO' | 'WARN' | 'CRITICAL';
+  severity: AuditSeverity;
   metadata?: Record<string, any>;
   createdAt: Date;
   lastAttempt: Date;

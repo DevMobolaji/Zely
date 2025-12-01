@@ -29,7 +29,7 @@ class userService {
 
         if (alreadyExist) {
             const UserId = alreadyExist._id.toString()
-            await AuditLogger.logRegistrationAttempt(context, UserId,"ALREADY_EXISTS");
+            await AuditLogger.logRegistrationAttempt(context, UserId,"REGISTRATION_BLOCKED_ALREADY_EXISTS");
             throw new BadRequestError("User already Exist with that email")
         }
 
@@ -38,7 +38,7 @@ class userService {
             email,
             password
         })
-        await AuditLogger.logRegistrationAttempt(context, newUser._id.toString(),"USER_CREATED");
+        await AuditLogger.logRegistrationAttempt(context, newUser._id.toString(),"REGISTRATION_SUCCESS");
         
         return {
             user: newUser

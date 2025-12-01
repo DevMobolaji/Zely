@@ -7,18 +7,21 @@ export interface ErrorOutput {
 
 
 abstract class HttpException extends Error {
-    public abstract statusCode: number;
+    public readonly statusCode: number;
+    public readonly errorCode: string;
 
-    constructor(message: string) {
+    constructor(message: string, statusCode: number, errorCode: string = "API_ERROR") {
         super(message);
-        Object.setPrototypeOf(this, HttpException.prototype)
+        this.statusCode = statusCode; // Initialize statusCode here
+        this.errorCode = errorCode;
     }
 
      serializeErrors(): ErrorOutput[] {
         return [{ 
             message: this.message,
             status: this.statusCode,
-            code: "API ERROR",
+            code: this.errorCode,
+            ...('getExtension' in this && { extension: (this as any).getExtension() })
         }]
     }
 

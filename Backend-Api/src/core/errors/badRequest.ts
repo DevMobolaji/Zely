@@ -1,22 +1,26 @@
-import HttpException from "./customAPIError";
+import HttpException, { ErrorOutput } from "./customAPIError";
 import { StatusCodes } from "http-status-codes"
 
+interface FieldError { field: string; message: string; }
 
 class BadRequestError extends HttpException {
-    public statusCode: number;
+    private errors: FieldError[];
     
-    constructor(message: string) {
-        super(message);
-        this.statusCode = StatusCodes.BAD_REQUEST
-        Object.setPrototypeOf(this, BadRequestError.prototype);
+    constructor(message: string, errors: FieldError[] = []) {
+        super(message, StatusCodes.BAD_REQUEST, 'VALIDATION_ERROR');
+        this.errors = errors
     }
     
-    serializeErrors() {
-        return [{
-            message: this.message,
+    serializeErrors(): ErrorOutput[] {
+       if(this.errors.length > 0) {
+        return this.errors.map(err => ({
+            message: err.message,
             status: this.statusCode,
-            code: 'INVALID_INPUT',
-        }];
+            code: 'INVALID_FIELD',
+            extension: { field: err.field }
+       }));
+    }
+    return super.serializeErrors();
     }
 }
 
