@@ -1,8 +1,9 @@
 import { Schema, model } from "mongoose";
 import validator from "validator";
 
-import User from "./authinterface";
+import User, { UserRole } from "./authinterface";
 import { hashedPassword, verifyPassword } from "@/config/password";
+import PepperService from "@/config/pepper";
 
 const userSchema = new Schema<User> ({
     name: {
@@ -13,13 +14,6 @@ const userSchema = new Schema<User> ({
         type: String,
         required: true,
         minlength: [8, "Password must be at least 8 characters long"],
-
-        validate: {
-            validator: function(v: string) {
-                return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*_])([A-Za-z\d!@#$%^&*_]){8,}$/.test(v);
-            },
-            message: 'Password must contain at least 1 uppercase, 1 lowercase, 1 number, and 1 symbol.',
-        },
     },
     email: {
         type: String,
@@ -47,8 +41,8 @@ const userSchema = new Schema<User> ({
     },
     role: {
         type: String,
-        enum: ['USER', 'ADMIN', 'SUPPORT'],
-        default: "USER"
+        enum: Object.values(UserRole),
+        default: UserRole.USER
     },
 }, { timestamps: true }
 )
@@ -67,7 +61,7 @@ userSchema.pre("save", async function () {
 
 
 //This method compares the password entered by the user to the hashed password stored in the DB
-userSchema.methods.comparePassword = async function (password: string): Promise<Error | Boolean> {
+userSchema.methods.comparePassword = async function (password: string): Promise<Boolean> {
     return await verifyPassword(password, this.password)
 }
 

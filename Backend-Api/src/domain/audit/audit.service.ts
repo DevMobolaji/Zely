@@ -17,6 +17,11 @@ export type AuditEvent = {
 };
 
 class AuditLogger {
+  private static readonly ATTEMPT_TRACKING_ACTIONS = [
+    "USER_REGISTER_ATTEMPT",
+    "USER_LOGIN_ATTEMPT",
+    "PASSWORD_RESET_ATTEMPT",
+  ];
   /**
    * Generic audit event logger (writes to DB + Winston)
    */
@@ -48,15 +53,21 @@ class AuditLogger {
    * Specialized method for user registration attempts.
    * Tracks attempt count, first status, latest status, and context info.
    */
-  static async logRegistrationAttempt(
+  static async logAttempt(
     context: IRequestContext,
     userIdToLog: string | null = null,
-    status: string = "PENDING"
+    status: string = "PENDING",
+    action: string
   ) {
     const filter = {
       trackedEmail: context.email,
-      action: "USER_REGISTER_ATTEMPT",
+      action,
     };
+
+    const previous = await AuditModel.findOne(filter);
+    const initialStatus = previous ? previous.status : "PENDING";
+
+    console.log(previous)
 
     const update = {
       $inc: { attemptCount: 1 }, // increment attempt count
@@ -67,11 +78,11 @@ class AuditLogger {
         ip: context.ip,
         userAgent: context.userAgent,
         userId: userIdToLog,
+        initialStatus,
       },
       $setOnInsert: {
         createdAt: new Date(),
         severity: "WARN",
-        initialStatus: status, // store first attempt status
       },
     };
 
@@ -88,7 +99,7 @@ class AuditLogger {
       }
 
       // Log via Winston for audit visibility
-      logger.info(`AUDIT_LOGGED: USER_REGISTER_ATTEMPT - ${status} - `, {
+      logger.info(`AUDIT_LOGGED: ${action} - ${status} - `, {
         auditedEmail: context.email,
         auditedUserId: userIdToLog,
         initialStatus: doc.initialStatus,
@@ -129,8 +140,8 @@ class AuditLogger {
     };
 
     // Special handling for registration attempts to track attemptCount
-    if (action === "USER_REGISTER_ATTEMPT") {
-      await this.logRegistrationAttempt(context, userIdToLog, status);
+    if (this.ATTEMPT_TRACKING_ACTIONS.includes(action)) {
+      await this.logAttempt(context, userIdToLog, status, action);
       return;
     }
 
