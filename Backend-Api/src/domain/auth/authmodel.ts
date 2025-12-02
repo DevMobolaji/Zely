@@ -3,6 +3,7 @@ import validator from "validator";
 
 import User, { UserRole } from "./authinterface";
 import { hashedPassword, verifyPassword } from "@/config/password";
+import PepperService from "@/config/pepper";
 
 const userSchema = new Schema<User> ({
     name: {
