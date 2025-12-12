@@ -7,9 +7,8 @@ class UnauthenticatedError extends HttpException {
     public statusCode: number;
 
     constructor(message: string) {
-        super(message); 
+        super(message, StatusCodes.UNAUTHORIZED); 
         this.statusCode = StatusCodes.UNAUTHORIZED
-        Object.setPrototypeOf(this, UnauthenticatedError.prototype); 
     }
 
     /**

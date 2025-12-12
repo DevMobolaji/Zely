@@ -1,10 +1,8 @@
 
 import { redis } from "@/config/redis.cli";
 import { hashToken } from "@/config/hashToken";
+import { RedisKeys } from "@/config/tokenConfig";
 
-const HASH_PREFIX = "refresh:hash:";        // refresh:hash:<hashedToken>
-const LATEST_PREFIX = "refresh:latest:";    // refresh:latest:<userId>:<deviceId>
-const DEVICES_PREFIX = "refresh:devices:";  // refresh:devices:<userId>
 
 const ttl = 14 * 24 * 60 * 60;
 
@@ -12,10 +10,10 @@ export const storeRefreshToken = async (rawToken: string, payload: {
     userId: string, jti: string, deviceId: string
 }) => {
     const h = hashToken(rawToken)
-    const hashKey = HASH_PREFIX + h;
-    const lastestKey = `${LATEST_PREFIX}${payload.userId}:${payload.deviceId}`
+    const hashKey = RedisKeys.HASH_PREFIX + h;
+    const lastestKey = `${RedisKeys.LATEST_PREFIX}${payload.userId}:${payload.deviceId}`
 
-    const devicesKey = `${DEVICES_PREFIX}${payload.userId}`;
+    const devicesKey = `${RedisKeys.DEVICES_PREFIX}${payload.userId}`;
 
     await redis.set(hashKey, JSON.stringify(payload), "EX", ttl)
 
@@ -28,7 +26,7 @@ export const storeRefreshToken = async (rawToken: string, payload: {
 export const getPayloadByRefreshToken = async (rawToken: string) => {
     const h = hashToken(rawToken);
 
-    const hashKey = HASH_PREFIX + h
+    const hashKey = RedisKeys.HASH_PREFIX + h
     const data = await redis.get(hashKey);
 
     if (!data) return null;
@@ -37,25 +35,30 @@ export const getPayloadByRefreshToken = async (rawToken: string) => {
 }
 
 export const getLatestHashForDevice = async (userId: string, deviceId: string) => {
-    const lastestKey = `${LATEST_PREFIX}${userId}:${deviceId}`
+    const lastestKey = `${RedisKeys.LATEST_PREFIX}${userId}:${deviceId}`
 
     return await redis.get(lastestKey)
 }
 
 export const deleteRefreshByHash = async (rawToken: string) => {
-    const h = hashToken(rawToken)
 
-    await redis.del(HASH_PREFIX + h)
-}
+    const h = hashToken(rawToken);
+
+    const key = RedisKeys.HASH_PREFIX + h;
+
+    await redis.del(key);
+
+};
+
 
 export const revokeAllSessions = async (userId: string) => {
-    const devicesKey = `${DEVICES_PREFIX}${userId}`
+    const devicesKey = `${RedisKeys.DEVICES_PREFIX}${userId}`
 
     const devicesId = await redis.smembers(devicesKey)
     const pipeline = redis.pipeline()
 
     for (const deviceId of devicesId) {
-        pipeline.get(`${LATEST_PREFIX}${userId}:${deviceId}`)
+        pipeline.get(`${RedisKeys.LATEST_PREFIX}${userId}:${deviceId}`)
     }
 
     const results = await pipeline.exec();
@@ -63,8 +66,8 @@ export const revokeAllSessions = async (userId: string) => {
 
     const delPipeline = redis.pipeline();
 
-    for (const h of hashes) delPipeline.del(HASH_PREFIX + h)
-    for (const deviceId of devicesId) delPipeline.del(`${LATEST_PREFIX}${userId}:${deviceId}`)
+    for (const h of hashes) delPipeline.del(RedisKeys.HASH_PREFIX + h)
+    for (const deviceId of devicesId) delPipeline.del(`${RedisKeys.LATEST_PREFIX}${userId}:${deviceId}`)
 
     delPipeline.del(devicesKey);
     await delPipeline.exec();
@@ -73,11 +76,11 @@ export const revokeAllSessions = async (userId: string) => {
 
 // Revoke single device session
 export const revokeSession = async (userId: string, deviceId: string) => {
-    const latestKey = `${LATEST_PREFIX}${userId}:${deviceId}`;
+    const latestKey = `${RedisKeys.LATEST_PREFIX}${userId}:${deviceId}`;
     const h = await redis.get(latestKey);
     const pipeline = redis.pipeline();
-    if (h) pipeline.del(HASH_PREFIX + h);
+    if (h) pipeline.del(RedisKeys.HASH_PREFIX + h);
     pipeline.del(latestKey);
-    pipeline.srem(`${DEVICES_PREFIX}${userId}`, deviceId);
+    pipeline.srem(`${RedisKeys.DEVICES_PREFIX}${userId}`, deviceId);
     await pipeline.exec();
 };

@@ -21,6 +21,12 @@ class AuditLogger {
     "USER_REGISTER_ATTEMPT",
     "USER_LOGIN_ATTEMPT",
     "PASSWORD_RESET_ATTEMPT",
+    "USER_LOGOUT",
+    "USER_LOGOUT_ALL",
+    "REFRESH_TOKEN_ATTEMPT",
+    "REFRESH_TOKEN_SUCCESS",
+    "REFRESH_TOKEN_FAILURE",
+
   ];
   /**
    * Generic audit event logger (writes to DB + Winston)
@@ -66,8 +72,6 @@ class AuditLogger {
 
     const previous = await AuditModel.findOne(filter);
     const initialStatus = previous ? previous.status : "PENDING";
-
-    console.log(previous)
 
     const update = {
       $inc: { attemptCount: 1 }, // increment attempt count

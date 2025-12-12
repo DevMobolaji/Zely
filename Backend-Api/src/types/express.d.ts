@@ -4,7 +4,12 @@ declare global {
     namespace Express {
         interface Request {
             logger: winston.Logger;
-            requestId?: string
+            requestId?: string;
+            user?: {
+                userId: string;
+                email: string;
+                role: string;
+            };
         }
     }
 }

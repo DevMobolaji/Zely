@@ -1,15 +1,11 @@
-import HttpException, {ErrorOutput} from "./customAPIError"; 
+import HttpException, { ErrorOutput } from "./customAPIError";
 import { StatusCodes } from "http-status-codes"
 
 
 class Unauthorized extends HttpException {
-    public statusCode: number;
-
     constructor(message: string) {
-        super(message);
-        this.statusCode = StatusCodes.FORBIDDEN
-        Object.setPrototypeOf(this, Unauthorized.prototype);
-    }
+        super(message, StatusCodes.FORBIDDEN, 'FORBIDDEN_ACCESS');
+        }
 
     serializeErrors(): ErrorOutput[] {
         return [{
