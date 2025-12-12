@@ -4,6 +4,7 @@ import "dotenv/config";
 require('dotenv').config();
 
 const MONGO_URL = process.env.MONGO_URI as string;
+console.log(MONGO_URL)
 
 if (!MONGO_URL) {
   throw new Error("MONGO_URI is missing");
