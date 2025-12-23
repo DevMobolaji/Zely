@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Sun, Moon } from 'lucide-react';
 
@@ -30,23 +31,26 @@ const AuthLayout: React.FC<AuthLayoutProps> = ({ children, rightSection }) => {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-white dark:bg-slate-900 font-sans transition-colors duration-300">
       {/* Left Section - Form Container */}
-      <div className="w-full lg:w-1/2 flex flex-col justify-center p-6 sm:p-12 relative bg-white dark:bg-slate-900 text-slate-900 dark:text-white transition-colors duration-300 h-full overflow-y-auto no-scrollbar">
+      <div className="w-full lg:w-1/2 relative bg-white dark:bg-slate-900 text-slate-900 dark:text-white transition-colors duration-300 h-full overflow-y-auto no-scrollbar">
+        {/* Scrollable inner container that allows vertical centering but respects overflow */}
+        <div className="min-h-full flex flex-col justify-center p-6 sm:p-12">
 
-        {/* Theme Toggle Switch - Visible on mobile/tablet, Hidden on Desktop (lg+) */}
-        <button
-          onClick={toggleTheme}
-          className="lg:hidden absolute top-6 right-6 p-2.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:focus:ring-slate-600 z-50"
-          aria-label="Toggle Dark Mode"
-        >
-          {isDark ? (
-            <Sun className="w-5 h-5" />
-          ) : (
-            <Moon className="w-5 h-5" />
-          )}
-        </button>
+          {/* Theme Toggle Switch - Visible on mobile/tablet, Hidden on Desktop (lg+) */}
+          <button
+            onClick={toggleTheme}
+            className="lg:hidden absolute top-6 right-6 p-2.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:focus:ring-slate-600 z-50"
+            aria-label="Toggle Dark Mode"
+          >
+            {isDark ? (
+              <Sun className="w-5 h-5" />
+            ) : (
+              <Moon className="w-5 h-5" />
+            )}
+          </button>
 
-        <div className="w-full max-w-md mx-auto z-10 py-8">
-          {children}
+          <div className="w-full max-w-md mx-auto z-10 py-12">
+            {children}
+          </div>
         </div>
       </div>
 

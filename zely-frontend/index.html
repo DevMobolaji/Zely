@@ -35,11 +35,36 @@
             'float': 'float 8s ease-in-out infinite',
             'float-delayed': 'float 8s ease-in-out 4s infinite',
             'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            'enter-fade': 'fadeIn 0.5s ease-out forwards',
+            'enter-slide-up': 'slideUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'enter-slide-down': 'slideDown 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'enter-slide-right': 'slideRight 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'enter-scale': 'scaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
           },
           keyframes: {
             float: {
               '0%, 100%': { transform: 'translateY(0)' },
               '50%': { transform: 'translateY(-20px)' },
+            },
+            fadeIn: {
+              '0%': { opacity: '0' },
+              '100%': { opacity: '1' },
+            },
+            slideUp: {
+              '0%': { transform: 'translateY(20px)', opacity: '0' },
+              '100%': { transform: 'translateY(0)', opacity: '1' },
+            },
+            slideDown: {
+              '0%': { transform: 'translateY(-20px)', opacity: '0' },
+              '100%': { transform: 'translateY(0)', opacity: '1' },
+            },
+            slideRight: {
+              '0%': { transform: 'translateX(-30px)', opacity: '0' },
+              '100%': { transform: 'translateX(0)', opacity: '1' },
+            },
+            scaleIn: {
+              '0%': { transform: 'scale(0.95)', opacity: '0' },
+              '100%': { transform: 'scale(1)', opacity: '1' },
             }
           }
         },
@@ -47,15 +72,17 @@
     };
   </script>
   <script type="importmap">
-      {
-        "imports": {
-          "react": "https://esm.sh/react@18.2.0",
-          "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-          "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
-          "lucide-react": "https://esm.sh/lucide-react@0.344.0"
-        }
-      }
-    </script>
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+    "lucide-react": "https://esm.sh/lucide-react@0.344.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
+  }
+}
+</script>
   <style>
     body {
       font-family: 'Nunito Sans', sans-serif;
@@ -89,12 +116,36 @@
       scrollbar-width: none;
       /* Firefox */
     }
+
+    /* Autofill Styling Overrides */
+    /* Light Mode Defaults */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus,
+    input:-webkit-autofill:active {
+      -webkit-box-shadow: 0 0 0 30px #f8fafc inset !important;
+      /* slate-50 */
+      -webkit-text-fill-color: #0f172a !important;
+      /* slate-900 */
+      transition: background-color 5000s ease-in-out 0s;
+    }
+
+    /* Dark Mode Overrides */
+    .dark input:-webkit-autofill,
+    .dark input:-webkit-autofill:hover,
+    .dark input:-webkit-autofill:focus,
+    .dark input:-webkit-autofill:active {
+      -webkit-box-shadow: 0 0 0 30px #1e293b inset !important;
+      /* slate-800 */
+      -webkit-text-fill-color: white !important;
+      caret-color: white;
+    }
   </style>
 </head>
 
 <body>
   <div id="root"></div>
-  <script type="module" src="src/index.tsx"></script>
+  <script src="src/index.tsx" type="module"></script>
 </body>
 
 </html>
