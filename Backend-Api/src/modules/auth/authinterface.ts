@@ -18,6 +18,7 @@ export default interface User extends Document {
     email: string,
     password: string,
     name: string,
+    userId: string,
     isEmailVerified: boolean,
     role: UserRole,
     mfaEnabled?: boolean,

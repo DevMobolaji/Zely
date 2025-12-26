@@ -1,27 +1,14 @@
 import User from "./authmodel"
 import AuditLogger from "../audit/audit.service";
 import BadRequestError from "infrastructure/errors/badRequest";
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from "infrastructure/lib/token.helper";
+import { issueTokensForUser, signAccessToken, signRefreshToken, verifyRefreshToken } from "infrastructure/lib/token.helper";
 import { deleteRefreshByHash, getLatestHashForDevice, getPayloadByRefreshToken, revokeAllSessions, revokeSession, storeRefreshToken } from "infrastructure/lib/session.Service";
 import { hashToken } from "@/config/hashToken";
 import { produceUserCreatedEvent } from "@/kafka/producer/user.producer";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 import { AuditAction, AuditStatus } from "../audit/audit.interface";
-
-
-// Helperfunction: generate tokens and store them properly
-export const issueTokensForUser = async (user: { _id: string; email: string; role: string }, deviceId: string) => {
-    //ISSUE ACCESS TOKEN TO USER
-    const accTk = await signAccessToken({ userId: user._id, email: user.email, role: user.role });
-
-    //ISSUE REFRESH TOKEN TO USER
-    const { token: refreshTokenRaw, payload } = await signRefreshToken(user._id, deviceId);
-
-    // Store hashed refresh token and latest payload
-    await storeRefreshToken(refreshTokenRaw, payload);
-
-    return { accTk, refreshToken: refreshTokenRaw };
-};
+import { generateUserId } from "@/shared/utils/id.generator";
+import { extractRequestContext } from "@/shared/middleware/request.context";
 
 
 class userService {
@@ -33,42 +20,45 @@ class userService {
         email: string,
         password: string,
         context: IRequestContext,
-        deviceId: string
     ) {
-        const alreadyExist = await this.userModel.findOne({ email })
+
+        const userId = generateUserId()
+
+        const normalizedEmail = email.toLowerCase().trim();
+
+        const alreadyExist = await this.userModel.findOne({ email: normalizedEmail })
 
         if (alreadyExist) {
-            const UserId = alreadyExist._id.toString()
-            await AuditLogger.logUserAction(context, AuditAction.USER_REGISTER_ATTEMPT, AuditStatus.FAILED, UserId);
+            AuditLogger.logAttempt(context, AuditAction.USER_REGISTER_ATTEMPT, AuditStatus.FAILED, { email: normalizedEmail });
             throw new BadRequestError("User already Exist with that email")
         }
 
         const newUser = await this.userModel.create({
+            userId,
             name,
-            email,
+            email: normalizedEmail,
             password
         })
 
         const { accTk, refreshToken } = await issueTokensForUser(
-            { _id: newUser._id.toString(), email: newUser.email, role: newUser.role },
-            deviceId || context.userAgent
+            { _id: newUser._id.toString(), userId: userId, email: newUser.email, role: newUser.role },
+            context.deviceId || context.userAgent
         );
 
         //Fire User Created Event
         produceUserCreatedEvent({
-            _id: newUser._id.toString(),
+            _id: newUser.userId,
             name: newUser.name,
             email: newUser.email,
             role: newUser.role,
             isEmailVerified: newUser.isEmailVerified
         });
 
-        await AuditLogger.logUserAction(context, AuditAction.USER_REGISTER_ATTEMPT, AuditStatus.SUCCESS, newUser._id.toString());
+        AuditLogger.logUserAction(context, AuditAction.USER_REGISTER_SUCCESS, AuditStatus.SUCCESS, newUser.userId);
 
-        context.userId = newUser._id.toString();
 
         return {
-            user: newUser,
+            user: newUser.toJSON(),
             accessToken: accTk,
             refreshToken: refreshToken
         }
@@ -87,11 +77,11 @@ class userService {
         }
 
         const { accTk, refreshToken } = await issueTokensForUser(
-            { _id: user._id.toString(), email: user.email, role: user.role },
+            { _id: user._id.toString(), userId: user.userId, email: user.email, role: user.role },
             context.deviceId || context.userAgent
         );
 
-        AuditLogger.logUserAction(context, AuditAction.USER_LOGIN_ATTEMPT, AuditStatus.SUCCESS, user._id.toString());
+        AuditLogger.logUserAction(context, AuditAction.USER_LOGIN_SUCCESS, AuditStatus.SUCCESS, user.userId);
 
         return this.createResponseDTO(user, accTk, refreshToken)
 
@@ -103,29 +93,36 @@ class userService {
         const payloadFromJwt = verifiedToken as any;
         const storeedPayload = await getPayloadByRefreshToken(refreshToken)
 
-        const lastestHash = await getLatestHashForDevice(payloadFromJwt.userId, payloadFromJwt.deviceId)
+        const lastestHash = await getLatestHashForDevice(payloadFromJwt.sub, payloadFromJwt.deviceId)
         const incomingHash = hashToken(refreshToken)
 
         if (!storeedPayload) {
-            await revokeAllSessions(payloadFromJwt.userId)
+            await revokeAllSessions(payloadFromJwt.sub)
             throw new BadRequestError("Refresh token revoked (possible reuse). Re-login required.")
         }
 
         if (lastestHash && incomingHash !== lastestHash) {
-            await revokeAllSessions(payloadFromJwt.userId)
+            await revokeAllSessions(payloadFromJwt.sub)
             throw new BadRequestError("Refresh token reuse detected. All sessions revoked.")
         }
 
-        const { token: newRefreshRaw, payload: newPayload } = await signRefreshToken(payloadFromJwt.userId, payloadFromJwt.deviceId);
-        const newAccess = await signAccessToken({ userId: payloadFromJwt.userId, email: (payloadFromJwt.email || ""), role: (payloadFromJwt.role || "") });
+        const user = await this.userModel.findById(payloadFromJwt.sub).select("_id userId email role").exec()
+        if (!user) {
+            throw new BadRequestError("User not found")
+        }
 
-        await AuditLogger.logUserAction(context, AuditAction.REFRESH_TOKEN_ATTEMPT, "REFRESH_TOKEN_SUCCESS", payloadFromJwt.userId);
+        console.log(user)
+
+        const { token: newRefreshRaw, payload: newPayload } = await signRefreshToken(user._id.toString(), payloadFromJwt.deviceId);
+        const newAccess = await signAccessToken({ sub: user._id.toString(), userId: user.userId, email: user.email, role: user.role });
+
+        AuditLogger.logAttempt(context, AuditAction.REFRESH_TOKEN_SUCCESS, AuditStatus.SUCCESS, { email: user.email });
 
         await storeRefreshToken(newRefreshRaw, newPayload)
 
         await deleteRefreshByHash(refreshToken);
 
-        return this.createResponseDTO(payloadFromJwt.userId, newAccess, newRefreshRaw)
+        return this.createResponseDTO(user._id.toString(), newAccess, newRefreshRaw)
 
     }
 
@@ -150,7 +147,7 @@ class userService {
             await revokeSession(userId, deviceId);
         }
 
-        await AuditLogger.logUserAction(context, "USER_LOGOUT", "COMPLETED", userId);
+        await AuditLogger.logUserAction(context, AuditAction.USER_LOGOUT, AuditStatus.SUCCESS, userId);
 
         return { ok: true };
     }
@@ -160,7 +157,7 @@ class userService {
 
         await revokeAllSessions(userId);
 
-        await AuditLogger.logUserAction(context, "USER_LOGOUT_ALL", "COMPLETED", userId);
+        await AuditLogger.logUserAction(context, AuditAction.USER_LOGOUT_ALL, AuditStatus.SUCCESS, userId);
 
         return { ok: true };
     }

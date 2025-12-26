@@ -10,7 +10,6 @@ export function requestIdMiddleware(
     if (!req.requestId) {
         req.requestId = uuidv4();
     }
-
     
     res.setHeader("X-Request-ID", req.requestId);
     next();

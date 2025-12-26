@@ -10,6 +10,7 @@ export interface AccessPayload {
     role: string;
     iat?: number;
     exp?: number;
+    sub: string
 }
 
 
@@ -27,21 +28,21 @@ export const requireAuth = async (
     let token = header.substring(7);
 
     token = token.replace(/^'|'$/g, "").replace(/^"|"$/g, "");
-    console.log(header)
 
     try {
         // 1. Verify
         const payload: AccessPayload = await verifyAccessToken(token);
-        console.log(payload)
 
         // 2. Fetch user
-        const userDoc = await User.findById(payload.userId).select("-password").exec();
+        const userDoc = await User.findById(payload.sub).select("-password").exec();
+        
         if (!userDoc) {
             return next(new UnauthenticatedError("Unauthorize"));
         }
 
         req.user = {
-            userId: userDoc._id.toString(),
+            sub: userDoc._id.toString(),
+            userId: userDoc.userId,
             email: userDoc.email,
             role: userDoc.role
         };

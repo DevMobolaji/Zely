@@ -25,13 +25,12 @@ const AuditSchema = new Schema<IAudit>(
 );
 
 // Compound index for tracking attempts by email and action
-AuditSchema.index(
-  { trackedEmail: 1, action: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { trackedEmail: { $exists: true } }
-  }
-);
+// AuditSchema.index(
+//   {
+//     unique: true,
+//     partialFilterExpression: { trackedEmail: { $exists: true } }
+//   }
+// );
 
 // Index for querying by userId (for user activity timeline)
 AuditSchema.index({ userId: 1, createdAt: -1 });

@@ -4,15 +4,17 @@ import redis  from "@/infrastructure/cache/redis.cli"
 import { hashToken } from "@/config/hashToken";
 import Unauthorized from '../errors/unauthorized';
 import { config } from "@/config/index";
+import { storeRefreshToken } from "./session.Service";
 
 
 type AccessPayload = {
+    sub: string,
     userId: string,
     email: string,
     role: string
 }
 
-type RefreshPayload = { userId: string; jti: string; deviceId: string };
+type RefreshPayload = { sub: string; jti: string; deviceId: string };
 
 const tokenConfig = {
     refreshToken: {
@@ -31,12 +33,12 @@ export const signAccessToken = async (payload: AccessPayload) => {
     })
 }
 
-export const signRefreshToken = async (userId: string, deviceId: string) => {
+export const signRefreshToken = async (sub: string, deviceId: string) => {
 
     const secret = config.jwt.refreshSecret;
 
     const jti = uuidv4();
-    const payload: RefreshPayload = { userId, jti, deviceId };
+    const payload: RefreshPayload = { sub, jti, deviceId };
 
     if (!secret) throw new Unauthorized("REFRESH_TOKEN_SECRET is not defined");
      const token = jwt.sign(payload, secret, {
@@ -76,11 +78,25 @@ export function getRefreshCookieLifetimeMs() {
 }
 
 
+export async function issueTokensForUser (user: { _id: string; userId: string, email: string; role: string }, deviceId: string) {
+    //ISSUE ACCESS TOKEN TO USER
+    const accTk = await signAccessToken({ sub: user._id, userId: user.userId, email: user.email, role: user.role });
+
+    //ISSUE REFRESH TOKEN TO USER
+    const { token: refreshTokenRaw, payload } = await signRefreshToken(user._id.toString(), deviceId);
+
+    // Store hashed refresh token and latest payload
+    await storeRefreshToken(refreshTokenRaw, payload);
+
+    return { accTk, refreshToken: refreshTokenRaw };
+};
+
 
 module.exports = {
     signAccessToken,
     signRefreshToken,
     verifyAccessToken,
     verifyRefreshToken,
-    getRefreshCookieLifetimeMs
+    getRefreshCookieLifetimeMs,
+    issueTokensForUser
 }

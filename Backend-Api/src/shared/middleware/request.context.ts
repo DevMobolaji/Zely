@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { IAuthRequest, IRequestContext } from '@/config/interfaces/request.interface';
-import { v4 as uuidv4 } from 'uuid';
+import { generateDeviceId } from '../utils/id.generator';
 
 export function extractRequestContext(req: IAuthRequest): IRequestContext {
     return {
@@ -78,9 +78,6 @@ function getDeviceType(userAgent?: string): 'mobile' | 'web' | 'tablet' | undefi
 /**
  * Middleware to validate device ID
  * WHY: Ensure device tracking is working
- * 
- * USAGE:
- * app.use(requireDeviceId);
  */
 
 
@@ -108,7 +105,7 @@ export function deviceMiddleware(req: IAuthRequest, res: Response, next: NextFun
     let deviceId = req.cookies?.deviceId;
 
     if (!deviceId) {
-        deviceId = crypto.randomUUID();
+        deviceId = generateDeviceId();  
         res.cookie('deviceId', deviceId, {
             httpOnly: true,
             secure: true,

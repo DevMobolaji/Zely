@@ -16,7 +16,7 @@ import mongo from "@/config/mongo"
 
 
 // Middleware
-import { attachRequestContext } from '@/shared/middleware/request.context';
+import { attachRequestContext, deviceMiddleware } from '@/shared/middleware/request.context';
 import { requestIdMiddleware } from "@/shared/middleware/request-id.middleware";
 import { requestLogger } from '@/shared/logging/request-logger';
 import ErrorMiddleware from '@/shared/middleware/errorHandler';
@@ -25,21 +25,20 @@ import ErrorMiddleware from '@/shared/middleware/errorHandler';
 //KAFKA
 import { startAuditConsumer, shutdownAuditConsumer } from '@/kafka/consumer/audit.consumer';
 import { startKafkaProducer, shutdownKafkaProducer, setupKafkaTopics } from "@/kafka/config"
+import { waitForTopicsReady } from '@/kafka/config/waitForTopicsReady';
+import { kafka } from '@/kafka/config/kafka.config';
+import { getKafkaHealthStatus } from '@/kafka/config/kafka.health';
+import { TOPICS } from '@/kafka/config/topics';
 
 
 // Config
 import { config } from '@/config/index';
 import { logger } from '@/shared/utils/logger';
 import mongoose from 'mongoose';
-import { TOPICS } from '@/kafka/config/topics';
-import { waitForTopicsReady } from '@/kafka/config/waitForTopicsReady';
-import { kafka } from '@/kafka/config/kafka.config';
-import { getKafkaHealthStatus } from '@/kafka/config/kafka.health';
 
 
-/**
- * Main Application Class
- */
+
+
 class App {
     public express: Application;
     public port: number;
@@ -50,7 +49,7 @@ class App {
         this.express = express();
         this.port = port;
 
-        // Configure middleware (sync operations only)
+
         this.initializeSecurityMiddleware();
         this.initializeParsingMiddleware();
         this.initializeLoggingMiddleware();
@@ -71,7 +70,7 @@ class App {
             logger.info('✅ All services initialized successfully');
         } catch (error) {
             logger.error('Failed to initialize application', error);
-            throw error; // Let server.ts handle the failure
+            throw error;
         }
     }
 
@@ -192,8 +191,8 @@ class App {
      */
 
     private initializeCustomMiddleware(): void {
-        // 1. Request ID middleware
         this.express.use(requestIdMiddleware);
+        this.express.use(deviceMiddleware);
         this.express.use(attachRequestContext);
         this.express.use(requestLogger);
     }
@@ -236,13 +235,8 @@ class App {
         this.express.get('/health/detailed', async (req: Request, res: Response) => {
 
             try {
-                // Check MongoDB
                 const mongoHealth = await this.checkMongoHealth();
-
-                // Check Redis
                 const redisHealth = await redis.getHealthStatus();
-
-                // Check Kafka
                 const kafkaHealth = await getKafkaHealthStatus();
 
                 const health = {
@@ -262,7 +256,6 @@ class App {
                 const isHealthy =
                     mongoHealth.isConnected &&
                     redisHealth.isConnected;
-                // Note: Kafka is optional, not included in health check
 
                 res.status(isHealthy ? 200 : 503).json(health);
             } catch (error) {
@@ -298,7 +291,6 @@ class App {
     }
 
     private initializeErrorMiddleware(): void {
-        // 404 handler - Route not found
         this.express.use((req: Request, res: Response) => {
             res.status(404).json({
                 success: false,
@@ -386,7 +378,6 @@ class App {
                     logger.info('✅ Kafka connections closed');
                 } catch (error) {
                     logger.error('Error closing Kafka:', error);
-                    // Non-critical, continue shutdown
                 }
 
                 // Step 3: Close Redis connection

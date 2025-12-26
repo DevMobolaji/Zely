@@ -12,6 +12,8 @@ import { IRequestContext } from '@/config/interfaces/request.interface';
 class AuditLogger {
   private static readonly ATTEMPT_TRACKING_ACTIONS = [
     AuditAction.USER_REGISTER_ATTEMPT,
+    AuditAction.USER_REGISTER_SUCCESS,
+    AuditAction.USER_LOGIN_SUCCESS,
     AuditAction.USER_LOGIN_ATTEMPT,
     AuditAction.PASSWORD_RESET_ATTEMPT,
     AuditAction.USER_LOGOUT,
@@ -53,11 +55,23 @@ class AuditLogger {
 
   }
 
+  // context: IRequestContext,
+  // params: {
+  //   action: AuditAction | string;
+  //   status?: AuditStatus;
+  //   metadata?: Record<string, any>;
+  //   severity?: AuditSeverity;
+  //   userId?: string;
+  // }
+
+
   static async logAttempt(
     context: IRequestContext,
-    userIdToLog: string | null = null,
+    action: string | AuditAction,
     status: string = AuditStatus.PENDING,
-    action: string | AuditAction
+    metadata: Record<string, any> = {},
+    severity: AuditSeverity = 'INFO',
+    userIdToLog?: string,
   ): Promise<void> {
     if (!context.email) {
       logger.warn('Cannot log attempt without email in context', { context });
@@ -84,7 +98,7 @@ class AuditLogger {
       },
       $setOnInsert: {
         createdAt: new Date(),
-        severity: 'WARN' as AuditSeverity,
+        severity,
       },
     };
 
@@ -152,7 +166,7 @@ class AuditLogger {
 
     // Special handling for attempt tracking
     if (this.ATTEMPT_TRACKING_ACTIONS.includes(action as AuditAction)) {
-      await this.logAttempt(context, userIdToLog, status, action);
+      await this.logAttempt(context, action, status, metadata, severity, userIdToLog ?? undefined);
       return;
     }
 
@@ -275,24 +289,7 @@ class AuditLogger {
       return { limited: false, attemptCount: 0, resetAt: null };
     }
   }
-
-  /**
-   * NEW: Clear attempts (after successful action)
-   * WHY: Reset counter after successful login/registration
-   */
-  // In audit.logger.ts
-  static async resetAttempts(email: string, action: string): Promise<void> {
-    try {
-      await AuditModel.updateOne(
-        { trackedEmail: email, action },
-        { $set: { attemptCount: 0, blockedUntil: null, lastFailureAt: null } }
-      );
-      logger.info('Reset attempts', { email, action });
-    } catch (error) {
-      logger.error('Failed to reset attempts', error);
-    }
-  }  
-
+ 
 
   /**
    * NEW: Get audit statistics

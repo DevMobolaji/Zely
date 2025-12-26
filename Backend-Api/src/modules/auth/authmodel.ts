@@ -24,8 +24,16 @@ const userSchema = new Schema<User>({
         validate: {
             validator: (v: string) => validator.isEmail(v, {}),
             message: 'Please use a valid email address',
-        }
+        },
+        index: true
 
+    },
+    userId: {
+        type: String,
+        required: true,
+        unique: true,
+        immutable: true,
+        index: true,
     },
     isEmailVerified: {
         type: Boolean,
@@ -62,8 +70,16 @@ const userSchema = new Schema<User>({
             default: null
         }
     },
-      
-}, { timestamps: true }
+}, {
+    timestamps: true,
+    toJSON: {
+        transform: (doc, ret: any) => {
+            delete ret.password;
+            delete ret.__v;
+            return ret;
+        }
+    }
+}
 )
 
 userSchema.pre("save", async function () {

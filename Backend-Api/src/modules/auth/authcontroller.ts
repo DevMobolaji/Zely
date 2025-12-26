@@ -39,7 +39,7 @@ class AuthController implements Controller {
             throw new Error("User not found");
         }
         return {
-            userId: user._id.toString(),
+            userId: user.userId,
             name: user.name,
             email: user.email,
             emailVerified: user.isEmailVerified as boolean,
@@ -53,11 +53,11 @@ class AuthController implements Controller {
     //HANDLES THE REGISTER ROUTE
     private register = asyncWrapper(async (req: IAuthRequest, res: Response): Promise<Response | void> => {
 
-        const { email, password, name, deviceId } = req.body
+        const { email, password, name } = req.body
 
         const context = getRequestContext(req);
 
-        const tk = await this.userService.Register(name, email, password, context, deviceId);
+        const tk = await this.userService.Register(name, email, password, context);
         req.context = extractRequestContext(req);
 
         const responseData = this.createResponseDTO(tk.user, tk.refreshToken, tk.accessToken);
@@ -71,17 +71,10 @@ class AuthController implements Controller {
         const { email, password } = req.body
 
         const context = getRequestContext(req);
+        console.log(context)
 
         const tk = await this.userService.login(email, password, context);
 
-        req.user = {
-            userId: tk.user._id.toString(),
-            email: tk.user.email,
-            role: tk.user.role
-        };
-
-        req.context = extractRequestContext(req);
-        // Set secure cookie
         setRefreshCookie(res, tk.refreshToken, getRefreshCookieLifetimeMs());
 
         const responseData = this.createResponseDTO(tk.user, tk.refreshToken, tk.accessToken);
@@ -96,6 +89,8 @@ class AuthController implements Controller {
 
         const tk = await this.userService.refreshToken(token, getRequestContext(req));
 
+        req.context = extractRequestContext(req);
+
         setRefreshCookie(res, tk.refreshToken, getRefreshCookieLifetimeMs());
 
         return res.status(StatusCodes.OK).json({ user: tk });
@@ -104,7 +99,7 @@ class AuthController implements Controller {
     //HANDLES LOGOUT ROUTE
     private logout = asyncWrapper(async (req: IAuthRequest, res: Response) => {
         const token = req.cookies?.refreshToken || req.body?.refreshToken;
-        const deviceId = req.body?.deviceId || "default-device";
+        const deviceId = req.context?.deviceId;
 
         const context = getRequestContext(req);
 
@@ -133,7 +128,6 @@ class AuthController implements Controller {
 
     private getUserById = asyncWrapper(async (req: IAuthRequest, res: Response) => {
         const context = getRequestContext(req);
-        console.log(context)
 
         if (!context.userId) {
             return res.status(StatusCodes.UNAUTHORIZED).json({
