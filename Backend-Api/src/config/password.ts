@@ -10,7 +10,7 @@ const argonHashOptions = {
     }
 
     
-    //THIS FUNCTION HASHES THE PASSWORD 
+//THIS FUNCTION HASHES THE PASSWORD 
 const pepper = PepperService.getPepper();
 
 export const hashedPassword = async (plainPass: string): Promise<string> => {

@@ -1,64 +1,166 @@
-import mongoose from "mongoose";
-import "dotenv/config";
+/**
+ * MongoDB Connection Handler
+ * 
+ * WHAT: Manages MongoDB connection lifecycle with proper error handling
+ * 
+ * WHY: 
+ * - Centralized connection management
+ * - Automatic reconnection on failure
+ * - Connection pooling for performance
+ * - Proper error handling and logging
+ */
 
-require('dotenv').config();
+import mongoose, { ConnectOptions } from 'mongoose';
+import { config } from './index';
 
-const MONGO_URL = process.env.MONGO_URI as string;
-console.log(MONGO_URL)
+class MongoDBConnection {
+  isConnected = false;
 
-if (!MONGO_URL) {
-  throw new Error("MONGO_URI is missing");
-}
+  constructor() {
+    this.isConnected = false;
 
-mongoose.set("strictQuery", false);
+    // Listen to MongoDB events to track connection state
+    this.setupEventListeners();
+  }
 
-let isConnected = false;
+  private setupEventListeners() {
+    // Connection successful
+    mongoose.connection.on('connected', () => {
+      console.log('✅ MongoDB: Connected successfully');
+      this.isConnected = true;
+    });
 
-export async function mongoConnect(
-  maxRetries = 5,
-  retryDelay = 3000
-): Promise<void> {
-  if (isConnected) return;
+    // Connection error
+    mongoose.connection.on('error', (err) => {
+      console.error('❌ MongoDB: Connection error:', err.message);
+      this.isConnected = false;
+    });
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      await mongoose.connect(MONGO_URL, {
-        maxPoolSize: 10,
-        serverSelectionTimeoutMS: 10000,
-      });
+    // Connection disconnected
+    mongoose.connection.on('disconnected', () => {
+      console.log('⚠️  MongoDB: Disconnected');
+      this.isConnected = false;
+    });
 
-      isConnected = true;
-      console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    // Application termination - close connection gracefully
+    // WHY: Prevents connection leaks and ensures clean shutdown
+    process.on('SIGINT', async () => {
+      await this.disconnect();
+      process.exit(0);
+    });
+
+    // MongoDB driver reconnection (automatic)
+    mongoose.connection.on('reconnected', () => {
+      console.log('🔄 MongoDB: Reconnected');
+      this.isConnected = true;
+    });
+  }
+
+
+  async connect(retries = 5, delay = 5000): Promise<void> {
+    // If already connected, skip
+    if (this.isConnected) {
+      console.log('ℹ️  MongoDB: Already connected');
       return;
-    } catch (err) {
-      console.error(
-        `MongoDB connection attempt ${attempt} failed:`,
-        (err as Error).message
-      );
+    }
 
-      if (attempt === maxRetries) {
-        console.error("All retries failed. Exiting...");
-        process.exit(1);
+    try {
+      // IMPORTANT: For fintech, we MUST enable replica sets for transactions
+      const options: ConnectOptions = {
+        ...config.database.mongodb.options,
+        family: 4,  
+        maxPoolSize: 10,
+        minPoolSize: 2,
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 45000,
+        readPreference: 'primaryPreferred',
+        w: 'majority',
+        retryWrites: true,
+      };
+
+      console.log('🔌 MongoDB: Connecting...');
+      await mongoose.connect(config.database.mongodb.uri, options);
+
+      // Additional check: Ensure we can run transactions
+      // WHY: Transactions require replica sets in MongoDB
+      if (config.app.env === 'production') {
+        await this.checkTransactionSupport();
       }
 
-      await wait(retryDelay * attempt); // exponential backoff
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`❌ MongoDB: Connection failed (${retries} retries left):`, errorMessage);
+
+      // RETRY LOGIC with exponential backoff
+      if (retries > 0) {
+        console.log(`⏳ MongoDB: Retrying in ${delay / 1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+
+        // Exponential backoff: double the delay each time
+        return this.connect(retries - 1, delay * 2);
+      }
+
+      // Out of retries - this is critical for a fintech app
+      throw new Error('MongoDB connection failed after multiple retries. Cannot start application.');
     }
+  }
+
+
+  async checkTransactionSupport() {
+    try {
+      if (!mongoose.connection.db) {
+        throw new Error("MongoDB connection is not ready");
+      }
+      const admin = mongoose.connection.db.admin();
+      const serverInfo = await admin.serverStatus();
+
+      // Check if replica set is configured
+      if (!serverInfo.repl || !serverInfo.repl.ismaster) {
+        console.warn('⚠️  WARNING: MongoDB is not running as a replica set!');
+        console.warn('⚠️  Transactions will NOT work. This is CRITICAL for production!');
+        console.warn('⚠️  Please configure MongoDB replica set.');
+
+        if (config.app.env === 'production') {
+          throw new Error('Replica set required in production for transaction support');
+        }
+      } else {
+        console.log('✅ MongoDB: Replica set detected - transactions supported');
+      }
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('❌ MongoDB: Failed to check transaction support:', errorMessage);
+    }
+  }
+
+  async disconnect() {
+    if (!this.isConnected) {
+      return;
+    }
+
+    try {
+      await mongoose.connection.close();
+      console.log('👋 MongoDB: Disconnected gracefully');
+      this.isConnected = false;
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('❌ MongoDB: Error during disconnection:', errorMessage);
+      throw error;
+    }
+  }
+
+  getHealthStatus() {
+    return {
+      isConnected: this.isConnected,
+      readyState: mongoose.connection.readyState,
+      host: mongoose.connection.host,
+      name: mongoose.connection.name,
+    };
+  }
+
+  getInstance() {
+    return mongoose;
   }
 }
 
-export async function mongoDisconnect(): Promise<void> {
-  if (!isConnected) return;
-  await mongoose.disconnect();
-  isConnected = false;
-  console.log("MongoDB disconnected");
-}
-
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-
-
-
-
-
+const mongo = new MongoDBConnection();
+export default mongo
