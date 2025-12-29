@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import Joi from 'joi';
-import BadRequestError from 'infrastructure/errors/badRequest';
+import BadRequestError from '@/shared/errors/badRequest';
 
 // Type for the location of the data to validate (e.g., req.body, req.query)
 type ValidationSource = 'body' | 'query' | 'params';

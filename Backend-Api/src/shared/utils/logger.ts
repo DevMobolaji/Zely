@@ -342,12 +342,10 @@ transports.push(
     })
 );
 
-export const logger = winston.createLogger({
+const logger = winston.createLogger({
     level,
     transports,
     exitOnError: false,
 });
 
-module.exports = {
-    logger
-}
+export { logger };

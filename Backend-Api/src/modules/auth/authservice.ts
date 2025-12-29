@@ -1,14 +1,15 @@
 import User from "./authmodel"
 import AuditLogger from "../audit/audit.service";
-import BadRequestError from "infrastructure/errors/badRequest";
-import { issueTokensForUser, signAccessToken, signRefreshToken, verifyRefreshToken } from "infrastructure/lib/token.helper";
-import { deleteRefreshByHash, getLatestHashForDevice, getPayloadByRefreshToken, revokeAllSessions, revokeSession, storeRefreshToken } from "infrastructure/lib/session.Service";
+import BadRequestError from "@/shared/errors/badRequest";
+import { issueTokensForUser, signAccessToken, signRefreshToken, verifyRefreshToken } from "@/infrastructure/helpers/token.helper";
+import { deleteRefreshByHash, getLatestHashForDevice, getPayloadByRefreshToken, revokeAllSessions, revokeSession, storeRefreshToken } from "@/infrastructure/helpers/session.Service";
 import { hashToken } from "@/config/hashToken";
-import { produceUserCreatedEvent } from "@/kafka/producer/user.producer";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import { generateUserId } from "@/shared/utils/id.generator";
-import { extractRequestContext } from "@/shared/middleware/request.context";
+import mongoose from "mongoose";
+import { verifyPassword } from "@/config/password";
+import emitAuditEvent from "@/infrastructure/helpers/emit.audit.helper";
 
 
 class userService {
@@ -21,60 +22,141 @@ class userService {
         password: string,
         context: IRequestContext,
     ) {
+        const session = await mongoose.startSession();
+        session.startTransaction();
 
         const userId = generateUserId()
 
         const normalizedEmail = email.toLowerCase().trim();
 
-        const alreadyExist = await this.userModel.findOne({ email: normalizedEmail })
+        try {
+            const alreadyExist = await this.userModel.findOne({ email: normalizedEmail })
 
-        if (alreadyExist) {
+            // Check if user already exists
+            if (alreadyExist) {
+                throw new BadRequestError("User already exists with that email")
+            }
+
+            const newUser = await this.userModel.create({
+                userId,
+                name,
+                email: normalizedEmail,
+                password
+            })
+
+            await emitAuditEvent({
+                eventType: "AUTH_USER_REGISTER",
+                action: AuditAction.USER_REGISTER_SUCCESS,
+                status: AuditStatus.SUCCESS,
+                userId: newUser.userId,
+                context
+            });
+
+            await session.commitTransaction();
+
+            session.endSession();
+
+            const { accTk, refreshToken } = await issueTokensForUser(
+                { _id: newUser._id.toString(), userId: userId, email: newUser.email, role: newUser.role },
+                context.deviceId || context.userAgent
+            );
+
+            AuditLogger.logUserAction(context, AuditAction.USER_REGISTER_SUCCESS, AuditStatus.SUCCESS, newUser.userId);
+
+
+            return {
+                user: newUser.toJSON(),
+                accessToken: accTk,
+                refreshToken: refreshToken
+            }
+
+
+        } catch (error) {
+            await session.abortTransaction();
             AuditLogger.logAttempt(context, AuditAction.USER_REGISTER_ATTEMPT, AuditStatus.FAILED, { email: normalizedEmail });
-            throw new BadRequestError("User already Exist with that email")
-        }
-
-        const newUser = await this.userModel.create({
-            userId,
-            name,
-            email: normalizedEmail,
-            password
-        })
-
-        const { accTk, refreshToken } = await issueTokensForUser(
-            { _id: newUser._id.toString(), userId: userId, email: newUser.email, role: newUser.role },
-            context.deviceId || context.userAgent
-        );
-
-        //Fire User Created Event
-        produceUserCreatedEvent({
-            _id: newUser.userId,
-            name: newUser.name,
-            email: newUser.email,
-            role: newUser.role,
-            isEmailVerified: newUser.isEmailVerified
-        });
-
-        AuditLogger.logUserAction(context, AuditAction.USER_REGISTER_SUCCESS, AuditStatus.SUCCESS, newUser.userId);
-
-
-        return {
-            user: newUser.toJSON(),
-            accessToken: accTk,
-            refreshToken: refreshToken
+            throw error
+        } finally {
+            session.endSession();
         }
     }
 
     public async login(email: string, password: string, context: IRequestContext) {
         const user = await this.userModel.findOne({ email })
+
         if (!user) {
-            AuditLogger.logUserAction(context, AuditAction.USER_LOGIN_ATTEMPT, AuditStatus.FAILED);
+            AuditLogger.logAttempt(context, AuditAction.USER_LOGIN_ATTEMPT, AuditStatus.FAILED, { email });
             throw new BadRequestError("User not found")
         }
-        const isPasswordValid = await user.comparePassword(password)
+
+        if (user.security.lockedUntil && user.security.lockedUntil > new Date()) {
+            AuditLogger.logAttempt(context, AuditAction.USER_LOGIN_ATTEMPT, AuditStatus.BLOCKED, { email });
+            throw new BadRequestError(`Account locked until ${user.security.lockedUntil.toISOString()}`);
+        }
+
+        const isPasswordValid = await verifyPassword(password, user.password)
+
         if (!isPasswordValid) {
-            AuditLogger.logUserAction(context, AuditAction.USER_LOGIN_ATTEMPT, AuditStatus.FAILED);
+            const failedAttempts = (user.security.failedLoginAttempts || 0) + 1;
+
+            let lockDurationMs = 0;
+            if (failedAttempts >= 5) {
+                if (failedAttempts === 5) lockDurationMs = 60_000;       // 1 min
+                else if (failedAttempts <= 7) lockDurationMs = 5 * 60_000;  // 5 min
+                else if (failedAttempts <= 9) lockDurationMs = 15 * 60_000; // 15 min
+                else lockDurationMs = 60 * 60_000;                          // 1 hour
+            }
+
+            const wasLocked = Boolean(user.security.lockedUntil);
+            const lockedUntil = lockDurationMs ? new Date(Date.now() + lockDurationMs) : null;
+            const isNowLocked = Boolean(lockedUntil);
+
+            await this.userModel.updateOne(
+                { _id: user._id },
+                {
+                    $inc: { "security.failedLoginAttempts": 1 },
+                    $set: {
+                        "security.lockedUntil": lockedUntil,
+                        "security.lastFailedAt": new Date(),
+                        "security.lockReason": lockedUntil ? `Too many failed attempts (${failedAttempts})` : null
+                    }
+                }
+            );
+
+            if (isNowLocked && !wasLocked) {
+                await emitAuditEvent({
+                    eventType: "SECURITY",
+                    action: AuditAction.ACCOUNT_LOCKED,
+                    status: AuditStatus.SUCCESS,
+                    userId: user.userId,
+                    context,
+                    reason: `Too many failed login attempts (${failedAttempts})`
+                });
+            }
+
+            AuditLogger.logAttempt(context, AuditAction.USER_LOGIN_ATTEMPT, AuditStatus.FAILED, { email });
             throw new BadRequestError("Invalid credentials")
         }
+
+        await this.userModel.updateOne(
+            { _id: user._id },
+            {
+                $set: {
+                    "security.failedLoginAttempts": 0,
+                    "security.lockedUntil": null,
+                    "security.lockReason": null,
+                    "security.lastFailedAt": null
+                }
+            }
+        );
+
+
+        await emitAuditEvent({
+            eventType: "AUTH_USER_LOGIN",
+            action: AuditAction.USER_LOGIN_SUCCESS,
+            status: AuditStatus.SUCCESS,
+            userId: user.userId,
+            context
+        })
 
         const { accTk, refreshToken } = await issueTokensForUser(
             { _id: user._id.toString(), userId: user.userId, email: user.email, role: user.role },
@@ -84,7 +166,6 @@ class userService {
         AuditLogger.logUserAction(context, AuditAction.USER_LOGIN_SUCCESS, AuditStatus.SUCCESS, user.userId);
 
         return this.createResponseDTO(user, accTk, refreshToken)
-
     }
 
     public async refreshToken(refreshToken: string, context: IRequestContext) {

@@ -134,7 +134,7 @@ class AuditLogger {
       });
 
       // Check for suspicious activity
-      await this.checkSuspiciousActivity(doc);
+      await this.logSuspiciousActivity(doc);
     } catch (error) {
       logger.error('AUDIT_LOG_FAILED: Attempt upsert error', {
         error: (error as Error).message,
@@ -179,37 +179,62 @@ class AuditLogger {
    * NEW: Check for suspicious activity patterns
    * WHY: Automatic security monitoring
    */
-  private static async checkSuspiciousActivity(auditDoc: any): Promise<void> {
-    // Too many failed attempts
-    if (
-      auditDoc.status === AuditStatus.FAILED &&
-      auditDoc.attemptCount >= 5
-    ) {
-      logger.warn('SUSPICIOUS_ACTIVITY: Multiple failed attempts detected', {
-        email: auditDoc.trackedEmail,
-        action: auditDoc.action,
-        attemptCount: auditDoc.attemptCount,
-      });
+  static async logSuspiciousActivity(auditDoc: any): Promise<void> {
+    if (auditDoc.status !== AuditStatus.FAILED) return;
 
-      // Log as separate suspicious activity event
-      await this.logEvent({
-        action: AuditAction.SUSPICIOUS_ACTIVITY,
+    const SUSPICIOUS_THRESHOLDS = new Set([5, 8, 10]);
+
+    // Only log on threshold attempts
+    if (!SUSPICIOUS_THRESHOLDS.has(auditDoc.attemptCount)) return;
+
+    const filter = {
+      trackedEmail: auditDoc.trackedEmail,
+      action: AuditAction.SUSPICIOUS_ACTIVITY,
+    };
+
+    const update = {
+      $set: {
+        lastAttempt: new Date(),
         status: AuditStatus.BLOCKED,
         userId: auditDoc.userId,
-        trackedEmail: auditDoc.trackedEmail,
-        requestId: auditDoc.requestId,
         ip: auditDoc.ip,
         userAgent: auditDoc.userAgent,
-        severity: 'CRITICAL',
+        requestId: auditDoc.requestId,
         metadata: {
           reason: 'Multiple failed attempts',
           originalAction: auditDoc.action,
           attemptCount: auditDoc.attemptCount,
         },
+      },
+      $setOnInsert: {
+        createdAt: new Date(),
+        severity: 'CRITICAL',
+      },
+      $inc: { attemptCount: 1 }, // Initialize +1 on insert or increment on existing
+    };
+
+    try {
+      const doc = await AuditModel.findOneAndUpdate(filter, update, {
+        upsert: true,
+        new: true,
+      });
+
+      if (doc) {
+        logger.warn('SUSPICIOUS_ACTIVITY logged', {
+          email: auditDoc.trackedEmail,
+          action: auditDoc.action,
+          attemptCount: doc.attemptCount,
+        });
+      }
+    } catch (error) {
+      logger.error('AUDIT_LOG_FAILED: Suspicious activity upsert error', {
+        error: (error as Error).message,
+        filter,
+        update,
       });
     }
   }
-
+  
   /**
    * NEW: Get user's recent activity
    * WHY: Quick access to user's audit trail

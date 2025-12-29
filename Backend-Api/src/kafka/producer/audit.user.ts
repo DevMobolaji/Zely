@@ -1,9 +1,9 @@
 // kafka/producer.ts
 
-import { logger } from '@/shared/utils/logger';
 import { UserEvent } from '../schema/user.schema';
 import { producer } from '../config/kafka.config';
 import { startKafkaProducer } from '../config';
+import logger from '@/shared/utils/logger';
 
 
 
@@ -13,7 +13,7 @@ export async function produceUserCreatedEvent(event: UserEvent) {
         // Use trackedEmail as key to preserve partition ordering for attempt-tracking events
         const key = event?.email || 'user.created';
         await producer.send({
-            topic: 'user.created',
+            topic: 'audit.user.events',
             acks: -1,
             messages: [
                 {

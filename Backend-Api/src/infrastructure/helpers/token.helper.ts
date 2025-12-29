@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
 import * as jwt from "jsonwebtoken"
-import redis  from "@/infrastructure/cache/redis.cli"
+import redis from "@/infrastructure/cache/redis.cli"
 import { hashToken } from "@/config/hashToken";
-import Unauthorized from '../errors/unauthorized';
+import Unauthorized from '../../shared/errors/unauthorized';
 import { config } from "@/config/index";
 import { storeRefreshToken } from "./session.Service";
 
@@ -41,7 +41,7 @@ export const signRefreshToken = async (sub: string, deviceId: string) => {
     const payload: RefreshPayload = { sub, jti, deviceId };
 
     if (!secret) throw new Unauthorized("REFRESH_TOKEN_SECRET is not defined");
-     const token = jwt.sign(payload, secret, {
+    const token = jwt.sign(payload, secret, {
         expiresIn: config.jwt.refreshExpiry as jwt.SignOptions['expiresIn']
     })
 
@@ -78,7 +78,7 @@ export function getRefreshCookieLifetimeMs() {
 }
 
 
-export async function issueTokensForUser (user: { _id: string; userId: string, email: string; role: string }, deviceId: string) {
+export async function issueTokensForUser(user: { _id: string; userId: string, email: string; role: string }, deviceId: string) {
     //ISSUE ACCESS TOKEN TO USER
     const accTk = await signAccessToken({ sub: user._id, userId: user.userId, email: user.email, role: user.role });
 

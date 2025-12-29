@@ -13,7 +13,10 @@ import Controller from '@/config/interfaces/controller.interfaces';
 // Infrastructure
 import redis from "@/infrastructure/cache/redis.cli";
 import mongo from "@/config/mongo"
-
+import { Queue } from 'bullmq';
+import { createBullBoard } from '@bull-board/api';
+import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
+import { ExpressAdapter } from '@bull-board/express';
 
 // Middleware
 import { attachRequestContext, deviceMiddleware } from '@/shared/middleware/request.context';
@@ -35,6 +38,7 @@ import { TOPICS } from '@/kafka/config/topics';
 import { config } from '@/config/index';
 import { logger } from '@/shared/utils/logger';
 import mongoose from 'mongoose';
+import { auditOutboxQueue } from './queues/auditOutbox.queue';
 
 
 
@@ -53,6 +57,7 @@ class App {
         this.initializeSecurityMiddleware();
         this.initializeParsingMiddleware();
         this.initializeLoggingMiddleware();
+        this.initializeBullBoard();
         this.initializeCustomMiddleware();
         this.initializeRoutes(controllers);
         this.initializeHealthChecks();
@@ -66,6 +71,7 @@ class App {
             await this.connectToMongoDB();
             await this.connectToRedis();
             await this.initializeKafka();
+            await this.initializeBullBoard();
 
             logger.info('✅ All services initialized successfully');
         } catch (error) {
@@ -113,6 +119,25 @@ class App {
         } catch (error) {
             logger.error('⚠️  Kafka initialization failed (non-critical):', error);
             logger.warn('Application will continue without Kafka event streaming');
+        }
+    }
+
+    private async initializeBullBoard(): Promise<void> {
+        logger.info('Initializing BullBoard...');
+        const serverAdapter = new ExpressAdapter();
+        serverAdapter.setBasePath('/admin/queues');
+
+        try {
+            createBullBoard({
+                queues: [new BullMQAdapter(auditOutboxQueue)],
+                serverAdapter,
+            });
+            this.express.use('/admin/queues', serverAdapter.getRouter());
+
+            logger.info('✅ BullBoard initialized successfully');
+        } catch (error) {
+            logger.error('⚠️  BullBoard initialization failed (non-critical):', error);
+            logger.warn('Application will continue without BullBoard');
         }
     }
 

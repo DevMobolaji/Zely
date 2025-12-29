@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { StatusCodes } from 'http-status-codes';
 // Assuming you have a file path to your custom error definitions
-import HttpException, { ErrorOutput } from "infrastructure/errors/customAPIError";
+import HttpException, { ErrorOutput } from "@/shared/errors/customAPIError";
 import { logger } from "../utils/logger";
 
 

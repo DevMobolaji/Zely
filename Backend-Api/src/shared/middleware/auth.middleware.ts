@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
-import { verifyAccessToken } from "infrastructure/lib/token.helper";
-import UnauthenticatedError from "infrastructure/errors/unaunthenticated";
+import { verifyAccessToken } from "@/infrastructure/helpers/token.helper";
+import UnauthenticatedError from "@/shared/errors/unaunthenticated";
 import User from "modules/auth/authmodel";
 import { extractRequestContext } from "./request.context";
 
@@ -35,7 +35,7 @@ export const requireAuth = async (
 
         // 2. Fetch user
         const userDoc = await User.findById(payload.sub).select("-password").exec();
-        
+
         if (!userDoc) {
             return next(new UnauthenticatedError("Unauthorize"));
         }

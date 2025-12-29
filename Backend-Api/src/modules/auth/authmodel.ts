@@ -94,9 +94,4 @@ userSchema.pre("save", async function () {
     }
 });
 
-
-userSchema.methods.comparePassword = async function (password: string): Promise<boolean> {
-    return await verifyPassword(password, this.password)
-}
-
 export default model<User>("User", userSchema)

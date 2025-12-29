@@ -7,8 +7,8 @@ import { UserRole } from "./authinterface";
 import validationSchema from "./authvalidation";
 import validateRequest from "shared/middleware/validation.middleware";
 import User from "./authinterface";
-import { getRefreshCookieLifetimeMs } from "infrastructure/lib/token.helper";
-import { clearRefreshCookie, setRefreshCookie } from "infrastructure/lib/cookie.helper";
+import { getRefreshCookieLifetimeMs } from "@/infrastructure/helpers/token.helper";
+import { clearRefreshCookie, setRefreshCookie } from "@/infrastructure/helpers/cookie.helper";
 import { extractRequestContext, getRequestContext } from "@/shared/middleware/request.context";
 import { UserRegistrationResponse } from "@/config/interfaces/userResponse.interface";
 import { requireAuth } from "shared/middleware/auth.middleware";
@@ -71,7 +71,6 @@ class AuthController implements Controller {
         const { email, password } = req.body
 
         const context = getRequestContext(req);
-        console.log(context)
 
         const tk = await this.userService.login(email, password, context);
 

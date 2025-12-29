@@ -64,6 +64,9 @@
       "@/graphql/*": [
         "graphql/*"
       ],
+      "@/workers/*": [
+        "workers/*"
+      ],
       "@/test/*": [
         "test/*"
       ]

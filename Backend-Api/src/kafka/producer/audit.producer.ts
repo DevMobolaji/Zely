@@ -30,16 +30,5 @@ export async function produceAuditEvent(event: any) {
     }
 }
 
-// export async function shutdownKafkaProducer() {
-//     if (isConnected) {
-//         try {
-//             await startKafkaProducer().disconnect();
-//             logger.info('Kafka producer disconnected gracefully');
-//             isConnected = false;
-//         } catch (err) {
-//             logger.error('Kafka producer disconnect failed', { error: (err as Error).message });
-//         }
-//     }
-// }
 
 

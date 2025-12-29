@@ -1,5 +1,5 @@
 import { GraphQLError } from 'graphql';
-import HttpException, { ErrorOutput } from '../../infrastructure/errors/customAPIError';
+import HttpException, { ErrorOutput } from '../errors/customAPIError';
 
 
 export const formatGraphQLError = (error: GraphQLError): GraphQLError => {

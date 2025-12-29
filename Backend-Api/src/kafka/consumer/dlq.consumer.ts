@@ -27,3 +27,22 @@
 
 //     await consumer.run({ eachMessage: dlqHandler });
 // }
+
+
+import { producer } from "../config/kafka.config";
+
+export async function sendToDLQ(payload: any) {
+  await producer.send({
+    topic: "audit.user.events.dlq",
+    messages: [
+      {
+        key: payload.eventId || "unknown",
+        value: JSON.stringify({
+          ...payload,
+          failedAt: new Date().toISOString(),
+          source: "audit-consumer"
+        })
+      }
+    ]
+  });
+}
