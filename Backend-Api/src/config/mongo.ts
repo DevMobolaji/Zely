@@ -1,14 +1,3 @@
-/**
- * MongoDB Connection Handler
- * 
- * WHAT: Manages MongoDB connection lifecycle with proper error handling
- * 
- * WHY: 
- * - Centralized connection management
- * - Automatic reconnection on failure
- * - Connection pooling for performance
- * - Proper error handling and logging
- */
 
 import mongoose, { ConnectOptions } from 'mongoose';
 import { config } from './index';
@@ -66,14 +55,13 @@ class MongoDBConnection {
 
     try {
       // IMPORTANT: For fintech, we MUST enable replica sets for transactions
-      const options: ConnectOptions = {
-        ...config.database.mongodb.options,
-        family: 4,  
+      const options: any = {
+        ...config.database.mongodb.options, 
         maxPoolSize: 10,
         minPoolSize: 2,
         serverSelectionTimeoutMS: 5000,
         socketTimeoutMS: 45000,
-        readPreference: 'primaryPreferred',
+        readPreference: 'primary',
         w: 'majority',
         retryWrites: true,
       };

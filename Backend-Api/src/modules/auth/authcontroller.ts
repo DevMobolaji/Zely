@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction, Router } from "express"
+import { Response, Router } from "express"
 import userService from "./authservice";
 import asyncWrapper from "shared/middleware/async.wrapper";
 import Controller from "@/config/interfaces/controller.interfaces";
@@ -27,11 +27,13 @@ class AuthController implements Controller {
 
     private initializeRoutes(): void {
         this.route.post(`${this.path}/register`, validateRequest(validationSchema.register, 'body'), this.register);
-        this.route.post(`${this.path}/login`, this.login);
+        this.route.post(`${this.path}/verify`, validateRequest(validationSchema.verifyEmail, 'body'), this.verify);
+        this.route.post(`${this.path}/resend-verification`, validateRequest(validationSchema.resendVerification, 'body'), this.resendVerification);
+        this.route.post(`${this.path}/login`, validateRequest(validationSchema.login, 'body'), this.login);
         this.route.get(`${this.path}/me`, requireAuth, this.getUserById);
         this.route.post(`${this.path}/refresh-token`, this.refreshToken);
-        this.route.post(`${this.path}/logout`, this.logout);
-        this.route.post(`${this.path}/logout-all`, this.forceLogoutAll);
+        this.route.post(`${this.path}/logout`, requireAuth, this.logout);
+        this.route.post(`${this.path}/logout-all`, requireAuth, this.forceLogoutAll);
     }
 
     private createResponseDTO(user: User, refreshToken: string, accessToken?: string): UserRegistrationResponse {
@@ -42,7 +44,7 @@ class AuthController implements Controller {
             userId: user.userId,
             name: user.name,
             email: user.email,
-            emailVerified: user.isEmailVerified as boolean,
+            emailVerified: user.isEmailVerified,
             mfaEnabled: user.mfaEnabled || false,
             role: user.role as UserRole,
             accessToken: accessToken,
@@ -97,12 +99,13 @@ class AuthController implements Controller {
 
     //HANDLES LOGOUT ROUTE
     private logout = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-        const token = req.cookies?.refreshToken || req.body?.refreshToken;
         const deviceId = req.context?.deviceId;
 
         const context = getRequestContext(req);
 
-        await this.userService.logout((req as any).user?._id.toString(), token, deviceId, context);
+        const sub = req.user?.sub;
+
+        await this.userService.logout(sub, deviceId, context);
 
         clearRefreshCookie(res)
 
@@ -111,14 +114,13 @@ class AuthController implements Controller {
 
     //HANDLES FORCE LOGOUT ALL ROUTE    
     private forceLogoutAll = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-        const user = (req as any).user;
-        const userId = user?._id?.toString() || null;
-        const email = user?.email
-        if (!user) return res.status(401).send({ error: "Unauthorized" });
+        const sub = (req as any).user?.sub;
+
+        if (!sub) return res.status(401).send({ error: "Unauthorized" });
 
         const context = getRequestContext(req);
 
-        await this.userService.logoutAll(userId, context);
+        await this.userService.logoutAll(sub, context);
 
         clearRefreshCookie(res)
 
@@ -137,6 +139,26 @@ class AuthController implements Controller {
         const user = await this.userService.getUserById();
 
         res.status(200).send({ user });
+    })
+
+    private verify = asyncWrapper(async (req: IAuthRequest, res: Response) => {
+        const { email, otp } = req.body;
+
+        const context = getRequestContext(req);
+
+        await this.userService.verifyEmail(email, otp, context);
+
+        res.status(200).send({ ok: true });
+    })
+
+    private resendVerification = asyncWrapper(async (req: IAuthRequest, res: Response) => {
+        const { email } = req.body;
+
+        const context = getRequestContext(req);
+
+        await this.userService.resendVerificationEmail(email, context);
+
+        res.status(200).send({ ok: true });
     })
 }
 

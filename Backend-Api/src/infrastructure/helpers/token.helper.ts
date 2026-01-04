@@ -12,6 +12,7 @@ type AccessPayload = {
     userId: string,
     email: string,
     role: string
+    deviceId: string,
 }
 
 type RefreshPayload = { sub: string; jti: string; deviceId: string };
@@ -78,12 +79,12 @@ export function getRefreshCookieLifetimeMs() {
 }
 
 
-export async function issueTokensForUser(user: { _id: string; userId: string, email: string; role: string }, deviceId: string) {
+export async function issueTokensForUser(user: { _id: string; userId: string, email: string; role: string, deviceId: string }) {
     //ISSUE ACCESS TOKEN TO USER
-    const accTk = await signAccessToken({ sub: user._id, userId: user.userId, email: user.email, role: user.role });
+    const accTk = await signAccessToken({ sub: user._id, userId: user.userId, email: user.email, role: user.role, deviceId: user.deviceId });
 
     //ISSUE REFRESH TOKEN TO USER
-    const { token: refreshTokenRaw, payload } = await signRefreshToken(user._id.toString(), deviceId);
+    const { token: refreshTokenRaw, payload } = await signRefreshToken(user._id.toString(), user.deviceId);
 
     // Store hashed refresh token and latest payload
     await storeRefreshToken(refreshTokenRaw, payload);

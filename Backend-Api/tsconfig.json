@@ -52,6 +52,9 @@
       "@/modules/*": [
         "modules/*"
       ],
+      "@/events/*": [
+        "events/*"
+      ],
       "@/config/*": [
         "config/*"
       ],

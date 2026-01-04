@@ -1,16 +1,20 @@
 export const TOPICS = {
     // User domain
-    USER_CREATED: 'user.created',
-    USER_UPDATED: 'user.updated',
-    USER_DELETED: 'user.deleted',
-    USER_LOGIN: 'user.login',
-    USER_LOGOUT: 'user.logout',
+    // USER_CREATED: 'user.created',
+    // USER_UPDATED: 'user.updated',
+    // USER_DELETED: 'user.deleted',
+    // USER_LOGIN: 'user.login',
+    // USER_LOGOUT: 'user.logout',
+
+    AUTH_USER_REGISTER: "auth.user.register.success",
+    AUTH_USER_VERIFY_SUCCESS: "auth.email.verify.success",
+    AUTH_USER_VERIFY_FAILED: "auth.email.verify.failed",
 
     // Account domain
-    ACCOUNT_CREATED: 'account.created',
-    ACCOUNT_UPDATED: 'account.updated',
-    ACCOUNT_FROZEN: 'account.frozen',
-    ACCOUNT_CLOSED: 'account.closed',
+    // ACCOUNT_CREATED: 'account.created',
+    // ACCOUNT_UPDATED: 'account.updated',
+    // ACCOUNT_FROZEN: 'account.frozen',
+    // ACCOUNT_CLOSED: 'account.closed',
 
     // Transaction domain
     // TRANSACTION_INITIATED: 'transaction.initiated',

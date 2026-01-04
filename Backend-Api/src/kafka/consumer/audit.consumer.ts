@@ -105,7 +105,7 @@
 // process.on("SIGINT", shutdownAuditConsumer);
 
 import { kafka } from "../config/kafka.config";
-import { validateAuditEvent } from "../schema/audit.schema";
+import { validateUserEvent } from "../schema/audit.schema";
 import { sendToDLQ } from "./dlq.consumer";
 import { logger } from "@/shared/utils/logger";
 
@@ -122,7 +122,7 @@ export async function startAuditConsumer() {
                 if (!raw) return;
 
                 const parsed = JSON.parse(raw);
-                const event = validateAuditEvent(parsed);
+                const event = validateUserEvent(parsed);
 
                 // store immutably / enrich / forward
                 // (implementation depends on your storage)

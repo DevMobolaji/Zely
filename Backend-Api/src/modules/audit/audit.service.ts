@@ -13,6 +13,7 @@ class AuditLogger {
   private static readonly ATTEMPT_TRACKING_ACTIONS = [
     AuditAction.USER_REGISTER_ATTEMPT,
     AuditAction.USER_REGISTER_SUCCESS,
+    AuditAction.USER_VERIFY_EMAIL_SUCCESS,
     AuditAction.USER_LOGIN_SUCCESS,
     AuditAction.USER_LOGIN_ATTEMPT,
     AuditAction.PASSWORD_RESET_ATTEMPT,

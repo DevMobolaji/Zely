@@ -1,9 +1,8 @@
 import { Schema, model } from "mongoose";
 import validator from "validator";
 
-import User, { UserRole } from "./authinterface";
-import { hashedPassword, verifyPassword } from "@/config/password";
-import PepperService from "@/config/pepper";
+import User, { accountStatus, UserRole, UserStatus } from "./authinterface";
+import { hashedPassword } from "@/config/password";
 
 const userSchema = new Schema<User>({
     name: {
@@ -35,9 +34,15 @@ const userSchema = new Schema<User>({
         immutable: true,
         index: true,
     },
+    accountStatus: {
+        type: String,
+        enum: Object.values(accountStatus) as accountStatus[],
+        default: accountStatus.PENDING_EMAIL_VERIFICATION,
+    },
     isEmailVerified: {
-        type: Boolean,
-        default: false
+        type: String,
+        enum: Object.values(UserStatus),
+        default: UserStatus.PENDING
     },
     mfaEnabled: {
         type: Boolean,

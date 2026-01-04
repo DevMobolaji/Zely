@@ -42,6 +42,19 @@ export enum IDPrefixes {
 
     // Idempotency
     IDEMPOTENCY = 'IDP',
+
+    //EVENT
+    EVENT = "EVT",
+
+    //WALLET
+    WALLET = "WAL",
+    
+    //LEDGER
+    LEDGER = "LED",
+
+    //LEDGER ACCOUNT
+    LEDGER_ACCOUNT = "LAC",
+    
 }
 
 export type EntityId<T extends IDPrefixes> = `${T}_${string}`;
@@ -141,8 +154,20 @@ export function isIdOfType(id: string, prefix: IDPrefixes): boolean {
 export const generateUserId = (): EntityId<IDPrefixes.USER> =>
     generateId(IDPrefixes.USER) as EntityId<IDPrefixes.USER>;
 
+export const generateEventId = (): EntityId<IDPrefixes.EVENT> =>
+    generateId(IDPrefixes.EVENT) as EntityId<IDPrefixes.EVENT>;
+
 export const generateSessionId = (): EntityId<IDPrefixes.SESSION> =>
     generateId(IDPrefixes.SESSION) as EntityId<IDPrefixes.SESSION>;
+
+export const generateWalletId = (): EntityId<IDPrefixes.WALLET> =>
+    generateId(IDPrefixes.WALLET) as EntityId<IDPrefixes.WALLET>;
+
+export const generateLedgerId = (): EntityId<IDPrefixes.LEDGER> =>
+    generateId(IDPrefixes.LEDGER) as EntityId<IDPrefixes.LEDGER>;
+
+export const generateLedgerAccountId = (): EntityId<IDPrefixes.LEDGER_ACCOUNT> =>
+    generateId(IDPrefixes.LEDGER_ACCOUNT) as EntityId<IDPrefixes.LEDGER_ACCOUNT>;
 
 export const generateDeviceId = (): EntityId<IDPrefixes.DEVICE> =>
     generateId(IDPrefixes.DEVICE) as EntityId<IDPrefixes.DEVICE>;

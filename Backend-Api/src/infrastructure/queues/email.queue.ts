@@ -1,15 +1,15 @@
-import { Queue } from "bullmq"
+import { Queue } from "bullmq";
 import { config } from "@/config/index";
 
-export const AUDIT_OUTBOX_QUEUE = "audit-outbox";
+export const EMAIL_QUEUE = "email-queue";
 
-export const auditOutboxQueue = new Queue(AUDIT_OUTBOX_QUEUE, {
+export const emailQueue = new Queue(EMAIL_QUEUE, {
   connection: {
     host: config.redis.host,
     port: config.redis.port,
     password: config.redis.password,
     db: config.redis.db
-  },
+  }, 
   defaultJobOptions: {
     attempts: 5,
     backoff: { type: "exponential", delay: 500 },
@@ -18,4 +18,4 @@ export const auditOutboxQueue = new Queue(AUDIT_OUTBOX_QUEUE, {
   }
 });
 
-export default auditOutboxQueue;
+export default emailQueue;

@@ -13,7 +13,6 @@ import Controller from '@/config/interfaces/controller.interfaces';
 // Infrastructure
 import redis from "@/infrastructure/cache/redis.cli";
 import mongo from "@/config/mongo"
-import { Queue } from 'bullmq';
 import { createBullBoard } from '@bull-board/api';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
@@ -38,7 +37,9 @@ import { TOPICS } from '@/kafka/config/topics';
 import { config } from '@/config/index';
 import { logger } from '@/shared/utils/logger';
 import mongoose from 'mongoose';
-import { auditOutboxQueue } from './queues/auditOutbox.queue';
+import emailQueue from './queues/email.queue';
+import { runUserRegisteredConsumer } from '@/kafka/consumer/userCreated.cosumer';
+import { runEmailVerifiedConsumer } from '@/kafka/consumer/emailVerify.consumer';
 
 
 
@@ -112,8 +113,9 @@ class App {
             await startKafkaProducer();
 
             await waitForTopicsReady(kafka, Object.values(TOPICS));
-            await startAuditConsumer();
-            logger.info('✅ Kafka audit consumer started');
+            await runUserRegisteredConsumer();
+            await runEmailVerifiedConsumer();
+            logger.info('✅ Kafka consumer started');
 
             logger.info('✅ Kafka system ready');
         } catch (error) {
@@ -129,7 +131,7 @@ class App {
 
         try {
             createBullBoard({
-                queues: [new BullMQAdapter(auditOutboxQueue)],
+                queues: [ new BullMQAdapter(emailQueue)],
                 serverAdapter,
             });
             this.express.use('/admin/queues', serverAdapter.getRouter());

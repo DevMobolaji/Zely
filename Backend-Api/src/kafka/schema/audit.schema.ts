@@ -25,11 +25,12 @@
 
 import { z } from "zod";
 
-export const AuditEventSchema = z.object({
+export const UserEventSchema = z.object({
+  
   eventId: z.string(),
   eventType: z.string(),
   action: z.string(),
-  status: z.enum(["SUCCESS", "FAILED"]),
+  status: z.enum(["PENDING", "PROCESSED"]),
   reason: z.string().nullable().optional(),
   userId: z.string().nullable().optional(),
   occurredAt: z.string().datetime(),
@@ -38,8 +39,9 @@ export const AuditEventSchema = z.object({
     schemaVersion: z.literal(1),
     source: z.string()
   })
+
 });
 
-export function validateAuditEvent(data: unknown) {
-  return AuditEventSchema.parse(data);
+export function validateUserEvent(data: unknown) {
+  return UserEventSchema.parse(data);
 }

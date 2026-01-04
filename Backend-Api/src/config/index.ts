@@ -104,7 +104,7 @@ export const config = {
         enableOfflineQueue: env.REDIS_ENABLE_OFFLINE_QUEUE,
         hashPrefix: env.HASH_PREFIX,        
         latestPrefix: env.LATEST_PREFIX,
-        devicesPrefix: env.DEVICES_PREFIX 
+        userDevicesPrefix: env.DEVICES_PREFIX 
 
     },
 
@@ -152,7 +152,10 @@ export const config = {
     },
     cors: {
         origin: env.CORS_ORIGIN,
-        domains: env.ALLOWED_DOMAINS.split(","),
+        domains: process.env.CORS_ALLOWED_ORIGINS
+            ?.split(',')
+            .map(origin => origin.trim())
+            .filter(Boolean) ?? [],
     },
 
     pepper: env.PEPPER

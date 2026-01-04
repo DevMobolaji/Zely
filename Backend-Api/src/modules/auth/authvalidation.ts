@@ -22,4 +22,31 @@ const register = Joi.object({
         .label("Password"),
 })
 
-export default { register }
+const login = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please use a valid email address',
+    }).label("Email").lowercase(),
+    password: Joi.string().required().label("Password"),
+})
+
+const resetPassword = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please use a valid email address',
+    }).label("Email").lowercase(),
+    password: Joi.string().required().label("Password"),
+})
+
+const verifyEmail = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please use a valid email address',
+    }).label("Email").lowercase(),
+    otp: Joi.string().required().label("OTP"),
+})
+
+const resendVerification = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please use a valid email address',
+    }).label("Email").lowercase(),
+})
+
+export default { register, login, resetPassword, verifyEmail, resendVerification }

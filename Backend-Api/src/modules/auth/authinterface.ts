@@ -4,7 +4,18 @@ export enum UserRole {
     ADMIN = "ADMIN",
     USER = "USER"
 }
+export enum UserStatus {
+    PENDING = "PENDING",
+    VERIFIED = "VERIFIED"
+}
 
+export enum accountStatus {
+    PENDING_EMAIL_VERIFICATION = "PENDING_EMAIL_VERIFICATION",
+    EMAIL_VERIFIED = "EMAIL_VERIFIED", 
+    ACCOUNT_PROVISIONING = "ACCOUNT_PROVISIONING",
+    ACCOUNT_READY = "ACCOUNT_READY",
+    ACCOUNT_CLOSED = "ACCOUNT_CLOSED"
+  }
 
 export interface ISecurityState {
     failedLoginAttempts: number;
@@ -19,7 +30,8 @@ export default interface User extends Document {
     password: string,
     name: string,
     userId: string,
-    isEmailVerified: boolean,
+    accountStatus: accountStatus,
+    isEmailVerified: UserStatus,
     role: UserRole,
     mfaEnabled?: boolean,
     mfaSecretEnc?: string, // AES-GCM encrypted secret
