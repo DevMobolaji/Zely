@@ -2,8 +2,7 @@ export interface UserRegistrationResponse {
     userId: string;
     name: string;
     email: string;
-    emailVerified: string;
-    mfaEnabled: boolean;
+    emailVerified: boolean;
     role: string;
     accessToken?: string
     refreshToken: string;

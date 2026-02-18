@@ -2,14 +2,13 @@ import { Schema, model } from "mongoose";
 
 const OutboxSchema = new Schema(
   {
+    topic: { type: String, required: true, index: true }, // Kafka topic
     eventType: { type: String, required: true, index: true }, // Kafka topic
     eventId: { type: String, required: true, unique: true }, // Idempotency key
 
     aggregateType: { type: String, required: true },
     aggregateId: { type: String, required: true }, // Kafka key
-
     action: { type: String, required: true },
-
     status: {
       type: String,
       enum: ["PENDING", "PROCESSING", "PROCESSED", "FAILED", "SUCCESS"],
@@ -31,6 +30,7 @@ const OutboxSchema = new Schema(
       deviceId: String,
       requestId: String,
     },
+    version: { type: Number, required: true, default: 1 },
 
     occurredAt: { type: Date, default: Date.now },
   },

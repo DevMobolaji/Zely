@@ -1,7 +1,11 @@
 import Redis from 'ioredis';
 import {config} from "@/config/index"
+import { logger } from '@/shared/utils/logger';
 
 class RedisConnection {
+    del(redisKey: string) {
+      throw new Error("Method not implemented.");
+    }
     private client: Redis | null;
     private isConnected: boolean;
 
@@ -27,35 +31,35 @@ class RedisConnection {
     private setupEventListeners() {
         // Connection established
         this.redis.on('connect', () => {
-            console.log('🔗 Redis: Connection established');
+            logger.info('🔗 Redis: Connection established');
         });
 
         // Connection ready (after auth, select db, etc.)
         this.redis.on('ready', () => {
-            console.log('✅ Redis: Ready to accept commands');
+            logger.info('✅ Redis: Ready to accept commands');
             this.isConnected = true;
         });
 
         // Error occurred
         this.redis.on('error', (err) => {
-            console.error('❌ Redis: Error:', err.message);
+            logger.error('❌ Redis: Error:', err.message);
             this.isConnected = false;
         });
 
         // Connection closed
         this.redis.on('close', () => {
-            console.log('🔌 Redis: Connection closed');
+            logger.info('🔌 Redis: Connection closed');
             this.isConnected = false;
         });
 
         // Reconnecting
         this.redis.on('reconnecting', () => {
-            console.log('🔄 Redis: Attempting to reconnect...');
+            logger.info('🔄 Redis: Attempting to reconnect...');
         });
 
         // Connection ended
         this.redis.on('end', () => {
-            console.log('⚠️  Redis: Connection ended');
+            logger.info('⚠️  Redis: Connection ended');
             this.isConnected = false;
         });
 
@@ -75,8 +79,6 @@ class RedisConnection {
 
     async connect() {
         try {
-            console.log('🔌 Redis: Connecting...')
-
             // Create Redis client with configuration
             this.client = new Redis({
                 host: config.redis.host,
@@ -111,8 +113,6 @@ class RedisConnection {
                 // Timeout after 10 seconds
                 setTimeout(() => reject(new Error('Redis connection timeout')), 10000);
             });
-
-            console.log('✅ Redis: Connected successfully');
             this.isConnected = true;
 
             // Test connection
@@ -120,7 +120,7 @@ class RedisConnection {
 
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('❌ Redis: Connection failed:', errorMessage);
+            logger.error('❌ Redis: Connection failed:', errorMessage);
             throw error;
         }
     }
@@ -129,11 +129,11 @@ class RedisConnection {
         try {
             const result = await this.redis.ping();
             if (result === 'PONG') {
-                console.log('✅ Redis: Ping successful');
+                logger.info('✅ Redis: Ping successful');
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('❌ Redis: Ping failed:', errorMessage);
+            logger.error('❌ Redis: Ping failed:', errorMessage);
             throw error;
         }
     }
@@ -163,7 +163,7 @@ class RedisConnection {
             return true;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            console.error("❌ Redis set failed:", message);
+            logger.error("❌ Redis set failed:", message);
             throw error;
         }
     }
@@ -194,7 +194,7 @@ class RedisConnection {
             return value;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            console.error("❌ Redis get failed:", message);
+            logger.error("❌ Redis get failed:", message);
             throw error;
         }
     }
@@ -207,11 +207,10 @@ class RedisConnection {
 
         try {
             const result = await this.redis.del(key);
-            console.log(result ? `✅ Key "${key}" deleted` : `⚠️ Key "${key}" not found`);
             return result;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('❌ Redis: Delete operation failed:', errorMessage);
+            logger.error('❌ Redis: Delete operation failed:', errorMessage);
             throw error;
         }
     }
@@ -224,11 +223,10 @@ class RedisConnection {
 
         try {
             const result = await this.redis.exists(key);
-            console.log(result ? `✅ Key "${key}" exists` : `⚠️ Key "${key}" does not exist`);
             return result === 1;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('❌ Redis: Exists check failed:', errorMessage);
+            logger.error('❌ Redis: Exists check failed:', errorMessage);
             throw error;
         }
     }
@@ -243,11 +241,10 @@ class RedisConnection {
 
         try {
             const result = await this.redis.expire(key, seconds);
-            //console.log(result ? `✅ Key "${key}" expired` : `⚠️ Key "${key}" not found`);
             return result;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('❌ Redis: Expire operation failed:', errorMessage);
+            logger.error('❌ Redis: Expire operation failed:', errorMessage);
             throw error;
         }
     }
@@ -262,11 +259,11 @@ class RedisConnection {
 
         try {
             const result = await this.redis.incrby(key, amount);
-            console.log(result ? `✅ Key "${key}" incremented` : `⚠️ Key "${key}" not found`);
+            // console.log(result ? `✅ Key "${key}" incremented` : `⚠️ Key "${key}" not found`);
             return result;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('❌ Redis: Increment operation failed:', errorMessage);
+            logger.error('❌ Redis: Increment operation failed:', errorMessage);
             throw error;
         }
     }
@@ -286,7 +283,7 @@ class RedisConnection {
             });
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('❌ Redis: Mget operation failed:', errorMessage);
+            logger.error('❌ Redis: Mget operation failed:', errorMessage);
             throw error;
         }
     }
@@ -301,7 +298,7 @@ class RedisConnection {
             console.log('🗑️  Redis: Database flushed');
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('❌ Redis: Flush operation failed:', errorMessage);
+            logger.error('❌ Redis: Flush operation failed:', errorMessage);
             throw error;
         }
     }
@@ -351,7 +348,7 @@ class RedisConnection {
     async disconnect() {
         if (this.redis) {
             await this.redis.quit();
-            console.log('👋 Redis: Disconnected gracefully');
+            logger.info('👋 Redis: Disconnected gracefully');
             this.isConnected = false;
         }
     }

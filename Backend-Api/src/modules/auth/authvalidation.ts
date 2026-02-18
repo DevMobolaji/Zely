@@ -29,13 +29,6 @@ const login = Joi.object({
     password: Joi.string().required().label("Password"),
 })
 
-const resetPassword = Joi.object({
-    email: Joi.string().email().required().messages({
-        'string.email': 'Please use a valid email address',
-    }).label("Email").lowercase(),
-    password: Joi.string().required().label("Password"),
-})
-
 const verifyEmail = Joi.object({
     email: Joi.string().email().required().messages({
         'string.email': 'Please use a valid email address',
@@ -49,4 +42,27 @@ const resendVerification = Joi.object({
     }).label("Email").lowercase(),
 })
 
-export default { register, login, resetPassword, verifyEmail, resendVerification }
+const forgotPassword = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please use a valid email address',
+    }).label("Email").lowercase(),
+})
+
+const verifyResetCode = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please use a valid email address',
+    }).label("Email").lowercase(),
+    otp: Joi.string().required().label("valid 6 digit code is required"),
+})
+
+const resetPassword = Joi.object({
+    email: Joi.string().email().required().messages({
+        'string.email': 'Please use a valid email address',
+    }).label("Email").lowercase(),
+    token: Joi.string().required().trim().label("Reset Token is required"),
+    newPassword: Joi.string().required().length(8).label('Password must be at least 8 characters'),
+    confirmPassword: Joi.string().required().label("Confirm Password is required"),
+})
+
+
+export default { register, login, verifyResetCode, resetPassword, verifyEmail, resendVerification, forgotPassword }

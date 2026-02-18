@@ -1,6 +1,7 @@
 
 import mongoose, { ConnectOptions } from 'mongoose';
 import { config } from './index';
+import { logger } from '@/shared/utils/logger';
 
 class MongoDBConnection {
   isConnected = false;
@@ -15,13 +16,12 @@ class MongoDBConnection {
   private setupEventListeners() {
     // Connection successful
     mongoose.connection.on('connected', () => {
-      console.log('✅ MongoDB: Connected successfully');
       this.isConnected = true;
     });
 
     // Connection error
     mongoose.connection.on('error', (err) => {
-      console.error('❌ MongoDB: Connection error:', err.message);
+      logger.error('❌ MongoDB: Connection error:', err.message);
       this.isConnected = false;
     });
 
@@ -40,7 +40,7 @@ class MongoDBConnection {
 
     // MongoDB driver reconnection (automatic)
     mongoose.connection.on('reconnected', () => {
-      console.log('🔄 MongoDB: Reconnected');
+      logger.info('🔄 MongoDB: Reconnected');
       this.isConnected = true;
     });
   }
@@ -49,7 +49,7 @@ class MongoDBConnection {
   async connect(retries = 5, delay = 5000): Promise<void> {
     // If already connected, skip
     if (this.isConnected) {
-      console.log('ℹ️  MongoDB: Already connected');
+      logger.info('ℹ️  MongoDB: Already connected');
       return;
     }
 
@@ -66,7 +66,7 @@ class MongoDBConnection {
         retryWrites: true,
       };
 
-      console.log('🔌 MongoDB: Connecting...');
+      logger.info('🔌 MongoDB: Connecting...');
       await mongoose.connect(config.database.mongodb.uri, options);
 
       // Additional check: Ensure we can run transactions
@@ -77,11 +77,11 @@ class MongoDBConnection {
 
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`❌ MongoDB: Connection failed (${retries} retries left):`, errorMessage);
+      logger.error(`❌ MongoDB: Connection failed (${retries} retries left):`, errorMessage);
 
       // RETRY LOGIC with exponential backoff
       if (retries > 0) {
-        console.log(`⏳ MongoDB: Retrying in ${delay / 1000} seconds...`);
+        logger.info(`⏳ MongoDB: Retrying in ${delay / 1000} seconds...`);
         await new Promise(resolve => setTimeout(resolve, delay));
 
         // Exponential backoff: double the delay each time
@@ -104,19 +104,19 @@ class MongoDBConnection {
 
       // Check if replica set is configured
       if (!serverInfo.repl || !serverInfo.repl.ismaster) {
-        console.warn('⚠️  WARNING: MongoDB is not running as a replica set!');
-        console.warn('⚠️  Transactions will NOT work. This is CRITICAL for production!');
-        console.warn('⚠️  Please configure MongoDB replica set.');
+        logger.warn('⚠️  WARNING: MongoDB is not running as a replica set!');
+        logger.warn('⚠️  Transactions will NOT work. This is CRITICAL for production!');
+        logger.warn('⚠️  Please configure MongoDB replica set.');
 
         if (config.app.env === 'production') {
           throw new Error('Replica set required in production for transaction support');
         }
       } else {
-        console.log('✅ MongoDB: Replica set detected - transactions supported');
+        logger.info('✅ MongoDB: Replica set detected - transactions supported');
       }
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('❌ MongoDB: Failed to check transaction support:', errorMessage);
+      logger.error('❌ MongoDB: Failed to check transaction support:', errorMessage);
     }
   }
 
@@ -127,11 +127,11 @@ class MongoDBConnection {
 
     try {
       await mongoose.connection.close();
-      console.log('👋 MongoDB: Disconnected gracefully');
+      logger.info('👋 MongoDB: Disconnected gracefully');
       this.isConnected = false;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('❌ MongoDB: Error during disconnection:', errorMessage);
+      logger.error('❌ MongoDB: Error during disconnection:', errorMessage);
       throw error;
     }
   }

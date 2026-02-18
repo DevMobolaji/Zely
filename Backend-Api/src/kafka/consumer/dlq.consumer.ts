@@ -1,48 +1,59 @@
-// // kafka/dlq.consumer.ts
-// import { Kafka, type EachMessagePayload } from 'kafkajs';
+// dlq.consumer.ts
+import { kafka } from "../config/kafka.config";
+import { initFailedEvents } from "@/events/idempotency";
+import { logger } from "@/shared/utils/logger";
+import { TOPICS } from "../config/topics";
 
-// const kafka = new Kafka({
-//     clientId: 'audit-dlq-service',
-//     brokers: ['localhost:9092'],
-// });
+const dlqConsumer = kafka.consumer({ groupId: "generic-dlq-sink" });
 
-// export async function startAuditDLQConsumer() {
-//     const consumer = kafka.consumer({ groupId: 'audit-dlq-consumers' });
-//     await consumer.connect();
-//     await consumer.subscribe({ topic: 'audit.events.DLQ', fromBeginning: false });
+export async function startDLQSink() {
+    const failedCollection = await initFailedEvents();
 
-//     const dlqHandler = async ({ message }: EachMessagePayload) => {
-//         if (!message.value) {
-//             console.warn('Received empty message in AUDIT_DLQ_EVENT');
-//             return;
-//         }
+    // Subscribe to all topics ending with .dlq
+    await dlqConsumer.subscribe({
+        topic: TOPICS.AUTH_EVENTS_DLQ,
+        fromBeginning: false,
+      });
 
-//         try {
-//             const parsed = JSON.parse(message.value.toString());
-//             console.error('AUDIT_DLQ_EVENT', parsed);
-//         } catch (err) {
-//             console.error('Failed to parse DLQ message', err, message.value.toString());
-//         }
-//     };
+    await dlqConsumer.run({
+        autoCommit: false,
+        eachMessage: async ({ topic, partition, message }: { topic: string; partition: number; message: any }) => {
+            const commitOffset = async () => {
+                await dlqConsumer.commitOffsets([
+                    { topic, partition, offset: (Number(message.offset) + 1).toString() },
+                ]);
+            };
 
-//     await consumer.run({ eachMessage: dlqHandler });
-// }
+            try {
+                const raw = message.value?.toString();
+                if (!raw) return await commitOffset();
 
+                const payload = JSON.parse(raw);
 
-import { producer } from "../config/kafka.config";
+                // Idempotent insert
+                await failedCollection.updateOne(
+                    { "payload.eventId": payload.event?.eventId },
+                    {
+                        $setOnInsert: {
+                            topic,
+                            key: message.key?.toString() ?? null,
+                            payload,
+                            headers: Object.fromEntries(
+                                Object.entries(message.headers ?? {}).map(([k, v]) => [k, v?.toString()])
+                            ),
+                            error: payload.meta?.lastError || payload.error || "unknown",
+                            failedAt: new Date(),
+                        },
+                    },
+                    { upsert: true }
+                );
 
-export async function sendToDLQ(payload: any) {
-  await producer.send({
-    topic: "audit.user.events.dlq",
-    messages: [
-      {
-        key: payload.eventId || "unknown",
-        value: JSON.stringify({
-          ...payload,
-          failedAt: new Date().toISOString(),
-          source: "audit-consumer"
-        })
-      }
-    ]
-  });
+                logger.error("Stored failed event");
+                await commitOffset();
+            } catch (err) {
+                logger.error("Failed DLQ write (manual intervention required)", err);
+                await commitOffset(); // still commit to prevent blocking the consumer
+            }
+        },
+    });
 }

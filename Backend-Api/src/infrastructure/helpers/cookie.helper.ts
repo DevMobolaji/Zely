@@ -8,7 +8,7 @@ export const setRefreshCookie = (res: Response, token: string, maxAgeMs: number)
         httpOnly: true,
         secure: true,            // set true in production (HTTPS)
         sameSite: "strict",
-        path: "/auth/refresh",
+        path: "/api/v1/auth",
         maxAge: maxAgeMs,
     });
 };
@@ -18,6 +18,6 @@ export const clearRefreshCookie = (res: Response) => {
         httpOnly: true,
         secure: true,
         sameSite: "strict",
-        path: "/auth/refresh",
+        path: "/api/v1/auth",
     });
 };

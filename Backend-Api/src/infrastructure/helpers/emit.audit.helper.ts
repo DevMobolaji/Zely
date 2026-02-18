@@ -1,7 +1,6 @@
 import { OutboxEvent } from "@/modules/audit/outbox.model";
 import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import { IRequestContext } from "@/config/interfaces/request.interface";
-import bcrypt from "bcrypt";
 import { ClientSession } from "mongoose";
 
 
@@ -10,32 +9,41 @@ type emitOutboxOptions = {
 }
 
 type emitOutboxInput = {
+  topic: string,
   eventId: string,
   eventType: string;
   action: AuditAction;
   status: AuditStatus;
   payload: Record<string, any>;
-  context: IRequestContext;
+  context?: IRequestContext;
   aggregateId: string,
-  aggregateType: string
+  aggregateType: string,
+  version: number
 }
 
-export const emitOutboxEvent = async ({ eventId, eventType, action, status, context, payload, aggregateId, aggregateType }: emitOutboxInput, options?: emitOutboxOptions) => {
-  await OutboxEvent.create(
-    [
-      {
-        eventId,
-        eventType: eventType,
-        action: action,
-        status: status,
-        payload,
-        context,
-        aggregateId,
-        aggregateType,
-        occurredAt: new Date()
-      }
-    ], options?.session ? { session: options.session } : undefined
-  );
+export const emitOutboxEvent = async ({ topic, eventId, eventType, action, status, context, payload, aggregateId, aggregateType, version }: emitOutboxInput, options?: emitOutboxOptions) => {
+  try {
+    await OutboxEvent.create(
+      [
+        {
+          topic,
+          eventId,
+          eventType,
+          action,
+          status,
+          payload,
+          context,
+          aggregateId,
+          aggregateType,
+          version,
+          occurredAt: new Date()
+        }
+      ], options?.session ? { session: options.session } : undefined
+    );
+  } catch (error: any) {
+    if (error.code === 11000) return;
+    throw error;
+  }
 }
 
 
@@ -49,19 +57,4 @@ export const getLockTime = (failedAttempts: number) => {
   }
 
   return lockDurationMs;
-}
-
-
-export const generateOTP = (): { otp: string; expires: Date } => {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digits
-  const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-  return { otp, expires };
-}
-
-export const hashOtp = (otp: string) => {
-  return bcrypt.hashSync(otp, 10);
-}
-
-export function verifyOtp(otp: string, hashedOtp: string): Promise<boolean> {
-  return bcrypt.compare(otp, hashedOtp);
 }

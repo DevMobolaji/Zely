@@ -1,44 +1,24 @@
 export const TOPICS = {
-    // User domain
-    // USER_CREATED: 'user.created',
-    // USER_UPDATED: 'user.updated',
-    // USER_DELETED: 'user.deleted',
-    // USER_LOGIN: 'user.login',
-    // USER_LOGOUT: 'user.logout',
+    // ======================
+    // AUTH DOMAIN
+    // ======================
+    AUTH_EVENTS: "auth.events",
+    AUTH_EVENTS_RETRY: "auth.events.retry",
+    AUTH_EVENTS_DLQ: "auth.events.dlq",
 
-    AUTH_USER_REGISTER: "auth.user.register.success",
-    AUTH_USER_VERIFY_SUCCESS: "auth.email.verify.success",
-    AUTH_USER_VERIFY_FAILED: "auth.email.verify.failed",
+    PASSWORD_EVENTS: "password.events",
 
-    // Account domain
-    // ACCOUNT_CREATED: 'account.created',
-    // ACCOUNT_UPDATED: 'account.updated',
-    // ACCOUNT_FROZEN: 'account.frozen',
-    // ACCOUNT_CLOSED: 'account.closed',
+    // ======================
+    // TRANSACTION DOMAIN
+    // ======================
+    TRANSACTION_EVENTS: "transaction.events",
+    TRANSACTION_EVENTS_RETRY: "transaction.events.retry",
+    TRANSACTION_EVENTS_DLQ: "transaction.events.dlq",
 
-    // Transaction domain
-    // TRANSACTION_INITIATED: 'transaction.initiated',
-    // TRANSACTION_PROCESSING: 'transaction.processing',
-    // TRANSACTION_COMPLETED: 'transaction.completed',
-    // TRANSACTION_FAILED: 'transaction.failed',
-    // TRANSACTION_REVERSED: 'transaction.reversed',
-
-    // Payment domain
-    // PAYMENT_RECEIVED: 'payment.received',
-    // PAYMENT_SENT: 'payment.sent',
-    // PAYMENT_REFUNDED: 'payment.refunded',
-
-    // Notification domain
-    // NOTIFICATION_EMAIL: 'notification.email',
-    // NOTIFICATION_SMS: 'notification.sms',
-    // NOTIFICATION_PUSH: 'notification.push',
-
-    // Compliance domain
-    // KYC_SUBMITTED: 'kyc.submitted',
-    // KYC_APPROVED: 'kyc.approved',
-    // KYC_REJECTED: 'kyc.rejected',
-    // SUSPICIOUS_ACTIVITY: 'compliance.suspicious_activity',
-
-    // Audit domain
-    AUDIT_LOG: 'audit.log',
-};
+    // ======================
+    // AUDIT DOMAIN
+    // ======================
+    AUDIT_EVENTS: "audit.events",
+    AUDIT_EVENTS_RETRY: "audit.events.retry",
+    AUDIT_EVENTS_DLQ: "audit.events.dlq",
+  };

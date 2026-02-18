@@ -25,8 +25,10 @@ import ErrorMiddleware from '@/shared/middleware/errorHandler';
 
 
 //KAFKA
-import { startAuditConsumer, shutdownAuditConsumer } from '@/kafka/consumer/audit.consumer';
 import { startKafkaProducer, shutdownKafkaProducer, setupKafkaTopics } from "@/kafka/config"
+import { runTransferConsumer } from '@/kafka/consumer/transfer.consumer';
+import { reconciliationQueue } from '@/workers/reconcileLedger.worker';
+import { runAuthConsumer } from '@/kafka/consumer/auth.consumer';
 import { waitForTopicsReady } from '@/kafka/config/waitForTopicsReady';
 import { kafka } from '@/kafka/config/kafka.config';
 import { getKafkaHealthStatus } from '@/kafka/config/kafka.health';
@@ -38,8 +40,11 @@ import { config } from '@/config/index';
 import { logger } from '@/shared/utils/logger';
 import mongoose from 'mongoose';
 import emailQueue from './queues/email.queue';
-import { runUserRegisteredConsumer } from '@/kafka/consumer/userCreated.cosumer';
-import { runEmailVerifiedConsumer } from '@/kafka/consumer/emailVerify.consumer';
+import { requestIdempotencyKey } from '@/shared/middleware/request-idempotency';
+import { runPasswordConsumer } from '@/kafka/consumer/resetPassword.consumer';
+import { runRetryConsumer } from '@/kafka/consumer/retryConsumer';
+import { startDLQSink } from '@/kafka/consumer/dlq.consumer';
+
 
 
 
@@ -82,8 +87,6 @@ class App {
     }
 
     private async connectToMongoDB(): Promise<void> {
-        logger.info('Connecting to MongoDB...');
-
         try {
             await mongo.connect();
             logger.info('✅ MongoDB connected successfully');
@@ -94,8 +97,6 @@ class App {
     }
 
     private async connectToRedis(): Promise<void> {
-        logger.info('Connecting to Redis...');
-
         try {
             await redis.connect();
             logger.info('✅ Redis connected successfully');
@@ -113,8 +114,11 @@ class App {
             await startKafkaProducer();
 
             await waitForTopicsReady(kafka, Object.values(TOPICS));
-            await runUserRegisteredConsumer();
-            await runEmailVerifiedConsumer();
+            await runAuthConsumer()
+            await runPasswordConsumer()
+            await runTransferConsumer();
+            await runRetryConsumer()
+            await startDLQSink()
             logger.info('✅ Kafka consumer started');
 
             logger.info('✅ Kafka system ready');
@@ -131,7 +135,7 @@ class App {
 
         try {
             createBullBoard({
-                queues: [ new BullMQAdapter(emailQueue)],
+                queues: [new BullMQAdapter(emailQueue), new BullMQAdapter(reconciliationQueue)],
                 serverAdapter,
             });
             this.express.use('/admin/queues', serverAdapter.getRouter());
@@ -176,12 +180,12 @@ class App {
             ],
         }));
 
-        // NoSQL Injection Prevention
+        //NoSQL Injection Prevention
         // this.express.use(mongoSanitize({ 
         //     replaceWith: '_', 
         //     sanitizeQuery: false, 
-        //     // sanitizeParams: false, 
-        //     // sanitizeBody: false, 
+        //     sanitizeParams: false, 
+        //     sanitizeBody: false, 
         // }));
     }
 
@@ -192,11 +196,11 @@ class App {
         this.express.use(compression());
     }
 
-    /**
-     * ================================================
-     * LOGGING MIDDLEWARE
-     * ================================================
-     */
+
+     // ================================================
+     // LOGGING MIDDLEWARE
+     // ================================================
+
     private initializeLoggingMiddleware(): void {
         // Morgan HTTP logger
         if (config.app.env === 'development') {
@@ -219,6 +223,7 @@ class App {
 
     private initializeCustomMiddleware(): void {
         this.express.use(requestIdMiddleware);
+        this.express.use("/transfer", requestIdempotencyKey)
         this.express.use(deviceMiddleware);
         this.express.use(attachRequestContext);
         this.express.use(requestLogger);
@@ -230,7 +235,6 @@ class App {
      * ================================================
      */
     private initializeRoutes(controllers: Controller[]): void {
-        // Welcome route
         this.express.get('/', (req: Request, res: Response) => {
             res.json({
                 success: true,
@@ -400,7 +404,6 @@ class App {
 
                 // Step 2: Close Kafka connections (non-critical)
                 try {
-                    await shutdownAuditConsumer();
                     await shutdownKafkaProducer();
                     logger.info('✅ Kafka connections closed');
                 } catch (error) {

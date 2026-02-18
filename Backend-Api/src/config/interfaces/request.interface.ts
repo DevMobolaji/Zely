@@ -16,6 +16,7 @@ export interface IRequestContext {
 
 
 export interface IAuthRequest extends Request {
+    idempotencyKey?: string;
     deviceId?: string;
     user?: {
         userId: string;

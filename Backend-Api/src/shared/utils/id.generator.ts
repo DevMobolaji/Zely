@@ -21,6 +21,7 @@ export enum IDPrefixes {
     PAYMENT = 'PAY',
     REFUND = 'REF',
     REVERSAL = 'REV',
+    REFERENCE = 'REF',
 
     // Compliance domain
     KYC = 'KYC',
@@ -122,6 +123,31 @@ export function validateId(id: string, expectedPrefix?: IDPrefixes): boolean {
     return true;
 }
 
+export function validateTimestampedId(id: string, expectedPrefix?: IDPrefixes): boolean {
+    if (!id || typeof id !== 'string') return false;
+
+    // Split by underscore
+    const parts = id.split('_');
+    if (parts.length !== 3) return false;
+
+    const [prefix, timestamp, random] = parts;
+
+    // Check prefix
+    if (expectedPrefix && prefix !== expectedPrefix) return false;
+
+    // Check if prefix exists in our enum
+    const validPrefixes = Object.values(IDPrefixes);
+    if (!validPrefixes.includes(prefix as IDPrefixes)) return false;
+
+    // Check timestamp is numeric
+    if (!/^\d+$/.test(timestamp)) return false;
+
+    // Check random part length (should be 16 chars)
+    if (random.length !== 16) return false;
+
+    return true;
+}
+
 
 /**
  * @param id - Full ID
@@ -177,6 +203,9 @@ export const generateAccountId = (): EntityId<IDPrefixes.ACCOUNT> =>
 
 export const generateTransactionId = (): EntityId<IDPrefixes.TRANSACTION> =>
     generateId(IDPrefixes.TRANSACTION) as EntityId<IDPrefixes.TRANSACTION>;
+
+export const generateReferenceId = (): EntityId<IDPrefixes.REFERENCE> =>
+    generateId(IDPrefixes.REFERENCE) as EntityId<IDPrefixes.REFERENCE>;
 
 export const generateTransferId = (): EntityId<IDPrefixes.TRANSFER> =>
     generateId(IDPrefixes.TRANSFER) as EntityId<IDPrefixes.TRANSFER>;

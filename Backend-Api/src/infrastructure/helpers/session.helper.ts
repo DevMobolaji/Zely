@@ -1,15 +1,18 @@
 import { hashToken } from "@/config/hashToken";
 import redis from "../cache/redis.cli";
 import { config } from "@/config/index";
+import BadRequestError from "@/shared/errors/badRequest";
 
 
-const ttl = 14 * 24 * 60 * 60;
 
-export const storeRefreshToken = async (rawToken: string, payload: { sub: string, jti: string, deviceId: string }) => {
+export const storeRefreshToken = async (rawToken: string, payload: { sub: string, jti: string, deviceId: string, iat: number, exp: number }) => {
     const h = hashToken(rawToken)
     const hashKey = `${config.redis.hashPrefix}${h}`;
     const latestKey = `${config.redis.latestPrefix}${payload.sub}:${payload.deviceId}`;
     const devicesKey = `${config.redis.userDevicesPrefix}${payload.sub}`;
+
+    const now = Math.floor(Date.now() / 1000);
+    const ttl = Math.max(Number(payload.exp) - now, 0);
 
     const pipeline = redis.getClient().pipeline();
 
@@ -28,7 +31,7 @@ export const getPayloadByRefreshToken = async (rawToken: string) => {
 
     if (!data) return null;
 
-    return data as { sub: string, jti: string, deviceId: string }
+    return data as { sub: string, jti: string, deviceId: string, iat: number, exp: number }
 }
 
 export const getLatestHashForDevice = async (sub: string, deviceId: string) => {
@@ -74,10 +77,10 @@ export const revokeSession = async (sub: string, deviceId: string) => {
     const devicesKey = `${config.redis.userDevicesPrefix}${sub}`;
 
     if (!sub) {
-        throw new Error("revokeSession called with undefined sub");
+        throw new BadRequestError("revokeSession called with undefined sub");
     }
     if (!deviceId) {
-        throw new Error("revokeSession called with undefined deviceId");
+        throw new BadRequestError("revokeSession called with undefined deviceId");
       }
 
     const h = await redis.get(latestKey);

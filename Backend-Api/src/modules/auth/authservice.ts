@@ -14,31 +14,40 @@ import {
     revokeAllSessions,
     revokeSession,
     storeRefreshToken
-} from "@/infrastructure/helpers/session.Service";
-import { hashToken } from "@/config/hashToken";
+} from "@/infrastructure/helpers/session.helper";
+import { generateResetToken, hashToken } from "@/config/hashToken";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import { generateEventId, generateUserId } from "@/shared/utils/id.generator";
-import mongoose, { Types } from "mongoose";
-import { verifyPassword } from "@/config/password";
-import { emitOutboxEvent, generateOTP, getLockTime, hashOtp, verifyOtp } from "@/infrastructure/helpers/emit.audit.helper";
+import mongoose from "mongoose";
+import { hashedPassword, verifyPassword } from "@/config/password";
+import { emitOutboxEvent, getLockTime } from "@/infrastructure/helpers/emit.audit.helper";
 import Unauthorized from "@/shared/errors/unauthorized";
 import redis from "@/infrastructure/cache/redis.cli";
 import { emailQueue } from "@/infrastructure/queues/email.queue";
-import { accountStatus, UserStatus } from "./authinterface";
-import { checkOtpRateLimit, checkResendRateLimit, resetOtpRateLimit } from "@/infrastructure/helpers/email.service.helper";
-import { AccountStatus, assertValidTransition } from "@/infrastructure/helpers/domain.guard";
+import { accountStatus } from "./authinterface";
 
+import OTPManager, { OTPConfigs, OTPPurpose } from "@/config/otp.manager";
+import { invalidateAllUsrSess, isPasswordInHistory, storeResetMetadata } from "../helpers/auth.helpers";
+import { markOldTokenForDeletionAfter } from "@/infrastructure/helpers/markOld";
+import { logger } from "@/shared/utils/logger";
+import otpManager from "@/config/otp.manager";
+import { NotFoundError } from "@/shared/errors/notFoundError";
 
 class userService {
 
     private userModel = User
+    private otpManager = new OTPManager(redis)
 
     private createResponseDTO(user: any, accessToken: string, refreshToken: string) {
         return {
-            user: user,
+            userId: user.userId,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            isEmailVerified: user.isEmailVerified,
             accessToken: accessToken,
-            refreshToken: refreshToken
+            refreshToken: refreshToken,
         }
     }
 
@@ -70,56 +79,29 @@ class userService {
                 name,
                 email: normalizedEmail,
                 password,
-                isEmailVerified: UserStatus.PENDING
+                isEmailVerified: false
             }], { session })
 
             await emitOutboxEvent({
+                topic: "auth.events",
                 eventId: EventId,
-                eventType: "auth.user.register.success",
+                eventType: AuditAction.USER_REGISTER_SUCCESS,
                 action: AuditAction.USER_REGISTER_SUCCESS,
                 status: AuditStatus.PENDING,
                 payload: {
                     userId: newUser.userId,
-                    email: newUser.email
+                    email: newUser.email,
+                    name: newUser.name
                 },
                 aggregateType: "USER_REGISTER",
                 aggregateId: newUser.userId,
+                version: 1,
                 context
             }, { session });
 
             await session.commitTransaction();
 
-
-            const { otp, expires } = generateOTP();
-            const ttlInSeconds = Math.floor((expires.getTime() - Date.now()) / 1000);
-            const hashedOtp = hashOtp(otp);
-            const redisValue = JSON.stringify({
-                hash: hashedOtp,
-                userId: userId, // associate OTP with user
-            });
-            await redis.getClient().set(`email-otp:${normalizedEmail}`, redisValue, 'EX', ttlInSeconds);
-
-            // Pass outboxId in job data, not in options
-            await emailQueue.add('sendVerification', {
-                email: normalizedEmail,
-                name,
-                otp,
-                type: "VERIFICATION"
-            });
-
-            const { accTk, refreshToken } = await issueTokensForUser(
-                { _id: newUser._id.toString(), userId: userId, email: newUser.email, role: newUser.role, deviceId: context.deviceId || context.userAgent },
-            );
-
             AuditLogger.logUserAction(context, AuditAction.USER_REGISTER_SUCCESS, AuditStatus.SUCCESS, newUser.userId);
-
-
-            return {
-                user: newUser.toJSON(),
-                accessToken: accTk,
-                refreshToken: refreshToken
-            }
-
 
         } catch (error) {
             if (session.inTransaction()) {
@@ -138,63 +120,48 @@ class userService {
         context: IRequestContext
     ) {
         const normalizedEmail = email.toLowerCase().trim();
-        await checkOtpRateLimit(normalizedEmail);
+        // await checkOtpRateLimit(normalizedEmail);
 
         const eventId = generateEventId();
-        const failedKey = `otp-failed:${normalizedEmail}`;
 
-        // 1️⃣ Read OTP (NOT transactional — Redis)
-        const raw = await redis.getClient().get(`email-otp:${normalizedEmail}`);
-        if (!raw) {
-            const alreadyFailed = await redis.get(failedKey);
-            if (!alreadyFailed) {
-                await emitOutboxEvent({
-                    eventId,
-                    eventType: "auth.email.verify.failed",
-                    action: AuditAction.EMAIL_VERIFIED,
-                    status: AuditStatus.FAILED,
-                    payload: { reason: "OTP expired" },
-                    aggregateType: "EMAIL_VERIFY",
-                    aggregateId: normalizedEmail,
-                    context,
-                });
-                await redis.getClient().set(failedKey, "1", "EX", 60);
-            }
-            throw new BadRequestError("Verification code expired.");
-        }
+        // 1️⃣ Verify OTP in Redis (non-transactional)
+        const verifyResult = await this.otpManager.verify(
+            normalizedEmail,
+            otp,
+            OTPPurpose.EMAIL_VERIFICATION
+        );
 
-        const { hash, userId } = JSON.parse(raw);
-
-        const isOtpValid = await verifyOtp(otp, hash);
-        if (!isOtpValid) {
+        if (!verifyResult.success) {
             await emitOutboxEvent({
+                topic: "auth.events",
                 eventId,
-                eventType: "auth.email.verify.failed",
-                action: AuditAction.EMAIL_VERIFIED,
+                eventType: AuditAction.EMAIL_VERIFIED_FAILED,
+                action: AuditAction.EMAIL_VERIFIED_FAILED,
                 status: AuditStatus.FAILED,
-                payload: { reason: "Invalid OTP" },
-                aggregateType: "EMAIL_VERIFY_FAILED",
-                aggregateId: userId,
+                payload: { reason: verifyResult.message },
+                aggregateType: "EMAIL_VERIFY",
+                aggregateId: normalizedEmail,
+                version: 1,
                 context,
             });
-            throw new BadRequestError("Invalid or expired OTP.");
+
+            throw new BadRequestError(verifyResult.message);
         }
 
-        // 2️⃣ Transaction (MongoDB only)
+        // 2️⃣ Update user in MongoDB transaction
         const session = await mongoose.startSession();
+        let user;
         try {
-            let user;
-
             await session.withTransaction(async () => {
                 user = await this.userModel.findOneAndUpdate(
                     {
-                        userId,
+                        email: normalizedEmail,
                         accountStatus: { $in: [accountStatus.PENDING_EMAIL_VERIFICATION, accountStatus.EMAIL_VERIFIED] }
                     },
                     {
                         $set: {
                             accountStatus: accountStatus.EMAIL_VERIFIED,
-                            isEmailVerified: UserStatus.VERIFIED,
+                            isEmailVerified: true,
                             emailVerifiedAt: new Date(),
                         },
                     },
@@ -205,11 +172,12 @@ class userService {
                     throw new BadRequestError("User not found or already verified.");
                 }
 
-                // transactional outbox
+                // transactional outbox event
                 await emitOutboxEvent(
                     {
+                        topic: "auth.events",
                         eventId,
-                        eventType: "auth.email.verify.success",
+                        eventType: AuditAction.USER_VERIFY_EMAIL_SUCCESS,
                         action: AuditAction.USER_VERIFY_EMAIL_SUCCESS,
                         status: AuditStatus.PENDING,
                         payload: {
@@ -219,21 +187,14 @@ class userService {
                         },
                         aggregateType: "USER",
                         aggregateId: user.userId,
+                        version: 1,
                         context,
                     },
                     { session }
                 );
             });
 
-            // 3️⃣ Side-effects (AFTER commit)
-            await resetOtpRateLimit(normalizedEmail);
-
-            await emailQueue.add("sendWelcomeEmail", {
-                email: normalizedEmail,
-                name: user!.name,
-                type: "WELCOME",
-            });
-
+            // 3️⃣ Side-effects after commit
             AuditLogger.logUserAction(
                 context,
                 AuditAction.USER_VERIFY_EMAIL_SUCCESS,
@@ -241,53 +202,55 @@ class userService {
                 user!.userId
             );
 
-            await redis.delete(`email-otp:${normalizedEmail}`);
-            await redis.delete(failedKey);
+            // ✅ Only issue tokens after email verification
+            const { accTk, refreshToken } = await issueTokensForUser({
+                _id: user!._id.toString(),
+                userId: user!.userId,
+                email: user!.email,
+                role: user!.role,
+                deviceId: context.deviceId || context.userAgent
+            });
 
-            return { message: "Email verified successfully." };
+            return {
+                message: verifyResult.message,
+                user: user!.toJSON(),
+                accessToken: accTk,
+                refreshToken: refreshToken
+            };
         } catch (error) {
             throw error;
         } finally {
             session.endSession();
         }
+
     }
-      
+
+
 
     public async resendVerificationEmail(email: string, context: IRequestContext) {
         const normalizedEmail = email.toLowerCase().trim();
 
-        const user = await this.userModel.findOne({ email });
+        const user = await this.userModel.findOne({ email: normalizedEmail });
         const EventId = generateEventId()
 
-        if (!user || user.isEmailVerified === UserStatus.VERIFIED) {
-            throw new BadRequestError("User not found or Email already verified");
+        if (!user || user.isEmailVerified) {
+            return { message: "If the email exists, a verification email has been sent." };
         }
 
-        await checkResendRateLimit(normalizedEmail);
-
-        const { otp, expires } = generateOTP();
-        const hashedOtp = hashOtp(otp);
-        const ttlInSeconds = Math.floor((expires.getTime() - Date.now()) / 1000);
-
-
-        await redis.getClient().set(`email-otp:${normalizedEmail}`, hashedOtp, 'EX', ttlInSeconds);
-
-        emailQueue.add('sendVerification', {
-            email: normalizedEmail,
-            name: user.name,
-            otp,
-        });
-
         await emitOutboxEvent({
+            topic: "auth.events",
             eventId: EventId,
-            eventType: "AUTH_EMAIL_RESEND",
-            action: AuditAction.EMAIL_VERIFICATION_RESENT,
-            status: AuditStatus.SUCCESS,
+            eventType: AuditAction.USER_EMAIL_RESEND_SUCCESS,
+            action: AuditAction.USER_EMAIL_RESEND_SUCCESS,
+            status: AuditStatus.PENDING,
             payload: {
-                userId: user.userId
+                userId: user.userId,
+                name: user.name,
+                email: user.email
             },
             aggregateType: "EMAIL_RESEND",
             aggregateId: user.userId,
+            version: 1,
             context,
         });
 
@@ -304,8 +267,14 @@ class userService {
         }
 
         if (user.security.lockedUntil && user.security.lockedUntil > new Date()) {
+            const lockedUntil = user.security.lockedUntil;
+            const now = new Date();
+
+            const diffMs = lockedUntil.getTime() - now.getTime();
+            const diffMinutes = Math.ceil(diffMs / 60000);
+
             AuditLogger.logAttempt(context, AuditAction.USER_LOGIN_ATTEMPT, AuditStatus.BLOCKED, { email });
-            throw new BadRequestError(`Account locked until ${user.security.lockedUntil.toISOString()}`);
+            throw new BadRequestError(`Account locked until ${diffMinutes} minutes`);
         }
 
         const isPasswordValid = await verifyPassword(password, user.password)
@@ -333,8 +302,9 @@ class userService {
 
             if (isNowLocked && !wasLocked) {
                 await emitOutboxEvent({
+                    topic: "auth.account.locked",
                     eventId: EventId,
-                    eventType: "SECURITY",
+                    eventType: AuditAction.ACCOUNT_LOCKED,
                     action: AuditAction.ACCOUNT_LOCKED,
                     status: AuditStatus.SUCCESS,
                     payload: {
@@ -343,9 +313,12 @@ class userService {
                     },
                     aggregateType: "ACCOUNT_LOCKED",
                     aggregateId: user.userId,
+                    version: 1,
                     context,
                 });
             }
+
+            //SEND EMAIL OF ACCOUNT LOCKED DUE TO MANY ATTEMPTS 
 
             AuditLogger.logAttempt(context, AuditAction.USER_LOGIN_ATTEMPT, AuditStatus.FAILED, { email });
             throw new BadRequestError("Invalid credentials")
@@ -365,8 +338,9 @@ class userService {
 
 
         await emitOutboxEvent({
+            topic: "auth.user.login.success",
             eventId: EventId,
-            eventType: "AUTH_USER_LOGIN_SUCCESS",
+            eventType: "USER_LOGIN_SUCCESS",
             action: AuditAction.USER_LOGIN_SUCCESS,
             status: AuditStatus.SUCCESS,
             payload: {
@@ -374,6 +348,7 @@ class userService {
             },
             aggregateType: "USER_LOGIN",
             aggregateId: user.userId,
+            version: 1,
             context
         })
 
@@ -387,43 +362,310 @@ class userService {
     }
 
     public async refreshToken(refreshToken: string, context: IRequestContext) {
-        const verifiedToken = await verifyRefreshToken(refreshToken);
+        const { jwtPayload, storedPayload } =
+            await verifyRefreshToken(refreshToken);
 
-        const payloadFromJwt = verifiedToken as any;
-        const storeedPayload = await getPayloadByRefreshToken(refreshToken)
+        const incomingHash = hashToken(refreshToken);
+        const latestHash = await getLatestHashForDevice(
+            jwtPayload.sub,
+            jwtPayload.deviceId
+        );
 
-        const lastestHash = await getLatestHashForDevice(payloadFromJwt.sub, payloadFromJwt.deviceId)
-        const incomingHash = hashToken(refreshToken)
+        const GRACE_WINDOW_MS = 30_000;
+        const tokenAge = Date.now() - (storedPayload.iat ?? Date.now());
 
-        if (!storeedPayload) {
-            await revokeAllSessions(payloadFromJwt.sub)
-            throw new BadRequestError("Refresh token revoked (possible reuse). Re-login required.")
+        if (latestHash && incomingHash !== latestHash && tokenAge > GRACE_WINDOW_MS) {
+            await revokeAllSessions(jwtPayload.sub);
+            throw new Unauthorized('Refresh token reuse detected');
         }
 
-        if (lastestHash && incomingHash !== lastestHash) {
-            await revokeAllSessions(payloadFromJwt.sub)
-            throw new BadRequestError("Refresh token reuse detected. All sessions revoked.")
+        const user = await this.userModel.findById(jwtPayload.sub).exec();
+        if (!user) throw new NotFoundError('User not found');
+
+        const { token: newRefresh, payload } =
+            await signRefreshToken(
+                user._id.toString(),
+                user.userId,
+                jwtPayload.deviceId,
+                user.email
+            );
+
+        const newAccess = await signAccessToken({
+            sub: user._id.toString(),
+            userId: user.userId,
+            email: user.email,
+            role: user.role,
+            deviceId: jwtPayload.deviceId
+        });
+
+        await storeRefreshToken(newRefresh, payload);
+        await markOldTokenForDeletionAfter(refreshToken, GRACE_WINDOW_MS);
+        //await deleteRefreshByHash(refreshToken);
+
+        if (context) {
+            context.userId = user.userId;
+            context.email = user.email;
+            context.deviceId = jwtPayload.deviceId;
         }
 
-        const user = await this.userModel.findById(payloadFromJwt.sub).select("_id userId email role").exec()
+
+        AuditLogger.logUserAction(
+            context,
+            AuditAction.REFRESH_TOKEN_SUCCESS,
+            AuditStatus.SUCCESS,
+            user.userId
+        );
+
+        return this.createResponseDTO(user, newAccess, newRefresh);
+    }
+
+
+    public async requestPasswordReset(email: string, context: IRequestContext) {
+        const eventId = generateEventId();
+        const normalizedEmail = email.toLowerCase().trim();
+        const user = await this.userModel.findOne({ email: normalizedEmail }).exec();
+        if (!user) {
+            AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.FAILED, { email });
+            return {
+                success: true,
+                message: 'If an account exists with this email, a password reset code will be sent.'
+            }
+        }
+
+        if (user.security.lockedUntil && user.security.lockedUntil > new Date()) {
+            AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.BLOCKED, { email });
+            throw new BadRequestError(`Account locked until ${user.security.lockedUntil.toISOString()}`);
+        }
+
+        const throttle = await this.otpManager.shouldThrottle(email, OTPPurpose.PASSWORD_RESET, 120);
+
+        if (throttle?.shouldThrottle) {
+            // Only present to frontend, not DLQ or retry
+            throw new BadRequestError(`Throttled: Please wait ${throttle.waitSeconds}s before requesting a new code`);
+
+        }
+
+        const { code, expiryMinutes } = await this.otpManager.create(
+            email,
+            OTPPurpose.PASSWORD_RESET,
+            OTPConfigs.passwordReset
+        );
+
+        await storeResetMetadata(email, {
+            ipAddress: context.ip,
+            userAgent: context.userAgent,
+            requestedAt: new Date()
+        });
+
+        await User.updateOne(
+            { email },
+            {
+                $inc: { passwordResetCount: 1 },
+                lastPasswordResetAt: new Date()
+            }
+        );
+
+        await emitOutboxEvent(
+            {
+                topic: "password.events",
+                eventId,
+                eventType: AuditAction.PASSWORD_RESET_REQUESTED,
+                action: AuditAction.PASSWORD_RESET_REQUESTED,
+                status: AuditStatus.PENDING,
+                payload: {
+                    email: user.email,
+                    name: user.name,
+                    code: code,
+                    expiryMinutes
+                },
+                aggregateType: "PASSWORD_RESET_REQUESTED",
+                aggregateId: email,
+                version: 1,
+                context,
+            },
+        )
+
+        await AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.SUCCESS, { normalizedEmail });
+
+        return {
+            success: true,
+            message: 'If an account exists with this email, a password reset code will be sent.'
+        }
+    }
+
+    public async verifyResetCode(email: string, code: string, context: IRequestContext) {
+        const eventId = generateEventId();
+
+        const verifyResult = await this.otpManager.verify(
+            email,
+            code,
+            OTPPurpose.PASSWORD_RESET
+        )
+
+        if (!verifyResult.success) {
+            AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.FAILED, { email });
+            throw new BadRequestError(verifyResult.message);
+        }
+
+        const resetToken = await generateResetToken(email);
+
+        // Store reset token in Redis (5 minute expiry)
+        await redis.getClient().setex(
+            `password_reset_token:${email}`,
+            20 * 60,  // 5 minutes to complete reset
+            JSON.stringify({
+                resetToken,
+                email,
+                ipAddress: context.ip,
+                userAgent: context.userAgent,
+                verifiedAt: new Date()
+            })
+        );
+
+        await emitOutboxEvent(
+            {
+                topic: "password.events",
+                eventId,
+                eventType: AuditAction.USER_PASSWORD_RESET_CODE_VERIFIED,
+                action: AuditAction.USER_PASSWORD_RESET_CODE_VERIFIED,
+                status: AuditStatus.PENDING,
+                payload: {
+                    email,
+                },
+                aggregateType: "PASSWORD_RESET_CODE_VERIFIED",
+                aggregateId: email,
+                version: 1,
+                context,
+            },
+        )
+
+        await AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.SUCCESS, { email });
+
+        return {
+            success: true,
+            message: 'Code verified successfully',
+            data: {
+                resetToken,  // Frontend uses this to reset password
+                expiresIn: 300  // 5 minutes in seconds
+            }
+        }
+    }
+
+    public async resetPassword(email: string, token: string, newPassword: string, confirmPassword: string, context: IRequestContext) {
+        const normalizedEmail = email.toLowerCase().trim();
+        const eventId = generateEventId();
+        const tokenKey = `password_reset_token:${normalizedEmail}`
+
+        const pwdToken = await redis.getClient().get(tokenKey)
+
+        if (!pwdToken) {
+            throw new BadRequestError("Invalid or expired reset token")
+        }
+
+        const { resetToken, storedEmail } = JSON.parse(pwdToken);
+
+        if (token !== resetToken) {
+            throw new BadRequestError("Invalid or expired reset token")
+        }
+
+        if (newPassword !== confirmPassword) {
+            throw new BadRequestError("Passwords do not match")
+        }
+
+        const user = await this.userModel.findOne({ storedEmail }).select("+passwordHistory").exec();
         if (!user) {
             throw new BadRequestError("User not found")
         }
 
-        const { token: newRefreshRaw, payload: newPayload } = await signRefreshToken(user._id.toString(), payloadFromJwt.deviceId);
-        const newAccess = await signAccessToken({ sub: user._id.toString(), userId: user.userId, email: user.email, role: user.role, deviceId: payloadFromJwt.deviceId });
+        // const passwordStrength = this.checkPasswordStrength(newPassword);
+        // if (!passwordStrength.isStrong) {
+        //     res.status(400).json({
+        //         success: false,
+        //         error: {
+        //             code: 'WEAK_PASSWORD',
+        //             message: 'Password is too weak',
+        //             details: passwordStrength.issues
+        //         }
+        //     });
+        //     return;
+        // }
 
-        AuditLogger.logAttempt(context, AuditAction.REFRESH_TOKEN_SUCCESS, AuditStatus.SUCCESS, { email: user.email });
+        const isPasswordReused = await isPasswordInHistory(user, newPassword);
+        console.log(user)
+        console.log(isPasswordReused)
+        if (isPasswordReused) {
+            throw new BadRequestError("Password has been used before, cant reuse")
+        }
+        const hashedPwd = await hashedPassword(newPassword);
+        console.log(hashedPwd)
+        console.log(newPassword)
 
-        await storeRefreshToken(newRefreshRaw, newPayload)
+        await User.updateOne(
+            { email },
+            {
+                password: hashedPwd,
+                passwordChangedAt: new Date(),
+                failedLoginAttempts: 0,
+                accountLockedUntil: null,
+                passwordResetCount: 0,
+                $push: {
+                    passwordHistory: {
+                        $each: [hashedPwd],
+                        $slice: -5
+                    }
+                }
+            },
+            { runValidators: true }
+        );
 
-        await deleteRefreshByHash(refreshToken);
+        await invalidateAllUsrSess(email)
 
-        return this.createResponseDTO(user._id.toString(), newAccess, newRefreshRaw)
+        await redis.getClient().del(`password_reset_token:${email}`);
+        await redis.getClient().del(`password_reset_meta:${email}`);
 
+        await this.otpManager.delete(email, OTPPurpose.PASSWORD_RESET);
+
+        await redis.getClient().del(pwdToken);
+
+        await emitOutboxEvent(
+            {
+                topic: "password.events",
+                eventId,
+                eventType: AuditAction.PASSWORD_RESET_SUCCESS,
+                action: AuditAction.PASSWORD_RESET_SUCCESS,
+                status: AuditStatus.PENDING,
+                payload: {
+                    email,
+                    name: user.name,
+
+                },
+                aggregateType: "PASSWORD_RESET_SUCCESS",
+                aggregateId: email,
+                version: 1,
+                context,
+            },
+        )
+
+        await AuditLogger.logUserAction(context, AuditAction.USER_PASSWORD_RESET, AuditStatus.SUCCESS, user._id.toString());
+
+        return {
+            success: true,
+            message: 'Password reset successful. Please login with your new password.',
+        }
     }
 
-    public async logout(sub: string, deviceId: string | undefined, context: IRequestContext) {
+    public async logout(cookie: string, context: IRequestContext) {
+        const { jwtPayload } = await verifyRefreshToken(cookie);
+
+        const sub = jwtPayload.sub;
+        const deviceId = jwtPayload.deviceId;
+
+        if (context) {
+            context.userId = jwtPayload.userId;
+            context.email = jwtPayload.email;
+            context.deviceId = jwtPayload.deviceId;
+        }
+
         if (!sub && !deviceId) {
             throw new Unauthorized("Missing tokens");
         }
@@ -433,8 +675,7 @@ class userService {
             // optional: revoke all devices
             await revokeAllSessions(sub);
         }
-
-        await AuditLogger.logUserAction(context, AuditAction.USER_LOGOUT, AuditStatus.SUCCESS, sub);
+        await AuditLogger.logUserAction(context, AuditAction.USER_LOGOUT, AuditStatus.SUCCESS, jwtPayload.userId);
 
         return { ok: true };
     }
@@ -449,7 +690,7 @@ class userService {
         return { ok: true };
     }
 
-    public async getUserById() {
+    public async getUser() {
         const user = await this.userModel.find()
         if (!user) throw new BadRequestError("Users not found");
         return user;

@@ -8,8 +8,6 @@ import { startKafkaProducer } from '../config';
 
 
 export async function produceAuditEvent(event: any) {
-    await startKafkaProducer().catch(console.error)
-
     try {
         // Use trackedEmail as key to preserve partition ordering for attempt-tracking events
         const key = event.metadata?.email || 'audit';

@@ -1,4 +1,5 @@
 import { config } from '@/config/index';
+import { logger } from '@/shared/utils/logger';
 import { Kafka, logLevel } from 'kafkajs';
 
 
@@ -15,8 +16,6 @@ export const kafka = new Kafka({
 })
 
 const admin = kafka.admin()
-// console.log('🔌 Kafka: Initializing...');
-
 
 export async function createTopic(
     topic: string,
@@ -37,9 +36,9 @@ export async function createTopic(
             waitForLeaders: true,
         });
 
-        console.log(`✅ Kafka topic created: ${topic}`);
+        console.info(`✅ Kafka topic created: ${topic}`);
     } else {
-        console.log(`ℹ️ Kafka topic already exists: ${topic}`);
+        console.info(`ℹ️ Kafka topic already exists: ${topic}`);
     }
 }
 
@@ -50,7 +49,6 @@ export async function connectAdmin(): Promise<void> {
     if (adminConnected) return;
     await admin.connect();
     adminConnected = true;
-    console.log('✅ Kafka: Admin connected');
 }
 
 export async function disconnectAdmin(): Promise<void> {
@@ -58,7 +56,6 @@ export async function disconnectAdmin(): Promise<void> {
     await admin.disconnect();
     adminConnected = false;
 }
-
 
 export const producer = kafka.producer({
     idempotent: true,

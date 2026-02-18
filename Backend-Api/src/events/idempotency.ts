@@ -29,7 +29,7 @@ export const initProcessedEvents = async () => {
   return collection;
 };
 
-// Optional failed events collection
+
 let failedEventsCollection: mongoose.Collection<FailedEvent>;
 
 export const initFailedEvents = async () => {
@@ -43,24 +43,22 @@ export const initFailedEvents = async () => {
   return collection;
 };
 
-/**
- * Ensure idempotent processing using Mongoose transaction session
- */
-export const ensureIdempotent = async (
+
+export const intIdempotency = async (
   eventId: string,
-  session: mongoose.ClientSession,
-  topic: string
+  session: mongoose.ClientSession | null,
+  topic?: string
 ): Promise<boolean> => {
   const collection = await initProcessedEvents();
 
   try {
     await collection.insertOne(
       { _id: eventId, processedAt: new Date(), topic},
-      { session }
+      session ? { session } : undefined
     );
-    return true; // first-time processing
+    return true; 
   } catch (err: any) {
-    if (err.code === 11000) return false; // duplicate, already processed
+    if (err.code === 11000) return false
     throw err;
   }
 };

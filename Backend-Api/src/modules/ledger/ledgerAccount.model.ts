@@ -2,12 +2,13 @@ import { generateLedgerAccountId } from "@/shared/utils/id.generator";
 import mongoose, { Schema, Document, Types } from "mongoose";
 
 export enum LedgerAccountType {
-  USER_AVAILABLE = "USER_AVAILABLE",
-  USER_LOCKED = "USER_LOCKED",
+  MAIN_CHECKINGS = "MAIN_CHECKINGS",
+  SAVINGS = "SAVINGS",
 }
 
 export interface LedgerAccountDocument extends Document {
   userId: Types.ObjectId;
+  userPublicId: string;
   walletId: Types.ObjectId;
   type: LedgerAccountType;
   currency: string;
@@ -17,14 +18,18 @@ export interface LedgerAccountDocument extends Document {
 const LedgerAccountSchema = new Schema(
   {
     userId: {
-      type: String,
+      type: Types.ObjectId,
       ref: 'User',
       required: true,
       index: true,
     },
-
+    userPublicId: {
+      type: String,
+      required: true,
+      index: true,
+    },
     walletId: {
-      type: Schema.Types.ObjectId,
+      type: Types.ObjectId,
       ref: 'Wallet',
       required: true,
       index: true,
@@ -57,7 +62,7 @@ const LedgerAccountSchema = new Schema(
 
 // One account per type per wallet
 LedgerAccountSchema.index(
-  { walletId: 1, type: 1 },
+  { walletId: 1, type: 1, userId: 1 },
   { unique: true }
 );
 

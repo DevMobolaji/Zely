@@ -4,10 +4,11 @@ import redis from "@/infrastructure/cache/redis.cli"
 import { hashToken } from "@/config/hashToken";
 import Unauthorized from '../../shared/errors/unauthorized';
 import { config } from "@/config/index";
-import { storeRefreshToken } from "./session.Service";
+import { deleteRefreshByHash, getPayloadByRefreshToken, storeRefreshToken } from "./session.helper";
+import UnauthenticatedError from "@/shared/errors/unaunthenticated";
 
 
-type AccessPayload = {
+interface AccessPayload {
     sub: string,
     userId: string,
     email: string,
@@ -15,7 +16,23 @@ type AccessPayload = {
     deviceId: string,
 }
 
-type RefreshPayload = { sub: string; jti: string; deviceId: string };
+interface RefreshPayload {
+    sub: string;
+    jti: string;
+    userId: string;
+    deviceId: string;
+    email: string;
+}
+
+interface StoredRefreshPayload {
+    iat: number;
+    exp: number;
+}
+
+export interface VerifiedRefreshToken {
+    jwtPayload: RefreshPayload;
+    storedPayload: StoredRefreshPayload;
+}
 
 const tokenConfig = {
     refreshToken: {
@@ -27,49 +44,84 @@ const tokenConfig = {
 
 export const signAccessToken = async (payload: AccessPayload) => {
     const secret = config.jwt.accessSecret
-    if (!secret) throw new Unauthorized("ACCESS_TOKEN_SECRET is not defined");
+    if (!secret) throw new UnauthenticatedError("ACCESS_TOKEN_SECRET is not defined");
 
     return jwt.sign(payload, secret, {
         expiresIn: config.jwt.accessExpiry as jwt.SignOptions['expiresIn']
     })
 }
 
-export const signRefreshToken = async (sub: string, deviceId: string) => {
+export const signRefreshToken = async (sub: string, userId: string, deviceId: string, email: string) => {
 
     const secret = config.jwt.refreshSecret;
 
     const jti = uuidv4();
-    const payload: RefreshPayload = { sub, jti, deviceId };
+    const payload: RefreshPayload = { sub, jti, userId, deviceId, email };
 
-    if (!secret) throw new Unauthorized("REFRESH_TOKEN_SECRET is not defined");
+    if (!secret) throw new UnauthenticatedError("REFRESH_TOKEN_SECRET is not defined");
     const token = jwt.sign(payload, secret, {
         expiresIn: config.jwt.refreshExpiry as jwt.SignOptions['expiresIn']
     })
 
-    return { token, payload };
+    const decoded = jwt.decode(token) as RefreshPayload & { iat: number; exp: number };
+
+    return {
+        token,
+        payload: decoded  // Now includes iat and exp
+    }
 }
 
 
 export const verifyAccessToken = async (token: string): Promise<AccessPayload> => {
     return new Promise((resolve, reject) => {
-        jwt.verify(token, config.jwt.accessSecret as jwt.Secret, (err, payload) => {
-            if (err) return reject(err)
+        try {
+            jwt.verify(token, config.jwt.accessSecret as jwt.Secret, (err, payload) => {
+                if (err) return reject(err)
 
-            resolve(payload as AccessPayload)
-        })
+                resolve(payload as AccessPayload)
+            })
+        } catch (error) {
+            if (error instanceof jwt.TokenExpiredError) {
+                throw new UnauthenticatedError('Access token expired');
+            }
+            throw error;
+        }
+
     })
 }
 
 
 
-export const verifyRefreshToken = async (token: string) => {
-    const h = hashToken(token);
-    const data = await redis.get(`${config.redis.hashPrefix}${h}`);
-    if (!data) throw new Unauthorized("Invalid refresh token");
+export const verifyRefreshToken = async (
+    token: string
+): Promise<VerifiedRefreshToken> => {
+    let jwtPayload: RefreshPayload;
 
-    return jwt.verify(token, config.jwt.refreshSecret as jwt.Secret) as RefreshPayload
+    try {
+        jwtPayload = jwt.verify(
+            token,
+            config.jwt.refreshSecret as jwt.Secret
+        ) as RefreshPayload;
+    } catch (err) {
+        if (err instanceof jwt.TokenExpiredError) {
+            await deleteRefreshByHash(token);
+            throw new UnauthenticatedError('Refresh token expired');
+        }
+        throw new Unauthorized('Invalid refresh token');
+    }
 
-}
+    const storedPayload = await getPayloadByRefreshToken(token);
+
+    if (!storedPayload) {
+        throw new Unauthorized('Refresh session revoked');
+    }
+
+    return {
+        jwtPayload,
+        storedPayload
+    };
+};
+
 
 
 export function getRefreshCookieLifetimeMs() {
@@ -81,10 +133,10 @@ export function getRefreshCookieLifetimeMs() {
 
 export async function issueTokensForUser(user: { _id: string; userId: string, email: string; role: string, deviceId: string }) {
     //ISSUE ACCESS TOKEN TO USER
-    const accTk = await signAccessToken({ sub: user._id, userId: user.userId, email: user.email, role: user.role, deviceId: user.deviceId });
+    const accTk = await signAccessToken({ sub: user._id.toString(), userId: user.userId, email: user.email, role: user.role, deviceId: user.deviceId });
 
     //ISSUE REFRESH TOKEN TO USER
-    const { token: refreshTokenRaw, payload } = await signRefreshToken(user._id.toString(), user.deviceId);
+    const { token: refreshTokenRaw, payload } = await signRefreshToken(user._id.toString(), user.userId, user.deviceId, user.email);
 
     // Store hashed refresh token and latest payload
     await storeRefreshToken(refreshTokenRaw, payload);

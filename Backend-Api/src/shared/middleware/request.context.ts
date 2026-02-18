@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { IAuthRequest, IRequestContext } from '@/config/interfaces/request.interface';
-import { generateDeviceId } from '../utils/id.generator';
+import { generateDeviceId, validateTimestampedId } from '../utils/id.generator';
+import BadRequestError from '../errors/badRequest';
 
 export function extractRequestContext(req: IAuthRequest): IRequestContext {
     return {
@@ -125,4 +126,16 @@ export function getRequestContext(req: IAuthRequest): IRequestContext {
         throw new Error('Request context not initialized. Did you forget attachRequestContext middleware?');
     }
     return req.context; 
+}
+
+export function getIdempotencyKey(req: IAuthRequest): string | undefined {
+    const idempotency = req.headers['idempotency-key'] as string
+    if (!idempotency) {
+        throw new BadRequestError('Request IdempotencyKey not initialized');
+    }
+
+    if (!validateTimestampedId(idempotency)) {
+        throw new BadRequestError("Invalid Idempotency-Key format");
+      }
+    return idempotency
 }

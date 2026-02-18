@@ -3,7 +3,7 @@ import { verifyAccessToken } from "@/infrastructure/helpers/token.helper";
 import UnauthenticatedError from "@/shared/errors/unaunthenticated";
 import User from "modules/auth/authmodel";
 import { extractRequestContext } from "./request.context";
-import { getLatestHashForDevice } from "@/infrastructure/helpers/session.Service";
+import { getLatestHashForDevice } from "@/infrastructure/helpers/session.helper";
 import Unauthorized from "../errors/unauthorized";
 
 export interface AccessPayload {
