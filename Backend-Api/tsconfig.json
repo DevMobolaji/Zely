@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "typeRoots": [
-      "./src/types",
+      "src/shared/types",
       "./node_modules/@types"
     ],
     /* Visit https://aka.ms/tsconfig.json to read more about this file */
@@ -46,32 +46,38 @@
     // "moduleResolution": "node",            /* Specify module resolution strategy: 'node' (Node.js) or 'classic' (TypeScript pre-1.6). */
     "baseUrl": "./src",
     "paths": {
-      "@/services/*": [
-        "services/*"
+      "@/shared/*": [
+        "shared/*"
       ],
-      "@/domain/*": [
-        "domain/*"
+      "@/modules/*": [
+        "modules/*"
+      ],
+      "@/events/*": [
+        "events/*"
       ],
       "@/config/*": [
         "config/*"
       ],
-      "@/core/*": [
-        "core/*"
+      "@/infrastructure/*": [
+        "infrastructure/*"
       ],
-      "@/infra/*": [
-        "infra/*"
-      ],
-      "@/interfaces/*": [
-        "interfaces/*"
+      "@/kafka/*": [
+        "kafka/*"
       ],
       "@/graphql/*": [
         "graphql/*"
       ],
-      "@/app/*": [
-        "app/*"
+      "@/workers/*": [
+        "workers/*"
       ],
-      "@/kafka/*": [
-        "kafka/*"
+      "@/test/*": [
+        "test/*"
+      ],
+      "@/proto/*": [
+        "proto/*"
+      ],
+      "@/generated/*": [
+        "generated/*"
       ]
     } /* A series of entries which re-map imports to lookup locations relative to the 'baseUrl'. */,
     // "rootDirs": [],                        /* List of root folders whose combined content represents the structure of the project at runtime. */

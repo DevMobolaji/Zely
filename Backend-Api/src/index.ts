@@ -1,14 +1,19 @@
 import 'dotenv/config';
-import App from './core/app';
-import AuthController from './domain/auth/authcontroller';
-import validateEnvVariables from '@/config/validate';
+import App from './infrastructure/app';
+import AuthController from 'modules/auth/authcontroller';
+import { config } from './config';
+import TransferController from 'modules/transfer/transfer.controller';
+import FundController from './modules/ledger/system ledger/system.funds.controller';
 
-validateEnvVariables();
-const app = new App([new AuthController()], Number(process.env.PORT))
+const app = new App([new AuthController(), new TransferController(), new FundController()], Number(config.app.port))
 
 
 const start = async () => {
+     await app.initialize(); 
      app.listen()
 }
 
-start ()
+start().catch((err) => {
+     console.error('Failed to start application:', err);
+     process.exit(1);
+});

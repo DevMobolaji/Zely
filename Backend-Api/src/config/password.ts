@@ -4,13 +4,13 @@ import PepperService from "./pepper";
 
 const argonHashOptions = {
         type: argon2.argon2id,
-        memoryCost:  2 ** 16,
+        memoryCost: 65536, //2 ** 16,
         timeCost: 3,
-        parallelism: 1 
+        parallelism: 4 
     }
 
     
-    //THIS FUNCTION HASHES THE PASSWORD 
+//THIS FUNCTION HASHES THE PASSWORD 
 const pepper = PepperService.getPepper();
 
 export const hashedPassword = async (plainPass: string): Promise<string> => {
