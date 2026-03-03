@@ -1,11 +1,9 @@
 
 import mongoose from "mongoose";
-import { RetryEnvelope } from "@/kafka/consumer/retry.envelope";
-import { PermanentError, TransientError } from "@/kafka/consumer/retry.error";
 import emailQueue from "@/infrastructure/queues/email.queue";
 import { logger } from "@/shared/utils/logger";
-import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
-import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
+import { PermanentError, TransientError } from "@/kafka/consumer/helpers/retry.error";
+
 
 interface TransferEmailJobData {
   email: string;
@@ -15,12 +13,20 @@ interface TransferEmailJobData {
   fromUserEmail: string;
   fromUserId: string;
   toUserId: string;
+  fromAccountType: string,
+  toAccountType: string,
+  fromAccountLast4: string,
+  toAccountLast4: string,
   previousBalance: number;
   currentBalance: number;
+  toPreviousBalance: number,
+  toCurrentBalance: number,
   referenceId: string;
   referenceType: string;
   transactionRef: string;
   type: string;
+  transferType: string
+  transactionId: string
 }
 
 export async function processTransferEvents(
@@ -29,7 +35,7 @@ export async function processTransferEvents(
   session: mongoose.ClientSession) {
 
   const { payload, version, eventType } = envelope.event;
-  const { transactionRef, sender, receiver, amount, currency, transferType, referenceId } = payload 
+  const { transactionRef, sender, receiver, amount, currency, transferType, referenceId } = payload
 
   try {
     if (version !== 1) {
@@ -46,7 +52,7 @@ export async function processTransferEvents(
 
     switch (eventType) {
       case "TRANSACTION_COMPLETED":
-        if(transferType === "INTERNAL_TRANSFER"){
+        if (transferType === "INTERNAL_TRANSFER") {
           await emailQueue.add('transferCompleted', {
             email: receiver.email,
             name: receiver.name,
@@ -54,22 +60,68 @@ export async function processTransferEvents(
             currency: currency,
             fromUserEmail: sender.email,
             fromUserId: sender.userId,
+            fromAccountType: sender.accountType,
+            toAccountType: receiver.accountType,
+            fromAccountLast4: sender.accountNumber,
+            toAccountLast4: receiver.accountNumber,
             previousBalance: sender.previousBalance,
             currentBalance: sender.currentBalance,
+            toPreviousBalance: receiver.previousBalance,
+            toCurrentBalance: receiver.currentBalance,
+            transactionId: transactionRef,
             referenceId: referenceId,
             referenceType: transferType,
             transactionRef: transactionRef,
             type: "INTERNAL_TRANSFER",
+            transferType: payload.transferType
           } as TransferEmailJobData);
 
           logger.info("Internal Transfer completed successfully");
+        } else if (transferType === "P2P_TRANSFER") {
+          // For sender
+          await emailQueue.add("sendTransferEmail", {
+            recipientEmail: sender.email,
+            recipientName: sender.name,
+            amount,
+            currencySymbol: currency,
+            previousBalance: sender.previousBalance,
+            currentBalance: sender.currentBalance,
+            transactionId: transactionRef,
+            referenceId,
+            type: "DEBIT",
+            transferType,
+            fromAccountType: sender.accountType,
+            fromAccountLast4: sender.accountNumber.slice(-4),
+            toAccountType: receiver.accountType,
+            toAccountLast4: receiver.accountNumber.slice(-4),
+            senderEmail: sender.email,
+            senderName: sender.name
+          });
+
+          // For receiver
+          await emailQueue.add("sendTransferEmail", {
+            recipientEmail: receiver.email,
+            recipientName: receiver.name,
+            amount,
+            currencySymbol: currency,
+            previousBalance: receiver.previousBalance,
+            currentBalance: receiver.currentBalance,
+            transactionId: transactionRef,
+            referenceId: referenceId,
+            type: "CREDIT",
+            transferType,
+            fromAccountType: sender.accountType,
+            fromAccountLast4: sender.accountNumber.slice(-4),
+            toAccountType: receiver.accountType,
+            toAccountLast4: receiver.accountNumber.slice(-4),
+            senderEmail: sender.email,
+            senderName: sender.name
+          });
+
+          logger.info("P2P transfer completed successfully");
         }
-        
-        logger.info("Transfer completed notification sent", {
-          transactionRef,
-          senderEmail: sender.email,
-          receiverEmail: receiver.email,
-        });
+
+        logger.info("Transfer completed notification sent");
 
         break;
 

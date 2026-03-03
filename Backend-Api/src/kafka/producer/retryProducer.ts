@@ -1,15 +1,16 @@
 // retry.producer.ts
 import { producer } from "../config/kafka.config";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "../consumer/retry.envelope"; 
-import { AUTH_RETRY_LEVELS } from "../consumer/retry.policy";
+import { RetryEnvelope } from "../consumer/helpers/retry.envelope";
+import { AUTH_RETRY_LEVELS } from "../consumer/helpers/retry.policy";
 
 export async function sendToRetry(
   baseTopic: string,
   envelope: RetryEnvelope
 ) {
 
-  envelope.meta.retryCount = (envelope.meta.retryCount || 0) + 1;
+  envelope.meta.retryCount = (envelope.meta.retryCount || 0);
+  logger.info(`Sending to retry topic, attempt #${envelope.meta.retryCount}`);
 
   if (envelope.meta.retryCount > AUTH_RETRY_LEVELS.length) {
     logger.warn("sendToRetry called but max retries exceeded, skipping");

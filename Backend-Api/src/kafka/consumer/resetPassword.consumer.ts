@@ -3,10 +3,10 @@ import { kafka } from "../config/kafka.config";
 import { intIdempotency } from "@/events/idempotency";
 import { TOPICS } from "../config/topics";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "@/kafka/consumer/retry.envelope";
+import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
 import { validateWithSchema } from "../schema/zod.helper";
 import { AuthEventSchema } from "../schema/user.schema";
-import { retryOrDLQ } from "./retry.handler";
+import { retryOrDLQ } from "./helpers/retry.handler";
 import { resetPasswordProcessor } from "@/events/resetPasswordProcessor.evt";
 
 const consumer = kafka.consumer({ groupId: "auth-password-reset-consumer" });

@@ -32,6 +32,7 @@ export interface IUser {
 export interface WalletDocument extends Document {
   userId: IUser; //Types.ObjectId;
   userPublicId: string;
+  ledgerAccountId: Types.ObjectId; // Ledger source of truth
   type: WalletType;
   currency: string;
   walletId: string;
@@ -56,6 +57,13 @@ const WalletSchema = new Schema(
     },
 
     userPublicId: { type: String, required: true },
+
+    ledgerAccountId: {
+      type: Types.ObjectId,
+      ref: "LedgerAccount",
+      required: true,
+      unique: true, // one wallet per ledger account
+    },
 
     type: {
       type: String,

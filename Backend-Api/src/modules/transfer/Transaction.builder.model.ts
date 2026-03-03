@@ -2,7 +2,7 @@ import { Schema, model, Document } from 'mongoose'
 
 export interface ILedgerTransactionDocument extends Document {
   transactionRef: string;
-  type: 'INTERNAL_TRANSFER' | 'FEE' | 'REVERSAL';
+  type: 'INTERNAL_TRANSFER' | 'FEE' | 'REVERSAL' | 'P2P_TRANSFER' | 'VAULT_TRANSFER';
   status: 'INITIATED' | 'POSTED';
   currency: string;
   amount: number;
@@ -21,7 +21,7 @@ const LedgerTransactionSchema = new Schema(
     },
     type: {
       type: String,
-      enum: ["INTERNAL_TRANSFER", "FEE", "REVERSAL", "P2P_TRANSFER"],
+      enum: ["INTERNAL_TRANSFER", "FEE", "REVERSAL", "P2P_TRANSFER", "VAULT_TRANSFER"],
       required: true,
     },
     status: {

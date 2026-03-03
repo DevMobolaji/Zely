@@ -1,7 +1,7 @@
 // dlq.producer.ts
 import { producer } from "../config";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "../consumer/retry.envelope";
+import { RetryEnvelope } from "../consumer/helpers/retry.envelope";
 
 export async function sendToDLQ(
   baseTopic: string,

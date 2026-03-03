@@ -55,6 +55,7 @@ export enum IDPrefixes {
 
     //LEDGER ACCOUNT
     LEDGER_ACCOUNT = "LAC",
+    VAULT = "VAULT",
     
 }
 
@@ -191,6 +192,9 @@ export const generateWalletId = (): EntityId<IDPrefixes.WALLET> =>
 
 export const generateLedgerId = (): EntityId<IDPrefixes.LEDGER> =>
     generateId(IDPrefixes.LEDGER) as EntityId<IDPrefixes.LEDGER>;
+
+export const generateVaultId = (): EntityId<IDPrefixes.VAULT> =>
+    generateId(IDPrefixes.VAULT) as EntityId<IDPrefixes.VAULT>;
 
 export const generateLedgerAccountId = (): EntityId<IDPrefixes.LEDGER_ACCOUNT> =>
     generateId(IDPrefixes.LEDGER_ACCOUNT) as EntityId<IDPrefixes.LEDGER_ACCOUNT>;

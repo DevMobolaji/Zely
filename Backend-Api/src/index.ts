@@ -4,8 +4,9 @@ import AuthController from 'modules/auth/authcontroller';
 import { config } from './config';
 import TransferController from 'modules/transfer/transfer.controller';
 import FundController from './modules/ledger/system ledger/system.funds.controller';
+import vaultController from './modules/vault/vault.controller';
 
-const app = new App([new AuthController(), new TransferController(), new FundController()], Number(config.app.port))
+const app = new App([new AuthController(), new TransferController(), new FundController(), new vaultController()], Number(config.app.port))
 
 
 const start = async () => {

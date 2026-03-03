@@ -1,5 +1,4 @@
 // transfer.interface.ts
-import { Types } from "mongoose";
 
 export enum TransferStatus {
   PENDING = "PENDING",
@@ -22,7 +21,16 @@ export interface internalTransferRequest {
   fromType: string,
   toType: string,
   idempotencyKey: string
-
 }
 
-export type transferType = "INTERNAL_TRANSFER" | "P2P_TRANSFER";
+export interface vaultTransferRequest {
+  senderId: string,
+  amount: number,
+  currency: string,
+  fromType: string,
+  toType: string,
+  vaultId: string,
+  idempotencyKey: string
+}
+
+export type transferType = "INTERNAL_TRANSFER" | "P2P_TRANSFER" | "VAULT_TRANSFER";

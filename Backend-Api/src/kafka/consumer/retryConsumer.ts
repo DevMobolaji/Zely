@@ -3,12 +3,11 @@ import mongoose from "mongoose";
 import { kafka } from "../config/kafka.config";
 import { intIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "./retry.envelope";
+import { RetryEnvelope } from "./helpers/retry.envelope";
 import { processAuthEvent } from "@/events/authProcessor.evt";
-import { retryOrDLQ } from "./retry.handler";
 import { validateWithSchema } from "../schema/zod.helper";
 import { AuthEventSchema } from "../schema/user.schema";
-import { AUTH_MAX_RETRIES, AUTH_RETRY_LEVELS } from "./retry.policy";
+import { AUTH_MAX_RETRIES, AUTH_RETRY_LEVELS } from "./helpers/retry.policy";
 import z from "zod";
 import { sendToDLQ } from "../producer/sendToDlq";
 import { sendToRetry } from "../producer/retryProducer";
@@ -28,7 +27,6 @@ export const RetryEnvelopeSchema = z.object({
 function originalTopicFromRetry(topic: string) {
   return topic.replace(/\.retry$/, "");
 }
-
 
 const retryConsumer = kafka.consumer({ groupId: "auth-retry-consumer" });
 
@@ -62,6 +60,8 @@ export async function runRetryConsumer() {
 
       const retryCount = envelope.meta.retryCount
 
+      console.log(retryCount)
+
       const createdAtMs = new Date(envelope.meta.createdAt).getTime();
       const now = Date.now();
       const retryConfig = getRetryConfig(envelope.meta.retryCount);
@@ -86,6 +86,7 @@ export async function runRetryConsumer() {
 
       try {
         await withMongoTransaction(async (session) => {
+
           const firstTime = await intIdempotency(envelope.event.eventId, session, envelope.event.eventType);
           if (!firstTime) {
             logger.info("Duplicate retry skipped", { eventId: envelope.event.eventId, topic });
@@ -97,9 +98,11 @@ export async function runRetryConsumer() {
             envelope,
             session
           );
-          await retryConsumer.commitOffsets([{ topic, partition, offset: (parseInt(message.offset) + 1).toString() }]);
-          logger.info("Retry processed successfully");
+
         });
+        await retryConsumer.commitOffsets([{ topic, partition, offset: (parseInt(message.offset) + 1).toString() }]);
+        logger.info("Retry processed successfully");
+
       } catch (error: any) {
         logger.error("Retry processing failed");
 
@@ -119,7 +122,7 @@ export async function runRetryConsumer() {
 
           await retryConsumer.commitOffsets([{ topic, partition, offset: (parseInt(message.offset) + 1).toString() }]);
         }
-      } 
+      }
     },
   });
 

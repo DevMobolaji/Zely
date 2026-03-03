@@ -44,6 +44,8 @@ import { requestIdempotencyKey } from '@/shared/middleware/request-idempotency';
 import { runPasswordConsumer } from '@/kafka/consumer/resetPassword.consumer';
 import { runRetryConsumer } from '@/kafka/consumer/retryConsumer';
 import { startDLQSink } from '@/kafka/consumer/dlq.consumer';
+import { runVaultConsumer } from '@/kafka/consumer/vault.consumer';
+import { runProjectionConsumer } from '@/kafka/consumer/projectConsumer';
 
 
 
@@ -117,6 +119,8 @@ class App {
             await runAuthConsumer()
             await runPasswordConsumer()
             await runTransferConsumer();
+            await runProjectionConsumer()
+            await runVaultConsumer()
             await runRetryConsumer()
             await startDLQSink()
             logger.info('✅ Kafka consumer started');

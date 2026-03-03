@@ -221,6 +221,7 @@ export class EmailService {
       transactionLink,
     } = params;
 
+    console.log(params)
     const platformName = config?.app?.name || 'Zely';
     const supportEmail = 'support@zely.com';
     const companyAddress = '123 Business Street, Lagos, Nigeria';
@@ -494,6 +495,218 @@ export class EmailService {
   /**
    * Sends a P2P (peer-to-peer) transfer success email to the recipient.
    */
+
+  static async sendDebitNotification(params: any) {
+    const {
+      recipientEmail,
+      recipientName,
+      amount,
+      currencySymbol,
+      transactionId,
+      referenceId,
+      transactionDate,
+      fromAccountType,
+      fromAccountLast4,
+      previousBalance,
+      newBalance,
+      senderName,
+      transactionLink,
+    } = params;
+
+    const platformName = config?.app?.name || "Zely";
+    const supportEmail = "support@zely.com";
+    const currentYear = new Date().getFullYear();
+
+    const subject = `Debit Alert · ${currencySymbol}${amount.toLocaleString()}`;
+
+    const html = `
+    <html>
+    <body style="margin:0;padding:0;background:#f6f9fc;font-family:-apple-system,Segoe UI,Roboto;">
+    <table width="100%" cellpadding="0" cellspacing="0">
+    <tr><td align="center" style="padding:40px 16px;">
+    <table width="600" style="background:#fff;border-radius:8px;overflow:hidden;">
+  
+    <tr>
+    <td align="center" style="padding:28px;border-bottom:1px solid #e5e7eb;">
+    <h1 style="margin:0;font-size:20px;">${platformName}</h1>
+    </td>
+    </tr>
+  
+    <tr>
+    <td align="center" style="padding:28px 32px;">
+    <h2 style="margin:0 0 6px;color:#b91c1c;">Debit Successful</h2>
+    <p style="margin:0;color:#6b7280;">
+    Hi ${recipientName}, you sent ${currencySymbol}${amount.toLocaleString()} to ${senderName}.
+    </p>
+    </td>
+    </tr>
+  
+    <tr>
+    <td style="padding:0 32px 28px;">
+    <div style="background:#b91c1c;color:#fff;border-radius:12px;padding:24px;text-align:center;">
+    <p style="margin:0;font-size:34px;font-weight:700;">
+    - ${currencySymbol}${amount.toLocaleString()}
+    </p>
+    </div>
+    </td>
+    </tr>
+  
+    <tr>
+    <td style="padding:0 32px 24px;">
+    <p style="font-size:13px;color:#6b7280;margin:0;">
+    Account: ${fromAccountType} ••••${fromAccountLast4}
+    </p>
+    <p style="font-size:13px;color:#6b7280;margin:8px 0 0;">
+    Previous Balance: ${currencySymbol}${previousBalance.toLocaleString()}
+    </p>
+    <p style="font-size:15px;font-weight:700;margin:6px 0 0;">
+    New Balance: ${currencySymbol}${newBalance.toLocaleString()}
+    </p>
+    </td>
+    </tr>
+  
+    <tr>
+    <td align="center" style="padding:24px;">
+    <a href="${transactionLink}"
+    style="background:#111827;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;">
+    View Transaction
+    </a>
+    </td>
+    </tr>
+  
+    <tr>
+    <td align="center" style="padding:20px;font-size:12px;color:#9ca3af;background:#f9fafb;">
+    <p style="margin:0 0 6px;">
+    If this wasn’t you, contact ${supportEmail} immediately.
+    </p>
+    <p style="margin:0;">© ${currentYear} ${platformName}</p>
+    </td>
+    </tr>
+  
+    </table>
+    </td></tr>
+    </table>
+    </body>
+    </html>
+    `;
+
+    return this.sendEmail(recipientEmail, subject, html);
+  }
+
+  static async sendCreditNotification(params: any) {
+    const {
+      recipientEmail,
+      recipientName,
+      amount,
+      currencySymbol,
+      transactionId,
+      referenceId,
+      transactionDate,
+      toAccountType,
+      toAccountLast4,
+      previousBalance,
+      newBalance,
+      senderName,
+      transactionLink,
+    } = params;
+
+    const platformName = config?.app?.name || "Zely";
+    const supportEmail = "support@zely.com";
+    const currentYear = new Date().getFullYear();
+
+    const subject = `Credit Alert · ${currencySymbol}${amount.toLocaleString()}`;
+
+    const html = `
+    <html>
+    <body style="margin:0;padding:0;background:#f6f9fc;font-family:-apple-system,Segoe UI,Roboto;">
+    <table width="100%" cellpadding="0" cellspacing="0">
+    <tr><td align="center" style="padding:40px 16px;">
+    <table width="600" style="background:#fff;border-radius:8px;overflow:hidden;">
+  
+    <tr>
+    <td align="center" style="padding:28px;border-bottom:1px solid #e5e7eb;">
+    <h1 style="margin:0;font-size:20px;">${platformName}</h1>
+    </td>
+    </tr>
+  
+    <tr>
+    <td align="center" style="padding:28px 32px;">
+    <h2 style="margin:0 0 6px;color:#047857;">Credit Successful</h2>
+    <p style="margin:0;color:#6b7280;">
+    Hi ${recipientName}, you received ${currencySymbol}${amount.toLocaleString()} from ${senderName}.
+    </p>
+    </td>
+    </tr>
+  
+    <tr>
+    <td style="padding:0 32px 28px;">
+    <div style="background:#047857;color:#fff;border-radius:12px;padding:24px;text-align:center;">
+    <p style="margin:0;font-size:34px;font-weight:700;">
+    + ${currencySymbol}${amount.toLocaleString()}
+    </p>
+    </div>
+    </td>
+    </tr>
+  
+    <tr>
+    <td style="padding:0 32px 24px;">
+    <p style="font-size:13px;color:#6b7280;margin:0;">
+    Account: ${toAccountType} ••••${toAccountLast4}
+    </p>
+    <p style="font-size:13px;color:#6b7280;margin:8px 0 0;">
+    Previous Balance: ${currencySymbol}${previousBalance.toLocaleString()}
+    </p>
+    <p style="font-size:15px;font-weight:700;margin:6px 0 0;">
+    New Balance: ${currencySymbol}${newBalance.toLocaleString()}
+    </p>
+    </td>
+    </tr>
+  
+    <tr>
+    <td align="center" style="padding:24px;">
+    <a href="${transactionLink}"
+    style="background:#111827;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;">
+    View Transaction
+    </a>
+    </td>
+    </tr>
+  
+    <tr>
+    <td align="center" style="padding:20px;font-size:12px;color:#9ca3af;background:#f9fafb;">
+    <p style="margin:0 0 6px;">
+    This transaction was processed securely.
+    </p>
+    <p style="margin:0;">© ${currentYear} ${platformName}</p>
+    </td>
+    </tr>
+  
+    </table>
+    </td></tr>
+    </table>
+    </body>
+    </html>
+    `;
+
+    return this.sendEmail(recipientEmail, subject, html);
+  }
+
+  static async sendEmail(to: string, subject: string, html: string) {
+    const platformName = config?.app?.name || "Zely";
+
+    const { data, error } = await resend.emails.send({
+      from: `${platformName} <onboarding@resend.dev>`,
+      to,
+      subject,
+      html,
+    });
+
+    if (error) {
+      logger.error("Email send failed", { to, error });
+      throw new Error("Email sending failed");
+    }
+
+    return data;
+  }
 
   // send internal transfer notification
   static async sendInternalTransferNotifications(internalTransferParams: any) {

@@ -6,7 +6,7 @@ import { AddCreditInput, AddDebitInput, LedgerEntryInput } from "@/config/interf
 import { LedgerEntry } from "./ledger.entry.model";
 import { generateLedgerId } from "@/shared/utils/id.generator";
 
-export type LedgerTransactionType = 'INTERNAL_TRANSFER' | 'FEE' | 'REVERSAL' | "P2P_TRANSFER"
+export type LedgerTransactionType = 'INTERNAL_TRANSFER' | 'FEE' | 'REVERSAL' | "P2P_TRANSFER" | "VAULT_TRANSFER"
 
 class TransactionBuilder {
   private entries: LedgerEntryInput[] = []
@@ -142,6 +142,7 @@ class TransactionBuilder {
       ledgerAccountId: e.ledgerAccountId,
       ledgerId: generateLedgerId()
     }));
+
 
     await LedgerEntry.insertMany(ledgerEntries, { session });
 

@@ -21,4 +21,11 @@ export const TOPICS = {
     AUDIT_EVENTS: "audit.events",
     AUDIT_EVENTS_RETRY: "audit.events.retry",
     AUDIT_EVENTS_DLQ: "audit.events.dlq",
+
+    // ======================
+    // VAULT DOMAIN
+    // ======================
+    VAULT_EVENTS: "vault.events",
+    VAULT_EVENTS_RETRY: "vault.events.retry",
+    VAULT_EVENTS_DLQ: "vault.events.dlq",
   };

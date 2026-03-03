@@ -1,10 +1,11 @@
 import { ClientSession, Types } from "mongoose";
-import { LedgerAccount, LedgerAccountType } from "../ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountDocument, LedgerAccountType, LedgerOwnerType } from "../ledger/ledgerAccount.model";
 import BadRequestError from "@/shared/errors/badRequest";
 import { IUser, Wallet, WalletDocument, WalletType } from "../wallet/wallet.model";
 import { Account } from "../account/account.model";
 import { NotFoundError } from "@/shared/errors/notFoundError";
 import { AccountDocument } from "../account/account.interface";
+import vaultModel, { VaultDocument } from "../vault/vault.model";
 
 interface IWalletPopulated extends Omit<WalletDocument, 'userId'> {
   userId: IUser;
@@ -44,11 +45,49 @@ export const lockAccountToPreventConcurrency = async (account: Types.ObjectId, s
   return { firstLock, secondLock }
 }
 
+export const lockVaultToPreventConcurrency = async (
+  vaultId: Types.ObjectId,
+  session: ClientSession
+) => {
+  const now = new Date();
+  const lockExpiry = new Date(now.getTime() + 10_000); // 10s safety window
+
+  const res = await vaultModel.findOneAndUpdate(
+    {
+      _id: vaultId._id,
+      $or: [
+        { locked: false },
+        { lockedUntil: { $lt: now } }
+      ]
+    },
+    {
+      $set: {
+        locked: true,
+        lockedUntil: lockExpiry
+      }
+    },
+    { session, new: true }
+  );
+
+  return res;
+};
+
+export const unlockVault = async (
+  vaultId: Types.ObjectId,
+  session: ClientSession
+) => {
+  await vaultModel.updateOne(
+    { _id: vaultId },
+    { $set: { locked: false, lockUntil: null } },
+    { session }
+  );
+};
+
 export const lockWalletFunds = async (
   walletId: Types.ObjectId,
   amount: number,
   session: ClientSession
-) => {
+): Promise<WalletDocument> => {
   const res = await Wallet.findOneAndUpdate(
     {
       _id: walletId,
@@ -64,7 +103,7 @@ export const lockWalletFunds = async (
   );
 
   if (!res) {
-    throw new BadRequestError('insufficient balance');
+    throw new BadRequestError('INSUFFICIENT_BALANCE_LOCKING_WALLET');
   }
 
   return res;
@@ -72,22 +111,22 @@ export const lockWalletFunds = async (
 
 
 
-export const deductWalletFunds = async (walletId: Types.ObjectId, amount: number, session: ClientSession) => {
+export const deductWalletFunds = async (walletId: Types.ObjectId, amount: number, session: ClientSession): Promise<WalletDocument> => {
 
   const res = await Wallet.findOneAndUpdate({
-    _id: walletId, availableBalance: { $gte: amount },
+    _id: walletId, lockedBalance: { $gte: amount },
   }, {
     $inc: { lockedBalance: -amount },
   }, { new: true, session })
 
   if (!res) {
-    throw new BadRequestError("Insufficient balance");
+    throw new BadRequestError("INSUFFICIENT_BALANCE");
   }
 
   return res;
 }
 
-const unlockWalletFunds = async (walletId: Types.ObjectId, currency: string, amount: number, session: ClientSession) => {
+export const unlockWalletFunds = async (walletId: Types.ObjectId, currency: string, amount: number, session: ClientSession): Promise<WalletDocument> => {
   const wallet = await Wallet.findOne({ _id: walletId, currency }).session(session);
   if (!wallet) throw new BadRequestError("Wallet not found");
 
@@ -98,7 +137,7 @@ const unlockWalletFunds = async (walletId: Types.ObjectId, currency: string, amo
   ).session(session);
 
   if (!res) {
-    throw new BadRequestError("Insufficient balance");
+    throw new BadRequestError("INSUFFICIENT_BALANCE_UNLOCKING_WALLET");
   }
 
   return res;
@@ -118,6 +157,7 @@ export const lookUpAccounts = async (dto: { senderId: string; toAccountNumber: s
     status: "ACTIVE",
   }).session(session);
 
+
   if (!senderAccount) {
     throw new BadRequestError("Sender funding account not found");
   }
@@ -128,9 +168,9 @@ export const lookUpAccounts = async (dto: { senderId: string; toAccountNumber: s
     throw new BadRequestError('Invalid account number');
   }
 
-    if (senderAccount._id.equals(receiverAccount._id)) {
-      throw new BadRequestError('Self transfers are not allowed!, use internal transfer instead',);
-     }
+  if (senderAccount._id.equals(receiverAccount._id)) {
+    throw new BadRequestError('Self transfers are not allowed!, use internal transfer instead',);
+  }
 
   return { senderAccount, receiverAccount }
 }
@@ -162,16 +202,26 @@ export const ensureWalletsAreActive = async (senderWalletId: Types.ObjectId, rec
   }
 }
 
-export const lookUpLedgerAccount = async (senderWalletId: Types.ObjectId, receiverWalletId: Types.ObjectId, session: ClientSession) => {
+export const lookUpLedgerAccount = async (
+  senderOwnerId: Types.ObjectId,
+  senderOwnerType: LedgerOwnerType,
+  receiverOwnerId: Types.ObjectId,
+  receiverOwnerType: LedgerOwnerType,
+  currency: string,
+  session: ClientSession) => {
 
   const [senderLedger, receiverLedger] = await Promise.all([
     LedgerAccount.findOne({
-      walletId: senderWalletId,
+      ownerId: senderOwnerId,
+      ownerType: senderOwnerType,
+      currency,
       type: LedgerAccountType.MAIN_CHECKINGS
     }).session(session),
 
     LedgerAccount.findOne({
-      walletId: receiverWalletId,
+      ownerId: receiverOwnerId,
+      ownerType: receiverOwnerType,
+      currency,
       type: LedgerAccountType.MAIN_CHECKINGS
     }).session(session)
   ]);
@@ -183,16 +233,37 @@ export const lookUpLedgerAccount = async (senderWalletId: Types.ObjectId, receiv
   return { senderLedgerId: senderLedger._id, receiverLedgerId: receiverLedger._id }
 }
 
-export const lookUpLedgerAccountByWalletId = async (senderWalletId: Types.ObjectId, receiverWalletId: Types.ObjectId, fromType: string, toType: string, session: ClientSession) => {
+export const lookUpLedgerAccountForP2p = async (senderLedgerId: Types.ObjectId, receiverLedgerId: Types.ObjectId, fromType: string, toType: string, session: ClientSession) => {
 
   const [senderLedger, receiverLedger] = await Promise.all([
     LedgerAccount.findOne({
-      walletId: senderWalletId,
+      _id: senderLedgerId,
       type: fromType
     }).session(session),
 
     LedgerAccount.findOne({
-      walletId: receiverWalletId,
+      _id: receiverLedgerId,
+      type: toType
+    }).session(session)
+  ]);
+
+  if (!senderLedger || !receiverLedger) {
+    throw new NotFoundError("Sender or receiver ledger not found");
+  }
+
+  return { senderLedger, receiverLedger }
+}
+
+export const LookUpVaultLedger = async (senderAccountId: Types.ObjectId, receiverAccountId: Types.ObjectId, fromType: string, toType: string, session: ClientSession) => {
+
+  const [senderLedger, receiverLedger] = await Promise.all([
+    LedgerAccount.findOne({
+      _id: senderAccountId,
+      type: fromType
+    }).session(session),
+
+    LedgerAccount.findOne({
+      _id: receiverAccountId,
       type: toType
     }).session(session)
   ]);
@@ -214,7 +285,9 @@ export const lookUpPrimaryWallets = async (
     _id: walletId,
     type: WalletType.MAIN_CHECKINGS,
     currency,
-  }).session(session);
+  })
+  .populate('userId', 'email name -_id')
+  .session(session);
 
   if (!wallet) {
     throw new BadRequestError('Primary wallet not found');
@@ -236,8 +309,8 @@ export const findWalletByType = async (
     currency,
     status: 'ACTIVE',
   })
-  .populate('userId', 'email name -_id')
-  .session(session);
+    .populate('userId', 'email name -_id')
+    .session(session);
 
   if (!wallet) {
     throw new BadRequestError(
@@ -248,8 +321,37 @@ export const findWalletByType = async (
   return wallet;
 };
 
+export const findVault = async (
+  vaultId: string,
+  currency: string,
+  userId: string,
+  session: ClientSession
+): Promise<VaultDocument> => {
+  const vault = await vaultModel.findOne({
+    vaultId,
+    currency,
+    userPublicId: userId
+  }).populate('userId', 'email name -_id')
+    .session(session);
+
+  if (!vault) {
+    throw new BadRequestError(
+      `vault not found for ${currency}`
+    );
+  }
+
+  if (vault.status !== "ACTIVE") {
+    throw new BadRequestError("VAULT_NOT_ACTIVE");
+  }
+
+
+  return vault;
+
+}
+
 
 export const resolveAccountByUserId = async (userId: string, type: string, currency: string, session: ClientSession): Promise<AccountDocument> => {
+
   const account = await Account.findOne({
     userPublicId: userId,
     type,
@@ -333,3 +435,16 @@ export const autoUnfreezeWallet = async (
     ).session(session);
   }
 }
+
+export const lookupVaultLedger = async (vaultId: Types.ObjectId, session: ClientSession) => {
+  const vault = await vaultModel.findById(vaultId).session(session);
+  if (!vault) throw new BadRequestError("VAULT_NOT_FOUND");
+
+  if (!vault.ledgerAccountId) throw new BadRequestError("VAULT_LEDGER_NOT_ASSIGNED");
+
+  const receiverLedger = await LedgerAccount.findById(vault.ledgerAccountId).session(session);
+
+  if (!receiverLedger) throw new BadRequestError("RECEIVER_LEDGER_NOT_FOUND");
+
+  return receiverLedger;
+};

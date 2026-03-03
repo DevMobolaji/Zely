@@ -1,7 +1,7 @@
 // retry.handler.ts
 import { PermanentError, serializeError, TransientError } from "./retry.error";
-import { sendToRetry } from "../producer/retryProducer";
-import { sendToDLQ } from "../producer/sendToDlq";
+import { sendToRetry } from "../../producer/retryProducer";
+import { sendToDLQ } from "../../producer/sendToDlq";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "./retry.envelope";
 
@@ -9,7 +9,7 @@ interface RetryOrDLQParams {
   topic: string;
   message: RetryEnvelope;
   error: Error;
-} 
+}
 
 export async function retryOrDLQ({ topic, message, error }: RetryOrDLQParams) {
   try {
@@ -44,9 +44,9 @@ export async function retryOrDLQ({ topic, message, error }: RetryOrDLQParams) {
     logger.error(
       "Fatal error in retryOrDLQ",
       {
-      eventId: message.event.eventId,
-      topic,
-      error: fatalError.message,
-    });
+        eventId: message.event.eventId,
+        topic,
+        error: fatalError.message,
+      });
   }
 }

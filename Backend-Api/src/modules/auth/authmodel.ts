@@ -114,29 +114,24 @@ const userSchema = new Schema<User, UserModel, IUserMethods>({
 }
 )
 
-const MAX_PASSWORD_HISTORY = 5; // keep last 5 passwords
+const MAX_PASSWORD_HISTORY = 5;
 
 userSchema.pre<User>("save", async function () {
-    // Only act if password is modified
     if (!this.isModified("password") || !this.password) return;
 
-    // 1️⃣ Get current password from the DB (before modification)
     const currentPassword = this.isNew ? null : this.get("password");
 
     if (currentPassword) {
         this.passwordHistory = this.passwordHistory || [];
         this.passwordHistory.push(currentPassword);
 
-        // Keep only last N entries
         if (this.passwordHistory.length > MAX_PASSWORD_HISTORY) {
             this.passwordHistory = this.passwordHistory.slice(-MAX_PASSWORD_HISTORY);
         }
     }
 
-    // 2️⃣ Hash the new password
     this.password = await hashedPassword(this.password);
 
-    // 3️⃣ Update passwordChangedAt timestamp
     this.passwordChangedAt = new Date();
 });
 
@@ -145,6 +140,3 @@ userSchema.pre<User>("save", async function () {
 
 export default model<User, UserModel>("User", userSchema)
 
-function next(err: unknown): void | PromiseLike<void> {
-    throw new Error("Function not implemented.");
-}

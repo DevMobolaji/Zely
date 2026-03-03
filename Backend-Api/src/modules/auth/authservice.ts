@@ -30,8 +30,6 @@ import { accountStatus } from "./authinterface";
 import OTPManager, { OTPConfigs, OTPPurpose } from "@/config/otp.manager";
 import { invalidateAllUsrSess, isPasswordInHistory, storeResetMetadata } from "../helpers/auth.helpers";
 import { markOldTokenForDeletionAfter } from "@/infrastructure/helpers/markOld";
-import { logger } from "@/shared/utils/logger";
-import otpManager from "@/config/otp.manager";
 import { NotFoundError } from "@/shared/errors/notFoundError";
 
 class userService {

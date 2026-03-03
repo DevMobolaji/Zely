@@ -7,7 +7,8 @@ import ensureSystemLedger from "./create.system.ledger";
 import TransactionBuilder from "../ledger.transaction.builder";
 import { lookUpLedgerAccount, resolveAccountByAccountNumber, resolveWallet } from "@/modules/helpers/resolvers";
 import { completedIdempotence, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
-import { Wallet } from "@/modules/wallet/wallet.model";
+import { Wallet, WalletType } from "@/modules/wallet/wallet.model";
+import { LedgerOwnerType } from "../ledgerAccount.model";
 
 
 export interface FundUsersRequest {
@@ -50,8 +51,11 @@ class SystemLedger {
 
         // --- Resolve ledger accounts ---
         const { receiverLedgerId, senderLedgerId } = await lookUpLedgerAccount(
-          ensureSystem.MAIN_CHECKINGS.walletId, // System ledger
-          wallet._id,
+          ensureSystem.MAIN_CHECKINGS.ownerId,
+          LedgerOwnerType.SYSTEM,
+          account.userId,
+          LedgerOwnerType.USER,
+          "NGN",
           session
         );
 
@@ -67,7 +71,7 @@ class SystemLedger {
         const builder = new TransactionBuilder("INTERNAL_TRANSFER");
 
         builder.addDebit({
-          ledgerAccountId: senderLedgerId,
+          ledgerAccountId: senderLedgerId._id,
           amount: user.amount,
           currency: "NGN",
           referenceId,
@@ -77,7 +81,7 @@ class SystemLedger {
         });
 
         builder.addCredit({
-          ledgerAccountId: receiverLedgerId,
+          ledgerAccountId: receiverLedgerId._id,
           amount: user.amount,
           currency: "NGN",
           referenceId,
@@ -91,9 +95,9 @@ class SystemLedger {
 
         const before = await Wallet.findById(wallet._id).session(session);
 
-        // --- Update wallet balance ---
+
         await Wallet.updateOne(
-          { _id: ensureSystem.MAIN_CHECKINGS.walletId },
+          { userPublicId: 'SYSTEM_USER', type: WalletType.MAIN_CHECKINGS },
           { $inc: { availableBalance: -user.amount } },
           { session }
         );

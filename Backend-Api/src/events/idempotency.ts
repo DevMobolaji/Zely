@@ -1,9 +1,10 @@
 import mongoose from "mongoose";
 
 export interface ProcessedEvent {
-  _id: string;        // eventId
-  processedAt: Date;
+  eventId: string;        // eventId
   topic?: string;
+  consumerGroup?: string;
+  processedAt: Date;
 }
 
 export interface FailedEvent {
@@ -47,13 +48,19 @@ export const initFailedEvents = async () => {
 export const intIdempotency = async (
   eventId: string,
   session: mongoose.ClientSession | null,
-  topic?: string
+  topic?: string,
+  consumerGroup?: string
 ): Promise<boolean> => {
   const collection = await initProcessedEvents();
 
   try {
     await collection.insertOne(
-      { _id: eventId, processedAt: new Date(), topic},
+      { 
+        eventId, 
+        topic,
+        consumerGroup,
+        processedAt: new Date(), 
+        },
       session ? { session } : undefined
     );
     return true; 

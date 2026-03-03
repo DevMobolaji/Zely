@@ -1,4 +1,4 @@
-import { LedgerAccount, LedgerAccountType } from "@/modules/ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountType, LedgerOwnerType } from "@/modules/ledger/ledgerAccount.model";
 import mongoose, { Types } from "mongoose";
 import { generateLedgerAccountId } from "@/shared/utils/id.generator";
 import { ensureSystemUser } from "@/infrastructure/helpers/systemUser.helper";
@@ -21,12 +21,13 @@ export default async function ensureSystemLedger(currency: string) {
 
   for (const type of ledgerTypes) {
     const account = await LedgerAccount.findOneAndUpdate(
-      { walletId: systemWallet._id, type, currency },
+      { ownerId: systemWallet._id, type, currency },
       {
         $setOnInsert: {
           userId: systemUserId,
           userPublicId: "SYSTEM_USER",
-          walletId: systemWallet._id, // assuming system has a wallet with same ID
+          ownerId: systemWallet._id, // assuming system has a wallet with same ID
+          ownerType: LedgerOwnerType.SYSTEM,
           type,
           currency,
           ledgerAccountId: generateLedgerAccountId(),

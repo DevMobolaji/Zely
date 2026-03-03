@@ -1,10 +1,10 @@
 import emailQueue from "@/infrastructure/queues/email.queue";
-import { RetryEnvelope } from "@/kafka/consumer/retry.envelope";
-import { PermanentError, TransientError } from "@/kafka/consumer/retry.error";
+import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
+import { PermanentError, TransientError } from "@/kafka/consumer/helpers/retry.error";
 import { logger } from "@/shared/utils/logger";
 
 
-export async function resetPasswordProcessor (
+export async function resetPasswordProcessor(
   topic: string,
   envelope: RetryEnvelope,
 ) {

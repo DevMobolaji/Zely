@@ -12,45 +12,106 @@ async function bootstrap() {
   const emailWorker = new Worker(EMAIL_QUEUE, async job => {
     console.log('🟢 Processing job', job.id, job.data);
 
-    const { email, name, otp, type, amount, currency, currencySymbol, fromUserEmail, fromUserId, previousBalance, currentBalance, transactionId, referenceId, referenceType, transactionRef, expiryMinutes, transferType, fromAccountType, fromAccountLast4, toAccountType, toAccountLast4, senderEmail, senderName, recipientEmail, recipientName } = job.data;
+    const { email, name, otp, type, amount, currency, currencySymbol, fromUserEmail, fromUserId, previousBalance, currentBalance, transactionId, referenceId, referenceType, transactionRef, expiryMinutes, transferType, fromAccountType, fromAccountLast4, toAccountType, toAccountLast4, senderEmail, senderName, recipientEmail, recipientName, toPreviousBalance, toCurrentBalance } = job.data;
 
 
-    // Only send email notification if we have recipient info
-    const params: SendCreditNotificationParams = {
-      recipientEmail: email,
-      recipientName: name,
-      amount,
-      currencySymbol: currency,
-      senderEmail: fromUserEmail,
-      senderName: fromUserId,
-      senderMessage: "",
-      transactionLink: `${process.env.APP_URL}/transactions/${transactionRef}`,
-      previousBalance,
-      newBalance: currentBalance,
-      transactionId: transactionRef,
-      referenceId: referenceId,
-      referenceType: referenceType,
-      transactionDate: new Date().toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZoneName: 'short'
-      })
+    interface SendCreditNotificationParams {
+      recipientEmail: string;
+      recipientName: string;
+      amount: number;
+      currencySymbol: string;
+      senderEmail: string;
+      senderName: string;
+      transactionLink: string;
+      previousBalance: number;
+      newBalance: number;
+      transactionId: string;
+      referenceId: string;
+      referenceType: string;
+      transactionDate: string;
+      type: string
     }
 
-    const internalTransferParams = {
+    interface SendDebitNotificationParams {
+      recipientEmail: string;
+      recipientName: string;
+      amount: number;
+      currencySymbol: string;
+      transactionLink: string;
+      previousBalance: number;
+      newBalance: number;
+      transactionId: string;
+      referenceId: string;
+      referenceType: string;
+      transferType: string;
+      toAccountType: string;
+      toAccountLast4: string;
+      transactionDate: string;
+      type: string
+    }
+
+    const debitParams: SendDebitNotificationParams = {
       recipientEmail,
       recipientName,
       amount,
       currencySymbol,
+      transactionLink: `${process.env.APP_URL}/transactions/${transactionRef}`,
+      previousBalance,
+      type,
+      newBalance: currentBalance,
+      transactionId,
+      referenceId,
+      referenceType,
+      transferType,
+      toAccountType,
+      toAccountLast4,
+      transactionDate: new Date().toLocaleString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short"
+      })
+    };
+
+
+    const creditParams: SendCreditNotificationParams = {
+      recipientEmail,
+      recipientName,
+      amount,
+      currencySymbol,
+      senderEmail,
+      senderName,
+      transactionLink: `${process.env.APP_URL}/transactions/${transactionRef}`,
+      previousBalance,
+      newBalance: currentBalance,
+      transactionId,
+      referenceId,
+      referenceType,
+      type,
+      transactionDate: new Date().toLocaleString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short"
+      })
+    };
+  
+
+    const internalTransferParams = {
+      recipientEmail: email,
+      recipientName: name,
+      amount,
+      currencySymbol: currency,
       fromAccountType,
       toAccountType,
       fromAccountLast4,
       toAccountLast4,
-      toPreviousBalance: previousBalance,
-      toNewBalance: currentBalance,
+      toPreviousBalance: toPreviousBalance,
+      toNewBalance: toCurrentBalance,
       fromPreviousBalance: previousBalance,
       fromNewBalance: currentBalance,
       transactionId: transactionId,
@@ -60,8 +121,6 @@ async function bootstrap() {
       transactionLink: `${process.env.APP_URL}/transactions/${transactionRef}`,
       transferType
     };
-
-    console.log('🟢 Processing internalTransferParams', internalTransferParams);
 
 
     if (type === 'TRANSFER' && (!email || !name)) {
@@ -90,25 +149,22 @@ async function bootstrap() {
         await EmailService.sendPasswordResetSuccessEmail(email, name);
         break;
 
-      case "TRANSFER":
-        await EmailService.sendTransferNotification(params);
+      // case "TRANSFER":
+      //   await EmailService.sendTransferNotification(params);
+      //   break;
+
+      case "INTERNAL_TRANSFER":
+        await EmailService.sendInternalTransferNotifications(internalTransferParams);
+        break
+
+      case "DEBIT":
+        await EmailService.sendDebitNotification(debitParams);
         break;
 
       case "CREDIT":
-        if (transferType === "INTERNAL_TRANSFER") {
-          await EmailService.sendInternalTransferNotifications(internalTransferParams);
-        } else {
-          //await EmailService.sendP2PTransferNotification(params);
-        }
+        await EmailService.sendCreditNotification(creditParams);
         break;
 
-      case "DEBIT":
-        if (transferType === "INTERNAL_TRANSFER") {
-          await EmailService.sendInternalTransferNotifications(internalTransferParams);
-        } else {
-          //await EmailService.sendP2PTransferNotification(params);
-        }
-        break;
 
       default:
         throw new Error(`Unknown email type: ${type}`);

@@ -1,5 +1,4 @@
 import mongoose, { Types } from "mongoose";
-import { internalTransferRequest, TransferRequestInput, transferType } from "./transfer.interface";
 import { completedIdempotence, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
 import BadRequestError from "@/shared/errors/badRequest";
 
@@ -8,44 +7,48 @@ import { IRequestContext } from "@/config/interfaces/request.interface";
 import TransactionBuilder from "../ledger/ledger.transaction.builder";
 
 import {
-  deductWalletFunds,
-  ensureWalletsAreActive,
-  findWalletByType,
   lockAccountToPreventConcurrency,
-  lockWalletFunds,
-  lookUpLedgerAccount,
-  lookUpPrimaryWallets
 } from "../helpers/resolvers";
 
 import { Wallet, WalletDocument } from "../wallet/wallet.model";
 import { LedgerEntryNature } from "../ledger/ledger.entry.model";
 import { Account } from "../account/account.model";
-import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
-import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import { AccountDocument } from "../account/account.interface";
-import { WalletType } from "../wallet/wallet.model";
+import { LedgerAccountDocument } from "../ledger/ledgerAccount.model";
+import { VaultDocument } from "../vault/vault.model";
 
-export interface TransferEngineInput {
+type BaseTransferInput = {
   senderAccount: AccountDocument;
-  receiverAccount: AccountDocument;
+  receiverAccount: AccountDocument | LedgerAccountDocument | VaultDocument;
   senderLedgerId: Types.ObjectId;
   receiverLedgerId: Types.ObjectId;
 
   amount: number;
   currency: string;
   idempotencyKey: string;
+};
 
+type WalletToWalletInput = BaseTransferInput & {
+  transferType: "P2P_TRANSFER" | "INTERNAL_TRANSFER";
   senderWallet: WalletDocument;
   receiverWallet: WalletDocument;
-}
+};
 
+type WalletToVaultInput = BaseTransferInput & {
+  transferType: "VAULT_TRANSFER";
+  senderWallet: WalletDocument;
+  receiverWallet?: never;
+};
 
+export type TransferEngineInput =
+  | WalletToWalletInput
+  | WalletToVaultInput;
 
 
 class TransferEngine {
   constructor(
     private readonly input: TransferEngineInput,
-    private readonly transferType: transferType
+
   ) { }
 
   async transferEngines(
@@ -61,8 +64,6 @@ class TransferEngine {
       receiverAccount,
       senderLedgerId,
       receiverLedgerId,
-      senderWallet,
-      receiverWallet,
       amount,
       currency,
       idempotencyKey,
@@ -70,6 +71,13 @@ class TransferEngine {
 
     const transactionRef = generateTransactionId();
     const referenceId = generateReferenceId();
+
+    let accountNumber: string;
+    if ('accountNumber' in receiverAccount) {
+      accountNumber = receiverAccount.accountNumber;
+    } else {
+      accountNumber = receiverAccount.ledgerAccountId.toString();
+    }
 
     /** -------------------------
      * IDEMPOTENCY
@@ -80,38 +88,38 @@ class TransferEngine {
     if (alreadyCompleted) return response;
 
     /** -------------------------
-     * DEADLOCK-SAFE LOCKING FOR CONCURRENCY CONTROL
+     * CONCURRENCY LOCKING
      * ------------------------- */
-    const [first, second] =
-      senderAccount._id.toHexString() < receiverAccount._id.toHexString()
-        ? [senderAccount, receiverAccount]
-        : [receiverAccount, senderAccount];
+    if ("accountNumber" in receiverAccount) {
 
-    if (!await lockAccountToPreventConcurrency(first._id, session)) {
-      throw new BadRequestError("LOCK_FAILED");
+      const [first, second] =
+        senderAccount._id.toHexString() < receiverAccount._id.toHexString()
+          ? [senderAccount, receiverAccount]
+          : [receiverAccount, senderAccount];
+
+      if (!await lockAccountToPreventConcurrency(first._id, session)) {
+        throw new BadRequestError("LOCK_FAILED");
+      }
+
+      if (!await lockAccountToPreventConcurrency(second._id, session)) {
+        throw new BadRequestError("LOCK_FAILED");
+      }
+
     }
 
-    if (!await lockAccountToPreventConcurrency(second._id, session)) {
-      throw new BadRequestError("LOCK_FAILED");
+    // Case 2: Wallet → Vault (receiver is ledger account)
+    else {
+
+      if (!await lockAccountToPreventConcurrency(senderAccount._id, session)) {
+        throw new BadRequestError("LOCK_FAILED");
+      }
+
     }
-
-    /** -------------------------
-     * BALANCE SNAPSHOT (USER FACING BALANCES)
-     * ------------------------- */
-    const prevSenderBalance = senderWallet.availableBalance;
-    const prevReceiverBalance = receiverWallet.availableBalance;
-
-
-    /** -------------------------
-     * LOCK FUNDS
-     * ------------------------- */
-    await lockWalletFunds(senderWallet._id, amount, session);
-
 
     /** -------------------------
      * LEDGER ENTRIES
      * ------------------------- */
-    const builder = new TransactionBuilder(this.transferType);
+    const builder = new TransactionBuilder(this.input.transferType);
 
     builder.addDebit({
       ledgerAccountId: senderLedgerId,
@@ -120,7 +128,7 @@ class TransferEngine {
       nature: LedgerEntryNature.DEBIT,
       transactionRef,
       referenceId,
-      referenceType: this.transferType,
+      referenceType: this.input.transferType,
     });
 
     builder.addCredit({
@@ -130,28 +138,22 @@ class TransferEngine {
       nature: LedgerEntryNature.CREDIT,
       transactionRef,
       referenceId,
-      referenceType: this.transferType,
+      referenceType: this.input.transferType,
     });
 
     const txn = await builder.commit(session);
 
     /** -------------------------
-     * BALANCE MUTATION
-     * ------------------------- */
-
-    const senderWalletUpdate = await deductWalletFunds(senderWallet._id, amount, session);
-
-    const receiverWalletUpdate = await Wallet.findOneAndUpdate(
-      { _id: receiverWallet._id },
-      { $inc: { availableBalance: amount } },
-      { session, new: true }
-    );
-
-    /** -------------------------
      * UNLOCK ACCOUNTS
      * ------------------------- */
+    const accountIdsToUnlock = [senderAccount._id];
+
+    if ("accountNumber" in receiverAccount) {
+      accountIdsToUnlock.push(receiverAccount._id);
+    }
+
     await Account.updateMany(
-      { _id: { $in: [first._id, second._id] } },
+      { _id: { $in: accountIdsToUnlock } },
       { $set: { locked: false, lockUntil: null } },
       { session }
     );
@@ -166,53 +168,10 @@ class TransferEngine {
       session
     );
 
-    /** -------------------------
-         * OUTBOX NOTIFICATION
-         * ------------------------- */
-    await emitOutboxEvent(
-      {
-        topic: "transaction.events",
-        eventId: txn.transactionRef,
-        eventType: AuditAction.TRANSACTION_COMPLETED,
-        action: AuditAction.TRANSACTION_COMPLETED,
-        status: AuditStatus.PENDING,
-        payload: {
-          sender: {
-            userId: senderWallet.userPublicId,
-            name: senderWallet.userId.name,
-            email: senderWallet.userId.email,
-            accountType: senderAccount.type,
-            accountNumber: senderAccount.accountNumber,
-            previousBalance: prevSenderBalance,
-            currentBalance: senderWalletUpdate?.availableBalance,
-          },
-          receiver: {
-            userId: receiverWallet.userPublicId,
-            name: receiverWallet.userId.name,
-            email: receiverWallet.userId.email,
-            accountType: receiverAccount.type,
-            accountNumber: receiverAccount.accountNumber,
-            previousBalance: prevReceiverBalance,
-            currentBalance: receiverWalletUpdate?.availableBalance,
-          },
-          amount,
-          currency,
-          referenceId,
-          transactionRef,
-          transferType: this.transferType,
-        },
-        aggregateType: "TRANSFER",
-        aggregateId: txn.transactionRef,
-        version: 1,
-        context,
-      },
-      { session }
-    );
-
-
 
     return {
       transactionRef,
+      referenceId,
       amount,
     };
   }
@@ -221,4 +180,3 @@ class TransferEngine {
 
 
 export default TransferEngine;
-

@@ -19,6 +19,7 @@ class TransferController implements Controller {
   private initializeRoutes(): void {
     this.route.post(`${this.path}/p2p`, requireAuth, this.p2pTransfer);
     this.route.post(`${this.path}/internal`, requireAuth, this.internalTransfer);
+    this.route.post(`${this.path}/to-vault`, requireAuth, this.saveToVault);
   }
 
   private p2pTransfer = asyncWrapper(async (req: IAuthRequest, res: Response): Promise<Response> => {
@@ -55,6 +56,28 @@ class TransferController implements Controller {
       idempotencyKey: getIdempotencyKey(req) || generateIdempotencyKey()
     }
     const result = await this.transferService.transferBetweenWallet(dto, context);
+
+    return res.status(200).send({
+      ok: true,
+      status: result
+    });
+  });
+
+  private saveToVault = asyncWrapper(async (req: IAuthRequest, res: Response): Promise<Response> => {
+    const context = getRequestContext(req);
+    const { amount, currency, vaultId, fromType, toType } = req.body;
+    const senderId = req.user!.userId;
+
+    const dto = {
+      senderId,
+      amount,
+      currency,
+      vaultId,
+      fromType,
+      toType,
+      idempotencyKey: getIdempotencyKey(req) || generateIdempotencyKey()
+    }
+    const result = await this.transferService.transferToVault(dto, context);
 
     return res.status(200).send({
       ok: true,

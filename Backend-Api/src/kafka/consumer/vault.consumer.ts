@@ -1,25 +1,25 @@
-import mongoose from "mongoose";
-import { kafka } from "../config/kafka.config";
+import { kafka } from "../config/kafka.config"; 
+import { TOPICS } from "../config/topics";
+import { RetryEnvelope } from "./helpers/retry.envelope";
 import { intIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "./helpers/retry.envelope";
-import { processAuthEvent } from "@/events/authProcessor.evt";
+import mongoose from "mongoose";
+import { vaultEvents } from "@/events/vaults.events";
 import { retryOrDLQ } from "./helpers/retry.handler";
 import { validateWithSchema } from "../schema/zod.helper";
-import { AuthEventSchema } from "../schema/user.schema";
-import { TOPICS } from "../config/topics";
+import { VaultEventSchema } from "../schema/vault.schema";
 
-const authConsumer = kafka.consumer({ groupId: "auth-consumer" });
+const vaultConsumer = kafka.consumer({ groupId: "vault-consumer" });
 
-export async function runAuthConsumer() {
-  await authConsumer.connect();
+export async function runVaultConsumer() {
+  await vaultConsumer.connect();
 
-  await authConsumer.subscribe({
-    topic: TOPICS.AUTH_EVENTS,
+  await vaultConsumer.subscribe({
+    topic: TOPICS.VAULT_EVENTS,
     fromBeginning: false,
   });
 
-  await authConsumer.run({
+  await vaultConsumer.run({
     eachMessage: async ({ topic, message }: { topic: string; message: any }) => {
       if (!message.value) return;
 
@@ -46,7 +46,7 @@ export async function runAuthConsumer() {
           return;
         }
 
-        const validatedEvent = validateWithSchema(AuthEventSchema, envelope.event) as {
+        const validatedEvent = validateWithSchema(VaultEventSchema, envelope.event) as {
           eventId: string;
           eventType: string;
           version: 1;
@@ -63,7 +63,8 @@ export async function runAuthConsumer() {
           meta: envelope.meta,
           event: validatedEvent, // properly validated event
         };
-        await processAuthEvent(topic, validatedEnvelope, session);
+
+        await vaultEvents(topic, validatedEnvelope, session);
 
         // Commit if all succeeds
         await session.commitTransaction();
@@ -73,7 +74,7 @@ export async function runAuthConsumer() {
           await session.abortTransaction();
         }
 
-        logger.error("Auth provisioning failed", {
+        logger.error("Vault provisioning failed", {
           eventId: envelope.event.eventId,
           topic,
           error: error.message

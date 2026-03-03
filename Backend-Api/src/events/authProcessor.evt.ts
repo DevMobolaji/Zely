@@ -2,14 +2,14 @@ import mongoose from "mongoose";
 import User from "@/modules/auth/authmodel";
 import { accountStatus } from "@/modules/auth/authinterface";
 import { Wallet, WalletStatus, WalletType } from "@/modules/wallet/wallet.model";
-import { LedgerAccount, LedgerAccountType } from "@/modules/ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountType, LedgerOwnerType } from "@/modules/ledger/ledgerAccount.model";
 import { Account, AccountType } from "@/modules/account/account.model";
 import { generateAccountNumber } from "@/shared/utils/id.generator";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import { logger } from "@/shared/utils/logger";
-import { PermanentError, TransientError } from "@/kafka/consumer/retry.error";
-import { RetryEnvelope } from "@/kafka/consumer/retry.envelope";
+import { PermanentError, TransientError } from "@/kafka/consumer/helpers/retry.error";
+import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
 import { OTPConfigs, OTPPurpose } from "@/config/otp.manager";
 import OTPManager from "@/config/otp.manager";
 import redis from "@/infrastructure/cache/redis.cli";
@@ -114,7 +114,29 @@ export async function processAuthEvent(
           throw new PermanentError(`[v${version}] User state transition conflict`);
         }
 
-        // 3️⃣ Create wallets
+        // Create ledger accounts
+        const ledgers = await LedgerAccount.insertMany(
+          [
+            {
+              ownerId: updatedUser._id,
+              ownerType: LedgerOwnerType.USER,
+              userPublicId: updatedUser.userId,
+              type: LedgerAccountType.MAIN_CHECKINGS,
+              currency: "NGN",
+            },
+            {
+              ownerId: updatedUser._id,
+              ownerType: LedgerOwnerType.USER,
+              userPublicId: updatedUser.userId,
+              type: LedgerAccountType.SAVINGS,
+              currency: "NGN",
+            },
+          ],
+          { session }
+        );
+        logger.info(`[v${version}] User ledger accounts created successfully`);
+
+        // Create wallets
         const wallets = await Wallet.insertMany(
           [
             {
@@ -125,6 +147,7 @@ export async function processAuthEvent(
               lockedBalance: 0,
               status: WalletStatus.ACTIVE,
               type: WalletType.MAIN_CHECKINGS,
+              ledgerAccountId: ledgers[0]._id,
             },
             {
               userId: updatedUser._id,
@@ -134,6 +157,7 @@ export async function processAuthEvent(
               lockedBalance: 0,
               status: WalletStatus.ACTIVE,
               type: WalletType.SAVINGS,
+              ledgerAccountId: ledgers[1]._id,
             },
           ],
           { session }
@@ -142,29 +166,7 @@ export async function processAuthEvent(
 
         const [checkingWalletId, savingsWalletId] = [wallets[0]._id, wallets[1]._id];
 
-        // 4️⃣ Create ledger accounts
-        const ledgers = await LedgerAccount.insertMany(
-          [
-            {
-              userId: updatedUser._id,
-              userPublicId: updatedUser.userId,
-              walletId: checkingWalletId,
-              type: LedgerAccountType.MAIN_CHECKINGS,
-              currency: "NGN",
-            },
-            {
-              userId: updatedUser._id,
-              userPublicId: updatedUser.userId,
-              walletId: savingsWalletId,
-              type: LedgerAccountType.SAVINGS,
-              currency: "NGN",
-            },
-          ],
-          { session }
-        );
-        logger.info(`[v${version}] User ledger accounts created successfully`);
-
-        // 5️⃣ Generate account numbers
+        // Generate account numbers
         const genCheckingAccountNumber = generateAccountNumber();
         const genSavingsAccountNumber = generateAccountNumber();
 
