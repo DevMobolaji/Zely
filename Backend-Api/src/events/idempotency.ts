@@ -5,6 +5,8 @@ export interface ProcessedEvent {
   topic?: string;
   consumerGroup?: string;
   processedAt: Date;
+  status: "PROCESSING" | "COMPLETED";
+  updatedAt: Date
 }
 
 export interface FailedEvent {
@@ -24,6 +26,7 @@ export const initProcessedEvents = async () => {
 
   const collection = mongoose.connection.collection<ProcessedEvent>("processed_events");
 
+  await collection.createIndex({ eventId: 1, consumerGroup: 1 }, { unique: true }); // ✅ THIS is what makes 11000 fire
   await collection.createIndex({ processedAt: 1 }, { expireAfterSeconds: 30 * 24 * 3600 });
 
   processedEventsCollection = collection;
@@ -50,22 +53,60 @@ export const intIdempotency = async (
   session: mongoose.ClientSession | null,
   topic?: string,
   consumerGroup?: string
-): Promise<boolean> => {
+): Promise<"PROCESSED" | "SKIP"> => {
   const collection = await initProcessedEvents();
+
+  if (!consumerGroup) {
+    throw new Error("consumerGroup is required for idempotency");
+  }
 
   try {
     await collection.insertOne(
-      { 
-        eventId, 
+      {
+        eventId,
         topic,
         consumerGroup,
-        processedAt: new Date(), 
-        },
+        status: "PROCESSING",
+        processedAt: new Date(),
+        updatedAt: new Date(),
+      },
       session ? { session } : undefined
     );
-    return true; 
+    return "PROCESSED";
   } catch (err: any) {
-    if (err.code === 11000) return false
-    throw err;
+    if (err.code !== 11000) throw err;
+
+    const existing = await collection.findOne(
+      { eventId, consumerGroup },
+      session ? { session } : undefined
+    )
+
+    if (!existing) return "PROCESSED";
+
+    if (existing.status === "COMPLETED") {
+      return "SKIP"; 
+    }
+
+    // PROCESSING → possible crash scenario
+    return "SKIP"; // or implement stale logic if needed
   }
+};
+
+export const markEventCompleted = async (
+  eventId: string,
+  consumerGroup: string,
+  session: mongoose.ClientSession
+) => {
+  const collection = await initProcessedEvents();
+
+  await collection.updateOne(
+    { eventId, consumerGroup, status: "PROCESSING" },
+    {
+      $set: {
+        status: "COMPLETED",
+        updatedAt: new Date()
+      }
+    },
+    { session }
+  );
 };

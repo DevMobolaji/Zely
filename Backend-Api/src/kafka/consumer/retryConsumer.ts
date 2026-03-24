@@ -7,20 +7,24 @@ import { RetryEnvelope } from "./helpers/retry.envelope";
 import { processAuthEvent } from "@/events/authProcessor.evt";
 import { validateWithSchema } from "../schema/zod.helper";
 import { AuthEventSchema } from "../schema/user.schema";
-import { AUTH_MAX_RETRIES, AUTH_RETRY_LEVELS } from "./helpers/retry.policy";
+import { AUTH_MAX_RETRIES, AUTH_RETRY_LEVELS, TRANSFER_MAX_RETRIES, TRANSFER_RETRY_LEVELS } from "./helpers/retry.policy";
 import z from "zod";
 import { sendToDLQ } from "../producer/sendToDlq";
 import { sendToRetry } from "../producer/retryProducer";
 import { withMongoTransaction } from "@/events/mongo.wrapper";
 import { TOPICS } from "../config/topics";
+import { TransferEventSchema } from "../schema/transfer.schema";
+import { processTransferEvents } from "@/events/transferProcessor.evt";
 
 export const RetryEnvelopeSchema = z.object({
   meta: z.object({
     retryCount: z.number(),
     createdAt: z.string(),
     lastError: z.string().optional(),
+    originalConsumerGroup: z.string().optional(),
+    originalTopic: z.string(),
   }),
-  event: AuthEventSchema,
+  event: z.union([AuthEventSchema, TransferEventSchema]),
 })
 
 
@@ -28,21 +32,30 @@ function originalTopicFromRetry(topic: string) {
   return topic.replace(/\.retry$/, "");
 }
 
-const retryConsumer = kafka.consumer({ groupId: "auth-retry-consumer" });
-
-function getRetryConfig(retryCount: number) {
-  if (retryCount >= AUTH_MAX_RETRIES) return null;
-
-  return AUTH_RETRY_LEVELS[retryCount];
+function resolveProcessorAndRetry(event: any) {
+  switch (event.aggregateType) {
+    case "USER":
+      return { processor: processAuthEvent, retryLevels: AUTH_RETRY_LEVELS, maxRetries: AUTH_MAX_RETRIES }
+    case "TRANSACTION":
+      return { processor: processTransferEvents, retryLevels: TRANSFER_RETRY_LEVELS, maxRetries: TRANSFER_MAX_RETRIES };
+    default:
+      throw new Error(`Unsupported aggregateType: ${event.aggregateType}`);
+  }
 }
+
+const retryConsumer = kafka.consumer({ groupId: "generic-retry-consumer" });
+const AUTH_RETRY_TOPICS = AUTH_RETRY_LEVELS.map(l => l.topic);
+const TRANSFER_RETRY_TOPICS = TRANSFER_RETRY_LEVELS.map(l => l.topic);
 
 export async function runRetryConsumer() {
   await retryConsumer.connect();
 
-  await retryConsumer.subscribe({
-    topic: TOPICS.AUTH_EVENTS_RETRY,
-    fromBeginning: false,
-  });
+  const allRetryTopics = [...AUTH_RETRY_TOPICS, ...TRANSFER_RETRY_TOPICS];
+
+  for (const topic of allRetryTopics) {
+    await retryConsumer.subscribe({ topic, fromBeginning: false });
+  }
+
 
   await retryConsumer.run({
     autoCommit: false,
@@ -56,18 +69,47 @@ export async function runRetryConsumer() {
         msg
       );
 
-      const baseTopic = originalTopicFromRetry(topic);
+      const originalBaseTopic = envelope.meta.originalTopic || originalTopicFromRetry(topic);
 
       const retryCount = envelope.meta.retryCount
+      const consumerGroup = envelope.meta.originalConsumerGroup || "unknown";
 
-      console.log(retryCount)
+
+      const { processor, retryLevels, maxRetries } = resolveProcessorAndRetry(envelope.event);
 
       const createdAtMs = new Date(envelope.meta.createdAt).getTime();
       const now = Date.now();
-      const retryConfig = getRetryConfig(envelope.meta.retryCount);
+
+      const nextRetryCount = (envelope.meta.retryCount || 0) + 1;
+
+      // ----1. TERMINATION CHECK(ONLY SOURCE OF TRUTH)----
+      if (nextRetryCount >= maxRetries) {
+        await sendToDLQ(
+          originalBaseTopic,
+          envelope,
+          new Error("Max retries reached")
+        );
+
+        logger.error("Retry exhausted, sent to DLQ", {
+          eventId: envelope.event.eventId,
+          retryCount,
+        });
+
+        await retryConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
+
+        return;
+      }
+      const retryConfig = retryLevels[nextRetryCount] ?? null
+
       if (!retryConfig) {
         await sendToDLQ(
-          baseTopic,
+          originalBaseTopic,
           envelope,
           new Error("Max retries reached"),
         );
@@ -80,53 +122,61 @@ export async function runRetryConsumer() {
       const delay = Math.max(retryConfig.delayMs - (now - createdAtMs), 0);
 
       if (delay > 0) {
-        logger.info("Retry cool-down applied");
+        logger.info("Retry cool-down applied", { delay });
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
       try {
         await withMongoTransaction(async (session) => {
 
-          const firstTime = await intIdempotency(envelope.event.eventId, session, envelope.event.eventType);
-          if (!firstTime) {
-            logger.info("Duplicate retry skipped", { eventId: envelope.event.eventId, topic });
+          const firstTime = await intIdempotency(
+            envelope.event.eventId,
+            session,
+            topic,
+            consumerGroup
+          );
 
+          if (firstTime === "SKIP") {
+            await session.abortTransaction();
             return;
           }
-          await processAuthEvent(
-            baseTopic,
-            envelope,
-            session
-          );
+          await processor(originalBaseTopic, envelope, session);
 
         });
         await retryConsumer.commitOffsets([{ topic, partition, offset: (parseInt(message.offset) + 1).toString() }]);
+
         logger.info("Retry processed successfully");
 
       } catch (error: any) {
-        logger.error("Retry processing failed");
+        logger.error("Retry processing failed", {
+          error: error.message,
+          code: error.code,
+        });
 
-        if (retryCount >= AUTH_MAX_RETRIES) {
-          await sendToDLQ(baseTopic, envelope, error);
+        if (nextRetryCount >= maxRetries) {
+          await sendToDLQ(originalBaseTopic, envelope, error);
           logger.error("Max retries reached, sent to DLQ");
+
+          await retryConsumer.commitOffsets([{ topic, partition, offset: (parseInt(message.offset) + 1).toString() }]);
+
+          return;
+
         } else {
-          await sendToRetry(baseTopic, {
+          await sendToRetry(originalBaseTopic, {
             ...envelope,
             meta: {
               ...envelope.meta,
-              retryCount: (envelope.meta.retryCount || 0) + 1,
+              retryCount: nextRetryCount,
               lastError: error.message,
               createdAt: envelope.meta.createdAt,
-            },
+            }
           });
 
           await retryConsumer.commitOffsets([{ topic, partition, offset: (parseInt(message.offset) + 1).toString() }]);
         }
+
       }
     },
   });
 
 }
-
-
-

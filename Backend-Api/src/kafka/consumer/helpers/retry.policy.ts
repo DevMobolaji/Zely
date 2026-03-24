@@ -17,3 +17,23 @@ export const TRANSFER_RETRY_LEVELS = [
 ];
 
 export const TRANSFER_MAX_RETRIES = TRANSFER_RETRY_LEVELS.length;
+
+
+export function resolveRetryPolicy(aggregateType: string) {
+  switch (aggregateType) {
+    case "USER":
+      return {
+        levels: AUTH_RETRY_LEVELS,
+        maxRetries: AUTH_MAX_RETRIES
+      };
+
+    case "TRANSACTION":
+      return {
+        levels: TRANSFER_RETRY_LEVELS,
+        maxRetries: TRANSFER_MAX_RETRIES
+      };
+
+    default:
+      throw new Error(`No retry policy for aggregateType: ${aggregateType}`);
+  }
+}

@@ -1,5 +1,7 @@
 export interface RetryEnvelope<T = any> {
   meta: {
+    originalTopic: string;
+    originalConsumerGroup: string;
     retryCount: number;
     lastError?: string;
     createdAt: string;

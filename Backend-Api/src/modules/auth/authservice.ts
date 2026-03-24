@@ -224,7 +224,6 @@ class userService {
     }
 
 
-
     public async resendVerificationEmail(email: string, context: IRequestContext) {
         const normalizedEmail = email.toLowerCase().trim();
 

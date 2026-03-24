@@ -108,6 +108,7 @@ export class OTPManager {
 
     try {
       const data = await this.redis.getClient().get(redisKey);
+      console.log(data)
       if (!data) return {
         success: false,
         message: 'Invalid or expired verification code',
@@ -146,6 +147,7 @@ export class OTPManager {
       }
 
       const isOtpValid = await verifyOtp(code, otpData.code);
+      console.log(isOtpValid)
       
       // Verify code
       if (!isOtpValid) {

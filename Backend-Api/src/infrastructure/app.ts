@@ -113,9 +113,8 @@ class App {
 
         try {
             await setupKafkaTopics();
-            await startKafkaProducer();
-
             await waitForTopicsReady(kafka, Object.values(TOPICS));
+            await startKafkaProducer();
             await runAuthConsumer()
             await runPasswordConsumer()
             await runTransferConsumer();
@@ -123,6 +122,7 @@ class App {
             await runVaultConsumer()
             await runRetryConsumer()
             await startDLQSink()
+
             logger.info('✅ Kafka consumer started');
 
             logger.info('✅ Kafka system ready');

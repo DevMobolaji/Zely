@@ -5,8 +5,9 @@ export interface idempotence extends Document {
   idempotencyKey: string,
   transaction: Types.ObjectId,
   status: string,
-  response: Types.ObjectId,
-  created: Date
+  response: any,
+  createdAt: Date
+  lastUpdatedAt: Date
 }
 
 const idempotenceSchema = new Schema({
@@ -22,7 +23,7 @@ const idempotenceSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ["IN_PROGRESS", "COMPLETED"],
+    enum: ["IN_PROGRESS", "COMPLETED", "FAILED"],
     required: true
   },
   response: {
@@ -33,6 +34,11 @@ const idempotenceSchema = new Schema({
     default: Date.now,
     immutable: true,
     expires: "7d"
+  }, //TTL Cleanup 
+  lastUpdatedAt: {
+    type: Date,
+    required: true,
+    default: Date.now 
   }
 }, {
   strict: true,

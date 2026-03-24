@@ -1,4 +1,4 @@
-import { kafka } from "../config/kafka.config"; 
+import { kafka } from "../config/kafka.config";
 import { TOPICS } from "../config/topics";
 import { RetryEnvelope } from "./helpers/retry.envelope";
 import { intIdempotency } from "@/events/idempotency";
@@ -9,7 +9,9 @@ import { retryOrDLQ } from "./helpers/retry.handler";
 import { validateWithSchema } from "../schema/zod.helper";
 import { VaultEventSchema } from "../schema/vault.schema";
 
-const vaultConsumer = kafka.consumer({ groupId: "vault-consumer" });
+
+const VAULT_CONSUMER_GROUP = "vault-consumer";
+const vaultConsumer = kafka.consumer({ groupId: VAULT_CONSUMER_GROUP });
 
 export async function runVaultConsumer() {
   await vaultConsumer.connect();
@@ -25,12 +27,13 @@ export async function runVaultConsumer() {
 
       const rawEvent = JSON.parse(message.value.toString());
 
-      const envelope: RetryEnvelope = {
+      const envelope: RetryEnvelope = rawEvent.meta ? rawEvent : {
         meta: {
           retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
           createdAt: new Date().toISOString(),
+          originalConsumerGroup: VAULT_CONSUMER_GROUP,
         },
-        event: rawEvent.event ? rawEvent.event : rawEvent
+        event: rawEvent.event ? rawEvent.event : rawEvent,
       };
 
       const session = await mongoose.startSession();
@@ -57,7 +60,7 @@ export async function runVaultConsumer() {
           action: string;
           status: string;
           context: object;
-        };        
+        };
 
         const validatedEnvelope: RetryEnvelope = {
           meta: envelope.meta,

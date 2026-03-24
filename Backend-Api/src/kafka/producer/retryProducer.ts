@@ -2,32 +2,48 @@
 import { producer } from "../config/kafka.config";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "../consumer/helpers/retry.envelope";
-import { AUTH_RETRY_LEVELS } from "../consumer/helpers/retry.policy";
+import { resolveRetryPolicy } from "../consumer/helpers/retry.policy";
 
 export async function sendToRetry(
   baseTopic: string,
-  envelope: RetryEnvelope
+  envelope: RetryEnvelope,
 ) {
 
-  envelope.meta.retryCount = (envelope.meta.retryCount || 0);
-  logger.info(`Sending to retry topic, attempt #${envelope.meta.retryCount}`);
+  const { event, meta } = envelope;
+  const { levels } = resolveRetryPolicy(envelope.event.aggregateType);
 
-  if (envelope.meta.retryCount > AUTH_RETRY_LEVELS.length) {
-    logger.warn("sendToRetry called but max retries exceeded, skipping");
-    return false;
+  const retryCount = meta.retryCount ?? 0;
+
+  logger.info(`Sending to retry topic, attempt #${retryCount}`);
+
+  const retryLevel = levels[retryCount];
+
+  if (!retryLevel) {
+    logger.error(`No retry level found for retryCount ${retryCount}`);
   }
 
   const key = envelope.event.eventId || "unknown";
 
+  const nextEnvelope = {
+    event,
+    meta: {
+      ...meta,
+      retryCount: retryCount,
+      lastError: meta.lastError,
+      originalTopic: baseTopic, // preserve the original source
+      createdAt: meta.createdAt || new Date().toISOString(),
+    },
+  };
+
   // Send to retry topic
   await producer.send({
-    topic: `${baseTopic}.retry`,
+    topic: retryLevel.topic, //`${baseTopic}.retry`,
     messages: [
       {
         key,
-        value: JSON.stringify(envelope),
+        value: JSON.stringify(nextEnvelope),
         headers: {
-          "x-retry-count": String(envelope.meta.retryCount),
+          "x-retry-count": String(nextEnvelope.meta.retryCount),
           "x-last-error": envelope.meta.lastError || "unknown",
         },
       },

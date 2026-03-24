@@ -15,7 +15,7 @@ export const kafka = new Kafka({
     },
 })
 
-const admin = kafka.admin()
+export const admin = kafka.admin()
 
 export async function createTopic(
     topic: string,
@@ -41,7 +41,6 @@ export async function createTopic(
         console.info(`ℹ️ Kafka topic already exists: ${topic}`);
     }
 }
-
 
 let adminConnected = false;
 

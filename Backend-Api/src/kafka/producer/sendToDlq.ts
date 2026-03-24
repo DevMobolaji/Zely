@@ -9,6 +9,7 @@ export async function sendToDLQ(
   error: Error
 ) {
   const key = envelope.event.eventId || "unknown";
+  console.log("This is the baseTopic from dlq", baseTopic)
 
   await producer.send({
     topic: `${baseTopic}.dlq`, // final sink per original topic

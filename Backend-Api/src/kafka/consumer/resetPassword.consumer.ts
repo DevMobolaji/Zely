@@ -9,25 +9,28 @@ import { AuthEventSchema } from "../schema/user.schema";
 import { retryOrDLQ } from "./helpers/retry.handler";
 import { resetPasswordProcessor } from "@/events/resetPasswordProcessor.evt";
 
-const consumer = kafka.consumer({ groupId: "auth-password-reset-consumer" });
+
+const AUTH_PASSWORD_RESET_CONSUMER = "resetPassword-consumer";
+const resetPasswordConsumer = kafka.consumer({ groupId: AUTH_PASSWORD_RESET_CONSUMER });
 
 export async function runPasswordConsumer() {
-  await consumer.connect();
-  await consumer.subscribe({
+  await resetPasswordConsumer.connect();
+  await resetPasswordConsumer.subscribe({
     topic: TOPICS.PASSWORD_EVENTS,
     fromBeginning: false,
   });
 
-  await consumer.run({
+  await resetPasswordConsumer.run({
     eachMessage: async ({ topic, message }: { topic: string; message: any }) => {
       if (!message.value) return;
 
       const rawEvent = JSON.parse(message.value.toString());
 
-      const envelope: RetryEnvelope = {
+      const envelope: RetryEnvelope = rawEvent.meta ? rawEvent : {
         meta: {
           retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
           createdAt: new Date().toISOString(),
+          originalConsumerGroup: AUTH_PASSWORD_RESET_CONSUMER,
         },
         event: rawEvent.event ? rawEvent.event : rawEvent,
       };

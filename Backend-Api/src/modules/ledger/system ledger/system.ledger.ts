@@ -6,7 +6,7 @@ import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import ensureSystemLedger from "./create.system.ledger";
 import TransactionBuilder from "../ledger.transaction.builder";
 import { lookUpLedgerAccount, resolveAccountByAccountNumber, resolveWallet } from "@/modules/helpers/resolvers";
-import { completedIdempotence, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
+import { markCompleted, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
 import { Wallet, WalletType } from "@/modules/wallet/wallet.model";
 import { LedgerOwnerType } from "../ledgerAccount.model";
 
@@ -34,7 +34,7 @@ class SystemLedger {
 
         // --- Idempotency check ---
         if (user.idempotencyKey) {
-          const { alreadyCompleted, response } = await extEnsureIdempotence(user.idempotencyKey, session);
+          const { alreadyCompleted, response } = await extEnsureIdempotence(user.idempotencyKey);
           if (alreadyCompleted) {
             fundedUsers.push(response);
             await session.commitTransaction();
@@ -111,11 +111,10 @@ class SystemLedger {
         const after = await Wallet.findById(wallet._id).session(session);
 
         // --- Mark idempotency ---
-        await completedIdempotence(
+        await markCompleted(
           user.idempotencyKey as string,
           transactionRef,
           { transactionRef: txn.transactionRef },
-          session
         );
 
 

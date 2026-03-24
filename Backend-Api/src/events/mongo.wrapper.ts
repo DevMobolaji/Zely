@@ -1,6 +1,6 @@
 import mongoose, { ClientSession } from "mongoose";
 
-const MAX_MONGO_TX_RETRIES = 1;
+const MAX_MONGO_TX_RETRIES = 3;
 
 export async function withMongoTransaction(
   fn: (session: ClientSession) => Promise<void>
@@ -14,40 +14,47 @@ export async function withMongoTransaction(
       try {
         await fn(session);
 
-        while (true) {
+        // ✅ Commit retry loop (CRITICAL)
+        let committed = false;
+
+        while (!committed) {
           try {
             await session.commitTransaction();
-            return; // ✅ fully committed
+            committed = true;
           } catch (commitErr: any) {
-            if (commitErr?.hasErrorLabel?.("UnknownTransactionCommitResult")) {
-              // Commit result unknown → retry commit
+            const isUnknown =
+              commitErr?.hasErrorLabel?.("UnknownTransactionCommitResult");
+
+            if (isUnknown) {
+              // 🔁 Retry commit ONLY (not full transaction)
               continue;
             }
 
-            if (commitErr?.hasErrorLabel?.("TransientTransactionError")) {
-              // Commit failed → retry entire transaction
-              break;
-            }
-
+            // ⚠️ ANY other commit error → assume commit MAY HAVE SUCCEEDED
+            // Do NOT retry full transaction
             throw commitErr;
           }
         }
+
+        return; // ✅ success
       } catch (err: any) {
         if (session.inTransaction()) {
           await session.abortTransaction();
         }
 
-        if (err?.hasErrorLabel?.("TransientTransactionError")) {
-          // Retry entire transaction
-          continue;
+        const isTransient =
+          err?.hasErrorLabel?.("TransientTransactionError");
+
+        if (isTransient && attempt < MAX_MONGO_TX_RETRIES) {
+          continue; // 🔁 retry full transaction safely
         }
 
         throw err;
       }
     }
+
+    throw new Error("Transaction failed after exhausting all retries");
   } finally {
     await session.endSession();
   }
 }
-
-

@@ -1,5 +1,5 @@
 import mongoose, { Types } from "mongoose";
-import { completedIdempotence, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
+import { markCompleted, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
 import BadRequestError from "@/shared/errors/badRequest";
 
 import { generateReferenceId, generateTransactionId } from "@/shared/utils/id.generator";
@@ -83,7 +83,7 @@ class TransferEngine {
      * IDEMPOTENCY
      * ------------------------- */
     const { alreadyCompleted, response } =
-      await extEnsureIdempotence(idempotencyKey, session);
+      await extEnsureIdempotence(idempotencyKey);
 
     if (alreadyCompleted) return response;
 
@@ -161,11 +161,10 @@ class TransferEngine {
     /** -------------------------
      * IDEMPOTENCY FINALIZE
      * ------------------------- */
-    await completedIdempotence(
+    await markCompleted(
       idempotencyKey,
       transactionRef,
-      { transactionId: txn.transactionRef },
-      session
+      { transactionId: txn.transactionRef }
     );
 
 

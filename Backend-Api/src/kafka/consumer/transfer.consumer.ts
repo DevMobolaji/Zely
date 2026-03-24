@@ -10,16 +10,17 @@ import { TransferEventSchema } from "../schema/transfer.schema";
 import { retryOrDLQ } from "./helpers/retry.handler";
 import { processTransferEvents } from "@/events/transferProcessor.evt";
 
-const consumer = kafka.consumer({ groupId: "transfer-consumer" });
+const TRANSFER_CONSUMER_GROUP = "transfer-consumer";
+const transferConsumer = kafka.consumer({ groupId: TRANSFER_CONSUMER_GROUP });
 
 export async function runTransferConsumer() {
-  await consumer.connect();
-  await consumer.subscribe({
+  await transferConsumer.connect();
+  await transferConsumer.subscribe({
     topic: TOPICS.TRANSACTION_EVENTS,
     fromBeginning: false,
   });
 
-  await consumer.run({
+  await transferConsumer.run({
     eachMessage: async ({ topic, message }: {
       topic: string;
       message: any;
@@ -27,10 +28,11 @@ export async function runTransferConsumer() {
       if (!message.value) return;
       const rawEvent = JSON.parse(message.value.toString());
 
-      const envelope: RetryEnvelope = {
+      const envelope: RetryEnvelope = rawEvent.meta ? rawEvent : {
         meta: {
           retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
           createdAt: new Date().toISOString(),
+          originalConsumerGroup: TRANSFER_CONSUMER_GROUP,
         },
         event: rawEvent.event ? rawEvent.event : rawEvent,
       };
