@@ -66,7 +66,7 @@ export const intIdempotency = async (
         eventId,
         topic,
         consumerGroup,
-        status: "PROCESSING",
+        status: "COMPLETED",
         processedAt: new Date(),
         updatedAt: new Date(),
       },

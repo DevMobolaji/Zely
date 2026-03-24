@@ -38,7 +38,7 @@ export async function createTopic(
 
         console.info(`✅ Kafka topic created: ${topic}`);
     } else {
-        console.info(`ℹ️ Kafka topic already exists: ${topic}`);
+        //console.info(`ℹ️ Kafka topic already exists: ${topic}`);
     }
 }
 

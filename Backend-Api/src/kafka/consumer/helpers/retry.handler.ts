@@ -4,6 +4,7 @@ import { sendToRetry } from "../../producer/retryProducer";
 import { sendToDLQ } from "../../producer/sendToDlq";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "./retry.envelope";
+import { AUTH_CONSUMER_GROUP } from "../auth.consumer";
 
 interface RetryOrDLQParams {
   topic: string;

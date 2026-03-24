@@ -1,10 +1,10 @@
 import mongoose, { ClientSession } from "mongoose";
 
-const MAX_MONGO_TX_RETRIES = 3;
+const MAX_MONGO_TX_RETRIES = 1;
 
-export async function withMongoTransaction(
-  fn: (session: ClientSession) => Promise<void>
-) {
+export async function withMongoTransaction<T>(
+  fn: (session: ClientSession) => Promise<T>
+): Promise<T | undefined>  {
   const session = await mongoose.startSession();
 
   try {
@@ -14,39 +14,37 @@ export async function withMongoTransaction(
       try {
         await fn(session);
 
-        // ✅ Commit retry loop (CRITICAL)
-        let committed = false;
+        // ✅ Only commit if session is still in a transaction
+        if (!session.inTransaction()) {
+          throw new Error("Transaction was aborted during execution");
+        }
 
+        let committed = false;
         while (!committed) {
           try {
             await session.commitTransaction();
             committed = true;
           } catch (commitErr: any) {
-            const isUnknown =
-              commitErr?.hasErrorLabel?.("UnknownTransactionCommitResult");
-
-            if (isUnknown) {
-              // 🔁 Retry commit ONLY (not full transaction)
+            if (commitErr?.hasErrorLabel?.("UnknownTransactionCommitResult")) {
               continue;
             }
-
-            // ⚠️ ANY other commit error → assume commit MAY HAVE SUCCEEDED
-            // Do NOT retry full transaction
             throw commitErr;
           }
         }
 
         return; // ✅ success
+
       } catch (err: any) {
         if (session.inTransaction()) {
           await session.abortTransaction();
         }
 
-        const isTransient =
-          err?.hasErrorLabel?.("TransientTransactionError");
+        const isTransient = err?.hasErrorLabel?.("TransientTransactionError");
+        // ✅ Also treat code 251 (already aborted) as retryable
+        const isAborted = err?.code === 251;
 
-        if (isTransient && attempt < MAX_MONGO_TX_RETRIES) {
-          continue; // 🔁 retry full transaction safely
+        if ((isTransient || isAborted) && attempt < MAX_MONGO_TX_RETRIES) {
+          continue;
         }
 
         throw err;

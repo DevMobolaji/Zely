@@ -2,6 +2,7 @@ import { OutboxEvent } from "@/modules/audit/outbox.model";
 import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 import { ClientSession } from "mongoose";
+import { logger } from "@/shared/utils/logger";
 
 
 type emitOutboxOptions = {
@@ -40,9 +41,14 @@ export const emitOutboxEvent = async ({ topic, eventId, eventType, action, statu
         }
       ], options?.session ? { session: options.session } : undefined
     );
-  } catch (error: any) {
-    if (error.code === 11000) return;
-    throw error;
+  } catch (err: any) {
+    if (err.code === 11000) {
+      // Outbox event already committed in a previous attempt — this is safe to skip
+      // The event will still be picked up by the outbox processor
+      logger.warn("Outbox event already exists, skipping emit", { eventId: eventId });
+      return;
+    }
+    throw err;
   }
 }
 

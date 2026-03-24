@@ -31,6 +31,7 @@ import OTPManager, { OTPConfigs, OTPPurpose } from "@/config/otp.manager";
 import { invalidateAllUsrSess, isPasswordInHistory, storeResetMetadata } from "../helpers/auth.helpers";
 import { markOldTokenForDeletionAfter } from "@/infrastructure/helpers/markOld";
 import { NotFoundError } from "@/shared/errors/notFoundError";
+import { deriveOutboxEventId } from "@/events/authProcessor.evt";
 
 class userService {
 
@@ -82,7 +83,7 @@ class userService {
 
             await emitOutboxEvent({
                 topic: "auth.events",
-                eventId: EventId,
+                eventId: deriveOutboxEventId(userId, "USER_REGISTERED_SUCCESS", EventId),
                 eventType: AuditAction.USER_REGISTER_SUCCESS,
                 action: AuditAction.USER_REGISTER_SUCCESS,
                 status: AuditStatus.PENDING,
@@ -174,7 +175,7 @@ class userService {
                 await emitOutboxEvent(
                     {
                         topic: "auth.events",
-                        eventId,
+                        eventId: deriveOutboxEventId(user.userId, "USER_EMAIL_VERIFIED_SUCCESS", eventId), 
                         eventType: AuditAction.USER_VERIFY_EMAIL_SUCCESS,
                         action: AuditAction.USER_VERIFY_EMAIL_SUCCESS,
                         status: AuditStatus.PENDING,

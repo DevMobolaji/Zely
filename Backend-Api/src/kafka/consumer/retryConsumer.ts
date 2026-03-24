@@ -53,7 +53,7 @@ export async function runRetryConsumer() {
   const allRetryTopics = [...AUTH_RETRY_TOPICS, ...TRANSFER_RETRY_TOPICS];
 
   for (const topic of allRetryTopics) {
-    await retryConsumer.subscribe({ topic, fromBeginning: false });
+    await retryConsumer.subscribe({ topic, fromBeginning: true });
   }
 
 
@@ -72,8 +72,12 @@ export async function runRetryConsumer() {
       const originalBaseTopic = envelope.meta.originalTopic || originalTopicFromRetry(topic);
 
       const retryCount = envelope.meta.retryCount
-      const consumerGroup = envelope.meta.originalConsumerGroup || "unknown";
+      const consumerGroup = envelope.meta.originalConsumerGroup;
 
+      if (!consumerGroup) {
+        logger.error("Missing originalConsumerGroup — cannot guarantee idempotency");
+      }
+      
 
       const { processor, retryLevels, maxRetries } = resolveProcessorAndRetry(envelope.event);
 
@@ -150,7 +154,6 @@ export async function runRetryConsumer() {
       } catch (error: any) {
         logger.error("Retry processing failed", {
           error: error.message,
-          code: error.code,
         });
 
         if (nextRetryCount >= maxRetries) {

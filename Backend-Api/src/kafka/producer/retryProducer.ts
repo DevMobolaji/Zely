@@ -30,14 +30,13 @@ export async function sendToRetry(
       ...meta,
       retryCount: retryCount,
       lastError: meta.lastError,
-      originalTopic: baseTopic, // preserve the original source
+      originalTopic: baseTopic,
       createdAt: meta.createdAt || new Date().toISOString(),
     },
   };
 
-  // Send to retry topic
   await producer.send({
-    topic: retryLevel.topic, //`${baseTopic}.retry`,
+    topic: retryLevel.topic,
     messages: [
       {
         key,
