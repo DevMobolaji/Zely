@@ -37,7 +37,6 @@ export async function processTransferEvents(
   const { payload, version, eventType } = envelope.event;
   const { transactionRef, sender, receiver, amount, currency, transferType, referenceId } = payload
 
-  try {
     if (version !== 1) {
       throw new PermanentError(`Unsupported event version: ${version}`);
     }
@@ -50,110 +49,118 @@ export async function processTransferEvents(
       throw new PermanentError(`Missing required field for TRANSFER_COMPLETED`);
     }
 
+    if (amount === 500) {
+      throw new TransientError("Simulating transient Error")
+    }
+
+
     switch (eventType) {
       case "TRANSACTION_COMPLETED":
-        if (transferType === "INTERNAL_TRANSFER") {
-          await emailQueue.add('transferCompleted', {
-            email: receiver.email,
-            name: receiver.name,
-            amount: amount as number,
-            currency: currency,
-            fromUserEmail: sender.email,
-            fromUserId: sender.userId,
-            fromAccountType: sender.accountType,
-            toAccountType: receiver.accountType,
-            fromAccountLast4: sender.accountNumber,
-            toAccountLast4: receiver.accountNumber,
-            previousBalance: sender.previousBalance,
-            currentBalance: sender.currentBalance,
-            toPreviousBalance: receiver.previousBalance,
-            toCurrentBalance: receiver.currentBalance,
-            transactionId: transactionRef,
-            referenceId: referenceId,
-            referenceType: transferType,
-            transactionRef: transactionRef,
-            type: "INTERNAL_TRANSFER",
-            transferType: payload.transferType
-          } as TransferEmailJobData);
+        try {
+          if (transferType === "INTERNAL_TRANSFER") {
+            await emailQueue.add('transferCompleted', {
+              email: receiver.email,
+              name: receiver.name,
+              amount: amount as number,
+              currency: currency,
+              fromUserEmail: sender.email,
+              fromUserId: sender.userId,
+              fromAccountType: sender.accountType,
+              toAccountType: receiver.accountType,
+              fromAccountLast4: sender.accountNumber,
+              toAccountLast4: receiver.accountNumber,
+              previousBalance: sender.previousBalance,
+              currentBalance: sender.currentBalance,
+              toPreviousBalance: receiver.previousBalance,
+              toCurrentBalance: receiver.currentBalance,
+              transactionId: transactionRef,
+              referenceId: referenceId,
+              referenceType: transferType,
+              transactionRef: transactionRef,
+              type: "INTERNAL_TRANSFER",
+              transferType: payload.transferType
+            } as TransferEmailJobData);
 
-          logger.info("Internal Transfer completed successfully");
-        } else if (transferType === "P2P_TRANSFER") {
-          // For sender
-          await emailQueue.add("sendTransferEmail", {
-            recipientEmail: sender.email,
-            recipientName: sender.name,
-            amount,
-            currencySymbol: currency,
-            previousBalance: sender.previousBalance,
-            currentBalance: sender.currentBalance,
-            transactionId: transactionRef,
-            referenceId,
-            type: "DEBIT",
-            transferType,
-            fromAccountType: sender.accountType,
-            fromAccountLast4: sender.accountNumber.slice(-4),
-            toAccountType: receiver.accountType,
-            toAccountLast4: receiver.accountNumber.slice(-4),
-            senderEmail: sender.email,
-            senderName: sender.name
-          });
+            logger.info("Internal Transfer completed successfully");
+          } else if (transferType === "P2P_TRANSFER") {
+            // For sender
+            await emailQueue.add("sendTransferEmail", {
+              recipientEmail: sender.email,
+              recipientName: sender.name,
+              amount,
+              currencySymbol: currency,
+              previousBalance: sender.previousBalance,
+              currentBalance: sender.currentBalance,
+              transactionId: transactionRef,
+              referenceId,
+              type: "DEBIT",
+              transferType,
+              fromAccountType: sender.accountType,
+              fromAccountLast4: sender.accountNumber.slice(-4),
+              toAccountType: receiver.accountType,
+              toAccountLast4: receiver.accountNumber.slice(-4),
+              senderEmail: sender.email,
+              senderName: sender.name
+            });
 
-          // For receiver
-          await emailQueue.add("sendTransferEmail", {
-            recipientEmail: receiver.email,
-            recipientName: receiver.name,
-            amount,
-            currencySymbol: currency,
-            previousBalance: receiver.previousBalance,
-            currentBalance: receiver.currentBalance,
-            transactionId: transactionRef,
-            referenceId: referenceId,
-            type: "CREDIT",
-            transferType,
-            fromAccountType: sender.accountType,
-            fromAccountLast4: sender.accountNumber.slice(-4),
-            toAccountType: receiver.accountType,
-            toAccountLast4: receiver.accountNumber.slice(-4),
-            senderEmail: sender.email,
-            senderName: sender.name
-          });
+            // For receiver
+            await emailQueue.add("sendTransferEmail", {
+              recipientEmail: receiver.email,
+              recipientName: receiver.name,
+              amount,
+              currencySymbol: currency,
+              previousBalance: receiver.previousBalance,
+              currentBalance: receiver.currentBalance,
+              transactionId: transactionRef,
+              referenceId: referenceId,
+              type: "CREDIT",
+              transferType,
+              fromAccountType: sender.accountType,
+              fromAccountLast4: sender.accountNumber.slice(-4),
+              toAccountType: receiver.accountType,
+              toAccountLast4: receiver.accountNumber.slice(-4),
+              senderEmail: sender.email,
+              senderName: sender.name
+            });
 
-          logger.info("P2P transfer completed successfully");
+            logger.info("P2P transfer completed successfully");
+          }
+
+          logger.info("Transfer completed notification sent");
+        } catch (err: any) {
+          if (err instanceof PermanentError || err instanceof TransientError) {
+            throw err;
+          }
+          throw new TransientError(`Provisioning failed: ${err.message}`);
         }
 
-        logger.info("Transfer completed notification sent");
-
         break;
 
-      case "TRANSFER_FAILED": {
-        // 🔹 Send failure notification
-        await emailQueue.add("transferFailed", {
-          transactionRef,
-          reason: payload.reason,
-          type: "TRANSFER_FAILED",
-        });
+      case "TRANSFER_FAILED": 
+        try {
+          // 🔹 Send failure notification
+          await emailQueue.add("transferFailed", {
+            transactionRef,
+            reason: payload.reason,
+            type: "TRANSFER_FAILED",
+          });
 
-        logger.warn("Transfer failed notification sent", {
-          transactionRef,
-          reason: payload.reason,
-        });
+          logger.warn("Transfer failed notification sent", {
+            transactionRef,
+            reason: payload.reason,
+          });
+        } catch (error: any) {
+          logger.error("Failed to resend verification OTP", {
+            topic,
+            email: payload.email,
+            error: error instanceof Error ? error.message : error,
+          });
 
-        break;
-      }
+          throw error
+        }
 
       default:
         throw new PermanentError(`Unhandled eventType: ${eventType}`);
     }
-
-  } catch (err: any) {
-
-    if (err instanceof PermanentError || err instanceof TransientError) {
-      throw err;
-    }
-
-    throw new TransientError(
-      `[v${version}] Transfer processor failed: ${err.message}`
-    );
   }
-}
 

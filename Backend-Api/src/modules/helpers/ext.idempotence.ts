@@ -17,8 +17,6 @@ export async function extEnsureIdempotence(
      },
       { upsert: true, new: true }
     );
-    console.log(doc)
-
 
     const isNew = doc.createdAt.getTime() === doc.lastUpdatedAt.getTime();
 
@@ -104,7 +102,22 @@ export async function markCompleted(
   );
 
   if (res.modifiedCount === 0) {
-    throw new Error("Idempotency completion failed: invalid state");
+    // Check WHY it wasn't updated
+    const existing = await extIdempotenceModel.findOne({ idempotencyKey });
+
+    if (!existing) {
+      throw new BadRequestError("Idempotency record not found");
+    }
+
+    if (existing.status === "COMPLETED") {
+      // Duplicate concurrent request — already completed, safe to return
+      return;
+    }
+
+    // Genuinely unexpected state (FAILED, PENDING, etc.)
+    throw new BadRequestError(
+      `Idempotency completion failed: invalid state (${existing.status})`
+    );
   }
 }
 

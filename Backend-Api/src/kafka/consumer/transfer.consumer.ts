@@ -1,4 +1,3 @@
-import BadRequestError from "@/shared/errors/badRequest";
 import { kafka } from "../config/kafka.config";
 import { logger } from "@/shared/utils/logger";
 import { intIdempotency } from "@/events/idempotency";
@@ -9,6 +8,7 @@ import { validateWithSchema } from "../schema/zod.helper";
 import { TransferEventSchema } from "../schema/transfer.schema";
 import { retryOrDLQ } from "./helpers/retry.handler";
 import { processTransferEvents } from "@/events/transferProcessor.evt";
+import { withMongoTransaction } from "@/events/mongo.wrapper";
 
 const TRANSFER_CONSUMER_GROUP = "transfer-consumer";
 const transferConsumer = kafka.consumer({ groupId: TRANSFER_CONSUMER_GROUP });
@@ -21,62 +21,85 @@ export async function runTransferConsumer() {
   });
 
   await transferConsumer.run({
-    eachMessage: async ({ topic, message }: {
+    autoCommit: false,
+    eachMessage: async ({ topic, partition, message }: {
       topic: string;
+      partition: number,
       message: any;
     }) => {
       if (!message.value) return;
       const rawEvent = JSON.parse(message.value.toString());
 
-      const envelope: RetryEnvelope = rawEvent.meta ? rawEvent : {
+      const envelope: RetryEnvelope = {
         meta: {
-          retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
-          createdAt: new Date().toISOString(),
+          retryCount: Number(message.headers?.["x-retry-count"] ?? rawEvent.meta?.retryCount ?? 0),
+          createdAt: rawEvent.meta?.createdAt ?? new Date().toISOString(),
           originalConsumerGroup: TRANSFER_CONSUMER_GROUP,
+          originalTopic: topic,
+          lastError: rawEvent.meta?.lastError,
         },
-        event: rawEvent.event ? rawEvent.event : rawEvent,
+        event: rawEvent.event ?? rawEvent,
       };
 
-      const session = await mongoose.startSession();
-
       try {
-        session.startTransaction()
 
-        const firstTime = await intIdempotency(envelope.event.eventId, session, topic);
-        if (!firstTime) {
-          logger.info("Duplicate transfer event skipped", { eventId: envelope.event.eventId });
-          return;
-        }
+        await withMongoTransaction(async (session) => {
 
-        const validatedEvent = validateWithSchema(TransferEventSchema, envelope.event) as {
-          eventId: string;
-          eventType: string;
-          version: 1;
-          aggregateType: string;
-          aggregateId: string;
-          payload: object;
-          occurredAt?: string;
-          action: string;
-          status: string;
-          context: object;
-        };
+          const firstTime = await intIdempotency(
+            envelope.event.eventId, 
+            session, 
+            topic, 
+            TRANSFER_CONSUMER_GROUP
+          );
 
-        const validatedEnvelope: RetryEnvelope = {
-          meta: envelope.meta,
-          event: validatedEvent, // properly validated event
-        };
+          if (firstTime === "SKIP") {
+            await session.abortTransaction();
+            return;
+          }
 
-        await processTransferEvents(topic, validatedEnvelope, session);
+          const validatedEvent = validateWithSchema(TransferEventSchema, envelope.event) as {
+            eventId: string;
+            eventType: string;
+            version: 1;
+            aggregateType: string;
+            aggregateId: string;
+            payload: object;
+            occurredAt?: string;
+            action: string;
+            status: string;
+            context: object;
+          };
+
+          const validatedEnvelope: RetryEnvelope = {
+            meta: envelope.meta,
+            event: validatedEvent, // properly validated event
+          };
+
+          await processTransferEvents(topic, validatedEnvelope, session);
+        })
+
+        await transferConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
       }
       catch (error: any) {
-        if (session.inTransaction()) await session.abortTransaction();
         logger.error("Transfer event processing failed", { topic, eventId: envelope.event.eventId, error: error.message });
 
-        await retryOrDLQ({ topic: envelope.event.eventType, message: envelope, error });
+        await retryOrDLQ({ topic, message: envelope, error });
       }
-      finally {
-        await session.endSession();
-      }
+      
+      await transferConsumer.commitOffsets([
+        {
+          topic,
+          partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        },
+      ]);
+
     },
   });
 }

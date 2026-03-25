@@ -9,6 +9,7 @@ import { lookUpLedgerAccount, resolveAccountByAccountNumber, resolveWallet } fro
 import { markCompleted, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
 import { Wallet, WalletType } from "@/modules/wallet/wallet.model";
 import { LedgerOwnerType } from "../ledgerAccount.model";
+import { IRequestContext } from "@/config/interfaces/request.interface";
 
 
 export interface FundUsersRequest {
@@ -20,7 +21,7 @@ export interface FundUsersRequest {
 }
 
 class SystemLedger {
-  async fundSystemLedger(users: FundUsersRequest["users"]) {
+  async fundSystemLedger(users: FundUsersRequest["users"], context: IRequestContext) {
     const fundedUsers: { accountNumber: string; amount: number; transactionRef: string }[] = [];
 
     for (const user of users) {
@@ -35,6 +36,7 @@ class SystemLedger {
         // --- Idempotency check ---
         if (user.idempotencyKey) {
           const { alreadyCompleted, response } = await extEnsureIdempotence(user.idempotencyKey);
+
           if (alreadyCompleted) {
             fundedUsers.push(response);
             await session.commitTransaction();
@@ -93,7 +95,8 @@ class SystemLedger {
         // --- Commit ledger entries ---
         const txn = await builder.commit(session);
 
-        const before = await Wallet.findById(wallet._id).session(session);
+        const userBalBefore = await Wallet.findById(wallet._id).session(session);
+        const sysBalBefore = await Wallet.findById(ensureSystem.MAIN_CHECKINGS.ownerId).session(session);
 
 
         await Wallet.updateOne(
@@ -108,7 +111,8 @@ class SystemLedger {
           { session }
         );
 
-        const after = await Wallet.findById(wallet._id).session(session);
+        const UserBalAfter = await Wallet.findById(wallet._id).session(session);
+        const sysBalAfter = await Wallet.findById(ensureSystem.MAIN_CHECKINGS.ownerId).session(session);
 
         // --- Mark idempotency ---
         await markCompleted(
@@ -126,26 +130,38 @@ class SystemLedger {
             action: AuditAction.TRANSACTION_COMPLETED,
             status: AuditStatus.PENDING,
             payload: {
-              email: wallet.userId.email,
-              name: wallet.userId.name,
-              fromUserEmail: "system@internal",
-              fromUserId: "SYSTEM_USER",
-              toUserId: wallet.userPublicId,
+              sender:  {
+                walletId: sysBalAfter?.walletId,
+                email: "system@zely.app",
+                name: "ADMIN_SYSTEM_USER",
+                userId: ensureSystem.MAIN_CHECKINGS.userPublicId,
+                previousBalance: sysBalBefore?.availableBalance,
+                currentBalance: sysBalAfter?.availableBalance,
+                accountType: ensureSystem.MAIN_CHECKINGS.type,
+                accountNumber: "789098767890"
+              },
+              receiver: {
+                walletId: wallet.walletId,
+                email: wallet.userId.email,
+                name: wallet.userId.name,
+                userId: wallet.userPublicId,
+                previousBalance: userBalBefore?.availableBalance,
+                currentBalance: UserBalAfter?.availableBalance,
+                accountNumber: account.accountNumber,
+                accountType: account.type
+              },
+              
               amount: user.amount,
               currency: "NGN",
-              previousBalance: before?.availableBalance,
-              currentBalance: after?.availableBalance,
               transactionRef,
               referenceId,
-              referenceType: "INTERNAL_SYSTEM_TRANSFER"
+              transferType: "INTERNAL_SYSTEM_TRANSFER"
+
             },
             aggregateType: "TRANSFER",
             aggregateId: txn.transactionRef,
             version: 1,
-            context: {
-              ip: "SYSTEM",
-              userAgent: "SYSTEM",
-            },
+            context
           },
           { session }
         );

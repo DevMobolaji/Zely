@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import { kafka } from "../config/kafka.config";
-import { initProcessedEvents, intIdempotency, markEventCompleted } from "@/events/idempotency";
+import { initProcessedEvents, intIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "./helpers/retry.envelope";
 import { processAuthEvent } from "@/events/authProcessor.evt";

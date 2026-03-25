@@ -1,6 +1,6 @@
 import mongoose, { ClientSession } from "mongoose";
 
-const MAX_MONGO_TX_RETRIES = 1;
+const MAX_MONGO_TX_RETRIES = 2;
 
 export async function withMongoTransaction<T>(
   fn: (session: ClientSession) => Promise<T>
@@ -12,7 +12,7 @@ export async function withMongoTransaction<T>(
       session.startTransaction();
 
       try {
-        await fn(session);
+        const fnResult = await fn(session);
 
         // ✅ Only commit if session is still in a transaction
         if (!session.inTransaction()) {
@@ -32,7 +32,7 @@ export async function withMongoTransaction<T>(
           }
         }
 
-        return; // ✅ success
+        return fnResult;
 
       } catch (err: any) {
         if (session.inTransaction()) {
@@ -40,7 +40,6 @@ export async function withMongoTransaction<T>(
         }
 
         const isTransient = err?.hasErrorLabel?.("TransientTransactionError");
-        // ✅ Also treat code 251 (already aborted) as retryable
         const isAborted = err?.code === 251;
 
         if ((isTransient || isAborted) && attempt < MAX_MONGO_TX_RETRIES) {

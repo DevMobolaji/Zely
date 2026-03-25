@@ -372,8 +372,6 @@ export const resolveAccountByAccountNumber = async (accountNumber: string, type:
     type,
     currency,
   }).session(session);
-  console.log("Account found", account);
-
 
   if (!account) throw new BadRequestError(`Account not found for ${accountNumber}`);
 

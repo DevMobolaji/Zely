@@ -28,9 +28,9 @@ export const deriveOutboxEventId = (
     .createHash("sha256")
     .update(`${aggregateId}:${eventType}:${sourceEventId}`)
     .digest("base64url")
-    .slice(0, 18); 
+    .slice(0, 18);
 
-  return `EVT_${hash}`; 
+  return `EVT_${hash}`;
 };
 
 
@@ -250,7 +250,6 @@ export async function processAuthEvent(
 
 
         logger.info(`[v${version}] User provisioning completed successfully`);
-        // logger.info(`[v${version}] User provisioning completed successfully`, { accountStatus: updatedUser.accountStatus, genAccountNumber: genCheckingAccountNumber });
 
         return {
           email: updatedUser.email,
@@ -264,6 +263,7 @@ export async function processAuthEvent(
         throw new TransientError(`Provisioning failed: ${err.message}`);
       }
       break;
+
     case "USER_EMAIL_RESEND_SUCCESS":
       try {
         const result = await otpManager.resend(payload.email, OTPPurpose.EMAIL_VERIFICATION, OTPConfigs.emailVerification, 60)

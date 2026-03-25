@@ -11,8 +11,8 @@ export const AUTH_MAX_RETRIES = AUTH_RETRY_LEVELS.length;
 
 
 export const TRANSFER_RETRY_LEVELS = [
-  { topic: "transfer.retry.1", delayMs: 5_000 },
-  { topic: "transfer.retry.2", delayMs: 15_000 },
+  { topic: "transfer.retry.1", delayMs: 3_000 },
+  { topic: "transfer.retry.2", delayMs: 5_000 },
   { topic: "transfer.retry.3", delayMs: 30_000 },
 ];
 

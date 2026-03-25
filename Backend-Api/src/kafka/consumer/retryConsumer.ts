@@ -15,6 +15,7 @@ import { withMongoTransaction } from "@/events/mongo.wrapper";
 import { TOPICS } from "../config/topics";
 import { TransferEventSchema } from "../schema/transfer.schema";
 import { processTransferEvents } from "@/events/transferProcessor.evt";
+import emailQueue from "@/infrastructure/queues/email.queue";
 
 export const RetryEnvelopeSchema = z.object({
   meta: z.object({
@@ -69,6 +70,8 @@ export async function runRetryConsumer() {
         msg
       );
 
+      console.log("Envelope", envelope)
+
       const originalBaseTopic = envelope.meta.originalTopic || originalTopicFromRetry(topic);
 
       const retryCount = envelope.meta.retryCount
@@ -86,7 +89,6 @@ export async function runRetryConsumer() {
 
       const nextRetryCount = (envelope.meta.retryCount || 0) + 1;
 
-      // ----1. TERMINATION CHECK(ONLY SOURCE OF TRUTH)----
       if (nextRetryCount >= maxRetries) {
         await sendToDLQ(
           originalBaseTopic,
@@ -130,8 +132,10 @@ export async function runRetryConsumer() {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
+      let result: any = null;
+
       try {
-        await withMongoTransaction(async (session) => {
+        result = await withMongoTransaction(async (session) => {
 
           const firstTime = await intIdempotency(
             envelope.event.eventId,
@@ -144,9 +148,18 @@ export async function runRetryConsumer() {
             await session.abortTransaction();
             return;
           }
-          await processor(originalBaseTopic, envelope, session);
-
+          return await processor(originalBaseTopic, envelope, session);
         });
+
+        if (result?.email) {
+          await emailQueue.add("sendWelcomeEmail", {
+            email: result.email,
+            name: result.name,
+            type: "WELCOME",
+          });
+          logger.info("Welcome email sent after retry");
+        }
+      
         await retryConsumer.commitOffsets([{ topic, partition, offset: (parseInt(message.offset) + 1).toString() }]);
 
         logger.info("Retry processed successfully");

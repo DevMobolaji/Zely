@@ -92,21 +92,4 @@ export const intIdempotency = async (
   }
 };
 
-export const markEventCompleted = async (
-  eventId: string,
-  consumerGroup: string,
-  session: mongoose.ClientSession
-) => {
-  const collection = await initProcessedEvents();
 
-  await collection.updateOne(
-    { eventId, consumerGroup, status: "PROCESSING" },
-    {
-      $set: {
-        status: "COMPLETED",
-        updatedAt: new Date()
-      }
-    },
-    { session }
-  );
-};
