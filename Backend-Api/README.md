@@ -1,123 +1,170 @@
-# 🏦 Production-Grade Fintech API
+# Zely
 
-> بسم الله الرحمن الرحيم - In the Name of Allah, the Most Gracious, the Most Merciful
+A robust, crash-resistant, and production-grade fintech backend built with Node.js, TypeScript, MongoDB, Redis, Kafka, and Debezium. Zely is built around distributed systems best practices — transactional outbox, CDC-based event streaming, two-phase idempotency, and composable circuit breakers — with every core pattern designed to be reusable and app-agnostic.
 
-A robust, scalable, and secure fintech application built with Node.js, MongoDB, Redis, and Kafka.
+> الحمد لله — All praise is due to Allah
+
+---
 
 ## 📋 Table of Contents
 
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Running the Application](#running-the-application)
-- [Project Structure](#project-structure)
-- [API Documentation](#api-documentation)
-- [Development](#development)
-- [Testing](#testing)
-- [Deployment](#deployment)
-- [System Design Concepts](#system-design-concepts)
+- [Features](#-features)
+- [Tech Stack](#-tech-stack)
+- [Architecture](#-architecture)
+- [Prerequisites](#-prerequisites)
+- [Installation](#-installation)
+- [Configuration](#-configuration)
+- [Running the Application](#-running-the-application)
+- [Project Structure](#-project-structure)
+- [API Documentation](#-api-documentation)
+- [System Design Patterns](#-system-design-patterns)
+- [Testing](#-testing)
+- [Deployment](#-deployment)
+- [Roadmap](#-roadmap)
+
+---
 
 ## ✨ Features
 
-- **🔐 Secure Authentication** - JWT-based auth with refresh tokens, 2FA support
-- **💳 Account Management** - Multiple account types, balance tracking
-- **💸 Transactions** - Transfers, payments, refunds with full audit trail
-- **🔄 Event-Driven Architecture** - Kafka for async processing
-- **📊 Real-time Updates** - Redis for caching and real-time data
-- **🛡️ Security First** - Multiple layers of security, rate limiting
-- **📝 Comprehensive Logging** - Audit trail for compliance
-- **🔍 Device Tracking** - Monitor user devices and sessions
-- **🌐 Universal User ID** - Track users across all services
+- 🔐 **Secure Authentication** — JWT-based auth with refresh tokens and 2FA support
+- 💳 **Account Management** — Multiple account types with balance tracking and full audit trail
+- 💸 **Transactions** — Transfers, payments, and refunds with exactly-once guarantees
+- 📬 **Transactional Outbox** — Atomic event publishing via MongoDB outbox + Debezium CDC
+- 🔄 **Event-Driven Architecture** — Kafka for async, durable event streaming
+- 🛡️ **Idempotent Consumers** — Two-phase `PROCESSING → COMPLETED` state machine prevents duplicate processing
+- ⚡ **Circuit Breakers** — Cockatiel-powered fault tolerance across all external dependencies
+- 📊 **Caching & Distributed Locking** — Redis for idempotency locks and hot-path caching
+- 🌐 **Universal User ID** — Single ID tracks users across all services
+- 📝 **Comprehensive Logging** — Winston-based audit trail for compliance
+- 🔍 **Device & Session Tracking** — Monitor user devices and active sessions
+- 🛑 **Graceful Shutdown** — Clean disconnect with `Promise.race` timeout safety net
+- 🚦 **Consumer-Ready Guard** — Middleware blocks writes during Kafka rebalance
+
+---
 
 ## 🛠 Tech Stack
 
 ### Core
-- **Runtime**: Node.js 18+
-- **Framework**: Express.js
-- **Language**: JavaScript (ES6+)
+| | |
+|---|---|
+| Runtime | Node.js 18+ |
+| Language | TypeScript |
+| Framework | Express.js |
 
 ### Database & Storage
-- **Primary Database**: MongoDB 4.0+ with Mongoose ODM
-- **Cache**: Redis with ioredis
-- **Event Streaming**: Apache Kafka with KafkaJS
+| | |
+|---|---|
+| Primary Database | MongoDB 6+ (replica set — required for transactions and CDC) |
+| Cache / Locks | Redis with ioredis |
+| Event Streaming | Apache Kafka with KafkaJS |
+| CDC | Debezium (monitors MongoDB oplog, publishes to Kafka) |
+| Job Queue | BullMQ |
 
-### Services
-- **Email**: Resend
-- **SMS**: Twilio (Optional)
+### Reliability
+| | |
+|---|---|
+| Circuit Breaker | Cockatiel (composable retry + timeout + circuit breaker policies) |
+| Idempotency | Two-phase Redis lock + MongoDB atomic state machine |
+| Outbox Pattern | MongoDB transactional outbox → Debezium → Kafka |
 
-### Security
-- **Authentication**: JWT (jsonwebtoken)
-- **Password Hashing**: bcrypt
-- **Security Headers**: Helmet
-- **Rate Limiting**: express-rate-limit with Redis store
-- **Input Sanitization**: express-mongo-sanitize
+### Services & Security
+| | |
+|---|---|
+| Email | Resend |
+| SMS | Twilio (optional) |
+| Authentication | JWT (jsonwebtoken) |
+| Password Hashing | bcrypt |
+| Security Headers | Helmet |
+| Rate Limiting | express-rate-limit with Redis store |
+| Input Sanitization | express-mongo-sanitize |
 
 ### Logging & Monitoring
-- **Logger**: Winston with daily file rotation
-- **HTTP Logging**: Morgan
+| | |
+|---|---|
+| Logger | Winston with daily file rotation |
+| HTTP Logging | Morgan |
+
+---
 
 ## 🏗 Architecture
 
-### Modular Monolith
-This project follows a **modular monolith** architecture:
-- Single codebase, single deployment
-- Organized by domain (auth, accounts, transactions)
-- Easy to extract into microservices later
-- Shared infrastructure (MongoDB, Redis, Kafka)
+Zely follows a **modular monolith** — single codebase, single deployment, organized by domain. Each domain is self-contained and can be extracted into a microservice independently.
 
-### System Design Patterns
-- **Event Sourcing**: All state changes recorded as events
-- **CQRS**: Separate read and write operations
-- **Circuit Breaker**: Graceful degradation of services
-- **Idempotency**: Prevent duplicate operations
-- **Distributed Locking**: Prevent race conditions
+```
+Client Request
+     │
+     ▼
+Express API
+(requireConsumerReady middleware — blocks writes during Kafka rebalance)
+     │
+     ▼
+MongoDB Replica Set ──► Outbox Collection (written in same transaction)
+                               │
+                          Debezium CDC
+                          (monitors oplog)
+                               │
+                               ▼
+                          Kafka Topic
+                               │
+                    ┌──────────┘
+                    ▼
+              KafkaJS Consumer
+              (two-phase idempotency: PROCESSING → COMPLETED)
+                    │
+         ┌──────────┴──────────┐
+         ▼                     ▼
+    BullMQ Queue          Redis Cache
+    (workers: email,      (idempotency
+     notifications)        locks, hot data)
+         │
+         ▼
+    Resend / External APIs
+    (all calls wrapped with Cockatiel circuit breaker)
+```
+
+All external calls — MongoDB, Kafka, Redis, Resend — pass through a reusable Cockatiel circuit breaker wrapper, providing consistent retry, timeout, and half-open recovery behaviour across the entire app.
+
+---
 
 ## 📦 Prerequisites
 
-Before you begin, ensure you have the following installed:
-
-- **Node.js** 18.x or higher
-- **MongoDB** 4.0+ (with replica set for transactions)
-- **Redis** 6.x or higher
-- **Apache Kafka** 2.8+ (with Zookeeper)
+- Node.js 18.x or higher
+- Docker (recommended — starts all infrastructure in one command)
+- MongoDB running as a **replica set** (required for transactions and Debezium change streams)
+- Apache Kafka + Zookeeper
+- Redis 6.x or higher
+- Debezium Connect
 
 ### Quick Setup with Docker (Recommended)
 
 ```bash
-# Start all services with Docker Compose
 docker-compose up -d
 ```
 
+This starts MongoDB (replica set), Kafka, Zookeeper, Debezium Connect, and Redis.
+
 ### Manual Setup
 
-#### MongoDB
+**MongoDB (replica set)**
 ```bash
-# macOS (with Homebrew)
+# macOS
 brew install mongodb-community
-
-# Start MongoDB
 brew services start mongodb-community
 
-# Enable replica set (required for transactions)
 mongosh
 > rs.initiate()
 ```
 
-#### Redis
+**Redis**
 ```bash
 # macOS
-brew install redis
-brew services start redis
+brew install redis && brew services start redis
 
 # Linux
-sudo apt-get install redis-server
-sudo systemctl start redis
+sudo apt-get install redis-server && sudo systemctl start redis
 ```
 
-#### Kafka
+**Kafka**
 ```bash
 # macOS
 brew install kafka
@@ -125,176 +172,164 @@ brew services start zookeeper
 brew services start kafka
 ```
 
+---
+
 ## 🚀 Installation
 
-1. **Clone the repository**
 ```bash
-git clone https://github.com/yourusername/fintech-api.git
-cd fintech-api
-```
+# 1. Clone
+git clone https://github.com/your-org/zely.git
+cd zely
 
-2. **Install dependencies**
-```bash
+# 2. Install dependencies
 npm install
-```
 
-3. **Setup environment variables**
-```bash
-# Copy example env file
+# 3. Set up environment variables
 cp .env.example .env
-
-# Edit .env with your configuration
 nano .env
-```
 
-4. **Generate secrets**
-```bash
-# Generate JWT secrets
+# 4. Generate secrets
 node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 ```
 
+---
+
 ## ⚙️ Configuration
 
-### Environment Variables
-
-Edit the `.env` file with your configuration:
-
 ```env
-# Application
+# App
 NODE_ENV=development
-PORT=5000
+PORT=3000
 
-# MongoDB
-MONGODB_URI=mongodb://localhost:27017/fintech_db
+# MongoDB (replica set required)
+MONGO_URI=mongodb://localhost:27017/zely?replicaSet=rs0
 
 # Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
+REDIS_URL=redis://localhost:6379
 
 # Kafka
 KAFKA_BROKERS=localhost:9092
+KAFKA_GROUP_ID=zely-consumer-group
 
 # JWT (use generated secrets)
 JWT_ACCESS_SECRET=your-generated-secret-here
 JWT_REFRESH_SECRET=your-generated-secret-here
 
-# Email (Resend)
-RESEND_API_KEY=your-resend-api-key
+# Email
+RESEND_API_KEY=re_xxxxxxxxxxxx
 
-# Other configurations...
+# SMS (optional)
+TWILIO_ACCOUNT_SID=your-sid
+TWILIO_AUTH_TOKEN=your-token
 ```
 
 See `.env.example` for all available options.
 
+---
+
 ## 🏃 Running the Application
 
-### Development Mode
+**Development (with hot reload)**
 ```bash
 npm run dev
 ```
-Server will start with hot-reload enabled.
 
-### Production Mode
+Nodemon restarts on file changes. Each run gets a unique Kafka `clientId` (via `uuidv4()`) to avoid session conflicts during rapid restarts before the previous session expires.
+
+**Production**
 ```bash
+npm run build
 npm start
 ```
 
-### Check Health
+**Health Checks**
 ```bash
-# Basic health check
-curl http://localhost:5000/health
+# Basic
+curl http://localhost:3000/health
 
-# Detailed health check (all services)
-curl http://localhost:5000/health/detailed
+# Detailed (all services)
+curl http://localhost:3000/health/detailed
 ```
+
+---
 
 ## 📁 Project Structure
 
 ```
-fintech-api/
-├── src/
-│   ├── config/                 # Configuration files
-│   │   └── index.js           # Central config
-│   │
-│   ├── modules/               # Feature modules (domain-driven)
-│   │   ├── auth/             # Authentication & authorization
-│   │   ├── users/            # User management
-│   │   ├── accounts/         # Account operations
-│   │   ├── transactions/     # Transaction processing
-│   │   ├── payments/         # Payment integrations
-│   │   ├── notifications/    # Email/SMS notifications
-│   │   └── compliance/       # KYC/AML
-│   │
-│   ├── shared/               # Shared utilities
-│   │   ├── middleware/       # Express middleware
-│   │   ├── utils/           # Utility functions
-│   │   │   ├── idGenerator.js    # Universal ID generator
-│   │   │   └── logger.js         # Winston logger
-│   │   ├── constants/       # App constants
-│   │   ├── types/           # Type definitions
-│   │   └── validators/      # Input validators
-│   │
-│   ├── infrastructure/       # External services
-│   │   ├── database/        # MongoDB connection
-│   │   ├── cache/           # Redis connection
-│   │   ├── queue/           # Job queues
-│   │   └── events/          # Kafka events
-│   │
-│   ├── app.js               # Express app
-│   └── server.js            # Server startup
+src/
+├── config/                  # Kafka, MongoDB, Redis client setup
 │
-├── tests/                    # Test files
-│   ├── unit/
-│   ├── integration/
-│   └── e2e/
+├── modules/                 # Feature modules (domain-driven)
+│   ├── auth/               # Authentication & authorization
+│   ├── users/              # User management
+│   ├── accounts/           # Account operations
+│   ├── transactions/       # Transaction processing
+│   ├── payments/           # Payment integrations
+│   ├── notifications/      # Email/SMS notifications
+│   └── compliance/         # KYC/AML
 │
-├── logs/                     # Application logs
-├── scripts/                  # Utility scripts
-├── docs/                     # Documentation
+├── consumers/               # KafkaJS consumers (idempotency logic)
+├── outbox/                  # Outbox write helpers + Debezium transformer
+├── queues/                  # BullMQ queue definitions and workers
 │
-├── .env                      # Environment variables (gitignored)
-├── .env.example             # Example env file
-├── .gitignore
-├── package.json
-└── README.md
+├── shared/
+│   ├── middleware/          # requireConsumerReady, auth guards, rate limiting
+│   ├── utils/
+│   │   ├── circuitBreaker.ts   # Reusable Cockatiel wrapper
+│   │   ├── retryOrDLQ.ts       # Kafka retry / dead-letter logic
+│   │   ├── shutdown.ts         # Graceful shutdown orchestration
+│   │   ├── idGenerator.ts      # Universal ID generator
+│   │   └── logger.ts           # Winston logger
+│   ├── constants/
+│   ├── types/
+│   └── validators/
+│
+├── infrastructure/
+│   ├── database/            # MongoDB connection
+│   ├── cache/               # Redis connection
+│   ├── queue/               # BullMQ setup
+│   └── events/              # Kafka setup
+│
+├── app.ts                   # Express app
+└── server.ts                # Server entry point
+
+tests/
+├── unit/
+├── integration/
+└── e2e/
 ```
+
+---
 
 ## 📚 API Documentation
 
 ### Base URL
 ```
-http://localhost:5000/api/v1
+http://localhost:3000/api/v1
 ```
 
 ### Health Endpoints
 
-#### GET /health
-Basic health check
-
-**Response:**
+**`GET /health`** — Basic health check
 ```json
 {
   "status": "OK",
-  "timestamp": "2024-03-18T10:30:00.000Z",
+  "timestamp": "2025-01-01T10:30:00.000Z",
   "uptime": 3600
 }
 ```
 
-#### GET /health/detailed
-Detailed system health
-
-**Response:**
+**`GET /health/detailed`** — All services
 ```json
 {
   "status": "OK",
-  "timestamp": "2024-03-18T10:30:00.000Z",
+  "timestamp": "2025-01-01T10:30:00.000Z",
   "uptime": 3600,
   "services": {
     "mongodb": {
       "isConnected": true,
       "readyState": 1,
-      "host": "localhost",
-      "name": "fintech_db"
+      "replicaSet": "rs0"
     },
     "redis": {
       "isConnected": true,
@@ -305,134 +340,194 @@ Detailed system health
     "kafka": {
       "isConnected": true,
       "hasProducer": true,
-      "activeConsumers": 3
+      "activeConsumers": 3,
+      "consumerReady": true
+    },
+    "debezium": {
+      "isConnected": true,
+      "activeConnectors": 1
     }
   }
 }
 ```
 
-### Authentication Endpoints
-(Coming in Phase 2)
+### Auth Endpoints *(Phase 2)*
 
-## 🧪 Testing
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/auth/register` | Register new user |
+| POST | `/auth/login` | Login, receive access + refresh tokens |
+| POST | `/auth/refresh` | Rotate refresh token |
+| POST | `/auth/logout` | Invalidate session |
+| POST | `/auth/2fa/enable` | Enable two-factor auth (TOTP) |
 
-### Run All Tests
-```bash
-npm test
-```
+### Account Endpoints *(Phase 2)*
 
-### Run with Coverage
-```bash
-npm test -- --coverage
-```
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/accounts` | List user accounts |
+| POST | `/accounts` | Create new account |
+| GET | `/accounts/:id/balance` | Get current balance |
+| GET | `/accounts/:id/transactions` | Paginated transaction history |
 
-### Run Specific Tests
-```bash
-# Unit tests
-npm run test:unit
+### Transaction Endpoints *(Phase 2)*
 
-# Integration tests
-npm run test:integration
-```
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/transactions/transfer` | Initiate transfer (idempotency key required) |
+| GET | `/transactions/:id` | Get transaction status |
+| POST | `/transactions/:id/refund` | Refund a transaction |
 
-## 🚢 Deployment
-
-### Production Checklist
-
-- [ ] Set `NODE_ENV=production`
-- [ ] Use strong JWT secrets
-- [ ] Enable MongoDB replica set
-- [ ] Configure Redis persistence
-- [ ] Set up Kafka cluster
-- [ ] Configure proper CORS origins
-- [ ] Set up SSL/TLS
-- [ ] Configure firewall rules
-- [ ] Set up monitoring and alerts
-- [ ] Configure automated backups
-- [ ] Review all environment variables
-- [ ] Set up CI/CD pipeline
-
-### Docker Deployment
-```bash
-# Build image
-docker build -t fintech-api .
-
-# Run container
-docker run -p 5000:5000 --env-file .env fintech-api
-```
-
-## 🎓 System Design Concepts
-
-This project demonstrates several important system design concepts:
-
-### 1. **Modular Monolith**
-- Organized by domain, not technical layers
-- Easy to understand and maintain
-- Can be split into microservices when needed
-
-### 2. **Event-Driven Architecture**
-- Decoupled services via Kafka
-- Async processing for better performance
-- Complete audit trail
-
-### 3. **Universal User ID**
-- Single ID tracks users across all services
-- Easy to correlate user activities
-- Simplifies analytics and debugging
-
-### 4. **Idempotency**
-- Prevent duplicate transactions
-- Use idempotency keys for critical operations
-- Safe retries
-
-### 5. **Circuit Breaker Pattern**
-- Graceful degradation
-- Prevent cascading failures
-- Quick recovery
-
-### 6. **Connection Pooling**
-- Reuse database connections
-- Better performance
-- Lower resource usage
-
-### 7. **Caching Strategy**
-- Redis for frequently accessed data
-- Reduce database load
-- Faster response times
-
-### 8. **Graceful Shutdown**
-- Clean up resources before exit
-- Finish pending requests
-- Prevent data loss
-
-## 📖 Learning Resources
-
-- [MongoDB Transactions](https://docs.mongodb.com/manual/core/transactions/)
-- [Redis Best Practices](https://redis.io/topics/best-practices)
-- [Kafka Documentation](https://kafka.apache.org/documentation/)
-- [Express Best Practices](https://expressjs.com/en/advanced/best-practice-security.html)
-- [System Design Primer](https://github.com/donnemartin/system-design-primer)
-
-## 🤝 Contributing
-
-This is a learning project, but contributions are welcome!
-
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-## 📝 License
-
-MIT License - see LICENSE file for details
-
-## 🙏 Acknowledgments
-
-الحمد لله (Alhamdulillah) - All praise is due to Allah
+> All mutating endpoints require an `Idempotency-Key` header. This is enforced at the middleware level and guaranteed end-to-end by the two-phase consumer state machine.
 
 ---
 
-**Built with ❤️ for learning and production use**
+## 🎓 System Design Patterns
 
-For questions or support, please open an issue on GitHub.
+### 1. Transactional Outbox + CDC
+Writes to the primary collection and the outbox happen inside a single MongoDB transaction. Debezium monitors the outbox via change streams and publishes to Kafka — guaranteeing no event is lost even if the process crashes between the write and the publish.
+
+### 2. Two-Phase Idempotency (`PROCESSING → COMPLETED`)
+Kafka consumers acquire a Redis lock, transition the outbox record to `PROCESSING`, execute the operation, then transition to `COMPLETED`. Duplicate messages are detected by checking state before any work is done — safe across restarts, rebalances, and retries.
+
+### 3. Circuit Breaker (Cockatiel)
+A reusable `circuitBreaker.ts` wraps every external call with composable retry, timeout, and half-open recovery policies. Cockatiel was chosen over Opossum for its TypeScript-native API and policy composition model.
+
+### 4. Consumer-Ready Middleware (`requireConsumerReady`)
+Blocks inbound API requests (e.g. transfers) during Kafka consumer group rebalance, preventing writes from racing ahead of an unready partition assignment.
+
+### 5. Graceful Shutdown
+All `SIGTERM`/`SIGINT` signals are handled centrally. Kafka consumers and producers disconnect cleanly, BullMQ workers drain active jobs, and a `Promise.race` timeout forces exit if a dependency hangs.
+
+### 6. Universal User ID
+A single generated ID tracks users across all services and domains — simplifying event correlation, analytics, and debugging.
+
+### 7. Event Sourcing & CQRS
+All state changes are recorded as events. Read and write paths are separated for performance and compliance auditability.
+
+### 8. Connection Pooling & Caching
+Database connections are pooled and reused. Redis caches hot-path reads and serves as the idempotency lock store to prevent race conditions on concurrent requests.
+
+---
+
+## 🧪 Testing
+
+```bash
+# All tests
+npm test
+
+# With coverage report
+npm test -- --coverage
+
+# Unit tests only
+npm run test:unit
+
+# Integration tests only
+npm run test:integration
+
+# E2E tests
+npm run test:e2e
+```
+
+---
+
+## 🚢 Deployment
+
+Zely deploys to [Railway](https://railway.app) via GitHub Actions CI/CD.
+
+### CI/CD Pipeline
+
+```yaml
+# .github/workflows/deploy.yml
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - uses: railwayapp/railway-github-action@v1
+        with:
+          railway-token: ${{ secrets.RAILWAY_TOKEN }}
+```
+
+### Production Checklist
+
+- [ ] `NODE_ENV=production`
+- [ ] Strong JWT secrets (64-byte random, not committed to git)
+- [ ] MongoDB replica set enabled and healthy
+- [ ] Redis persistence configured (`appendonly yes`)
+- [ ] Kafka cluster (multi-broker for HA)
+- [ ] Debezium connector deployed and healthy
+- [ ] CORS origins locked to known domains
+- [ ] SSL/TLS configured
+- [ ] Rate limiting enabled on all public endpoints
+- [ ] Firewall rules in place
+- [ ] Consumer lag monitoring active (Kafka consumer group metrics)
+- [ ] Circuit breaker state alerting configured
+- [ ] Automated database backups enabled
+- [ ] All secrets in Railway secrets panel
+- [ ] CI/CD pipeline passing
+
+### Docker
+
+```bash
+# Build
+docker build -t zely .
+
+# Run
+docker run -p 3000:3000 --env-file .env zely
+```
+
+---
+
+## 🗺 Roadmap
+
+- [x] Transactional outbox pattern (EmailOutbox)
+- [x] Kafka consumer idempotency (two-phase `PROCESSING → COMPLETED`)
+- [x] Debezium CDC integration
+- [x] Graceful shutdown with `Promise.race` timeout
+- [x] `requireConsumerReady` middleware
+- [ ] Cockatiel circuit breaker wrapper across all dependencies
+- [ ] Full CI/CD pipeline on Railway
+- [ ] Distributed tracing (OpenTelemetry)
+- [ ] Consumer lag monitoring
+- [ ] 2FA (TOTP)
+- [ ] KYC/AML compliance module
+- [ ] Multi-region failover strategy
+
+---
+
+## 📖 Learning Resources
+
+- [MongoDB Transactions](https://www.mongodb.com/docs/manual/core/transactions/)
+- [Debezium MongoDB Connector](https://debezium.io/documentation/reference/stable/connectors/mongodb.html)
+- [Transactional Outbox Pattern](https://microservices.io/patterns/data/transactional-outbox.html)
+- [KafkaJS Documentation](https://kafka.js.org/docs/getting-started)
+- [Cockatiel — Resilience library](https://github.com/connor4312/cockatiel)
+- [BullMQ Documentation](https://docs.bullmq.io/)
+- [Redis Best Practices](https://redis.io/docs/manual/patterns/)
+- [System Design Primer](https://github.com/donnemartin/system-design-primer)
+- [Express Best Practices](https://expressjs.com/en/advanced/best-practice-performance.html)
+
+---
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/my-feature`)
+3. Commit your changes (`git commit -m 'feat: add my feature'`)
+4. Push to the branch (`git push origin feature/my-feature`)
+5. Open a Pull Request
+
+---
+
+## 📝 License
+
+Private — all rights reserved.
