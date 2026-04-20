@@ -4,7 +4,7 @@ import { LedgerEntry, LedgerEntryNature } from "@/modules/ledger/ledger.entry.mo
 import { logger } from "@/shared/utils/logger";
 import mongoose from "mongoose";
 import { freezeWallet } from "../helpers/resolvers";
-import { reconciliationQueue } from "@/workers/reconcileLedger.worker";
+// import { reconciliationQueue } from "@/workers/reconcileLedger.worker";
 
 
 
@@ -138,9 +138,9 @@ export class LedgerReconciliationService {
       if (wallets.length === 0) break;
 
       for (const wallet of wallets) {
-        await reconciliationQueue.add("reconcile-wallet", {
-          walletId: wallet._id.toString(),
-        });
+        // await reconciliationQueue.add("reconcile-wallet", {
+        //   walletId: wallet._id.toString(),
+        // });
       }
 
       skip += batchSize;

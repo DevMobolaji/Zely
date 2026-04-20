@@ -11,6 +11,9 @@ import { LedgerAccount, LedgerOwnerType } from "../ledger/ledgerAccount.model";
 import { NotFoundError } from "@/shared/errors/notFoundError";
 import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
+import { logger } from "@/shared/utils/logger";
+import { extEnsureIdempotence } from "../helpers/ext.idempotence";
+import { calculateFeeBreakdown } from "../fee/transfer.fee.engine";
 
 
 class TransferService {
@@ -18,11 +21,18 @@ class TransferService {
     dto: TransferRequestInput,
     context: IRequestContext) {
 
+    // ✅ Idempotency check BEFORE any session/transaction
+    const { alreadyCompleted, response } = await extEnsureIdempotence(dto.idempotencyKey)
+
+    if (alreadyCompleted) return response;
+
     const session = await mongoose.startSession();
     session.startTransaction();
+    let committed = false;
 
     let senderWallet: WalletDocument | null = null;
     let receiverWallet: WalletDocument | null = null;
+
 
     try {
       /** -------------------------
@@ -66,12 +76,17 @@ class TransferService {
       const prevSenderBalance = senderWallet.availableBalance;
       const prevReceiverBalance = receiverWallet.availableBalance;
 
-
-
       /** -------------------------
        * LOCK SENDER WALLET
        * ------------------------- */
-      const senderWalletLocked = await lockWalletFunds(senderWallet._id, dto.amount, session);
+      const { fee, totalDeducted } = await calculateFeeBreakdown(
+        dto.amount,
+        dto.currency,
+        'P2P_TRANSFER'
+      );
+
+      const senderWalletLocked = await lockWalletFunds(senderWallet._id, totalDeducted, session);
+
       if (!senderWalletLocked) {
         throw new BadRequestError("SENDER_WALLET_LOCK_FAILED");
       }
@@ -96,15 +111,18 @@ class TransferService {
         receiverWallet,
         senderLedgerId,
         receiverLedgerId,
+        fee,
+        totalDeducted,
         amount: dto.amount,
         currency: dto.currency,
-        idempotencyKey: generateIdempotencyKey(),
+        idempotencyKey: dto.idempotencyKey,
       }).transferEngines(context, session);
 
       /** -------------------------
        * APPLY BALANCE MUTATION
        * ------------------------- */
-      const updatedSenderWallet  = await deductWalletFunds(senderWallet._id, dto.amount, session);
+      const updatedSenderWallet = await deductWalletFunds(senderWallet._id, totalDeducted, session);
+
       const updatedReceiverWallet = await Wallet.findOneAndUpdate(
         { _id: receiverWallet._id },
         { $inc: { availableBalance: dto.amount } },
@@ -143,6 +161,8 @@ class TransferService {
               currentBalance: updatedReceiverWallet?.availableBalance,
             },
             amount: dto.amount,
+            fee: result.fee,           // ← add
+            totalDeducted: result.totalDeducted,
             currency: dto.currency,
             referenceId: result.referenceId,
             transactionRef: result.transactionRef,
@@ -160,9 +180,20 @@ class TransferService {
       return result;
 
     } catch (e) {
-      await session.abortTransaction();
+      if (!committed) {
+        try {
+          // The session/transaction may have already been closed by the driver
+          if (session.inTransaction()) {
+            await session.abortTransaction();
+          }
+        } catch (abortErr) {
+          // Log but don't rethrow — the original error is what matters
+          logger.warn("Failed to abort transaction (may already be closed)", {
+            abortErr,
+          });
+        }
+      }
       throw e;
-
     } finally {
       session.endSession();
     }
@@ -172,8 +203,14 @@ class TransferService {
     dto: internalTransferRequest,
     context: IRequestContext
   ) {
+    // ✅ Idempotency check BEFORE any session/transaction
+    const { alreadyCompleted, response } = await extEnsureIdempotence(dto.idempotencyKey)
+
+    if (alreadyCompleted) return response;
+
     const session = await mongoose.startSession();
     session.startTransaction();
+    let committed = false;
 
     let senderWalletLocked: WalletDocument | null = null;
     let senderWallet: WalletDocument | null = null;
@@ -197,7 +234,6 @@ class TransferService {
         dto.currency,
         session
       );
-
 
       if (!checkingAccount || !savingsAccount) {
         throw new BadRequestError("ACCOUNT_NOT_FOUND");
@@ -327,13 +363,25 @@ class TransferService {
       );
 
       await session.commitTransaction();
+      committed = true;
       return result;
     } catch (e) {
-      await session.abortTransaction();
-
+      if (!committed) {
+        try {
+          // The session/transaction may have already been closed by the driver
+          if (session.inTransaction()) {
+            await session.abortTransaction();
+          }
+        } catch (abortErr) {
+          // Log but don't rethrow — the original error is what matters
+          logger.warn("Failed to abort transaction (may already be closed)", {
+            abortErr,
+          });
+        }
+      }
       throw e;
     } finally {
-      session.endSession();
+      await session.endSession();
     }
   }
 
@@ -341,8 +389,14 @@ class TransferService {
     dto: vaultTransferRequest,
     context: IRequestContext
   ) {
+    // ✅ Idempotency check BEFORE any session/transaction
+    const { alreadyCompleted, response } = await extEnsureIdempotence(dto.idempotencyKey)
+
+    if (alreadyCompleted) return response;
+
     const session = await mongoose.startSession();
     session.startTransaction();
+    let committed = false;
 
     let senderWalletLocked: WalletDocument | null = null;
     let senderWallet: WalletDocument | null = null;
@@ -503,9 +557,20 @@ class TransferService {
       return result;
 
     } catch (e) {
-      await session.abortTransaction();
+      if (!committed) {
+        try {
+          // The session/transaction may have already been closed by the driver
+          if (session.inTransaction()) {
+            await session.abortTransaction();
+          }
+        } catch (abortErr) {
+          // Log but don't rethrow — the original error is what matters
+          logger.warn("Failed to abort transaction (may already be closed)", {
+            abortErr,
+          });
+        }
+      }
       throw e;
-
     } finally {
       session.endSession();
     }

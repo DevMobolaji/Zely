@@ -103,7 +103,7 @@ export const lockWalletFunds = async (
   );
 
   if (!res) {
-    throw new BadRequestError('INSUFFICIENT_BALANCE_LOCKING_WALLET');
+    throw new BadRequestError('INSUFFICIENT_BALANCE');
   }
 
   return res;
@@ -286,8 +286,8 @@ export const lookUpPrimaryWallets = async (
     type: WalletType.MAIN_CHECKINGS,
     currency,
   })
-  .populate('userId', 'email name -_id')
-  .session(session);
+    .populate('userId', 'email name -_id')
+    .session(session);
 
   if (!wallet) {
     throw new BadRequestError('Primary wallet not found');

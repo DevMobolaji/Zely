@@ -4,6 +4,8 @@ import asyncWrapper from "@/shared/middleware/async.wrapper";
 import { IAuthRequest } from "@/config/interfaces/request.interface";
 import SystemLedger, { FundUsersRequest } from "./system.ledger";
 import { getRequestContext } from "@/shared/middleware/request.context";
+import BadRequestError from "@/shared/errors/badRequest";
+import { config } from "@/config/index";
 
 class FundController implements Controller {
   public path = "/fund";
@@ -19,6 +21,14 @@ class FundController implements Controller {
   }
 
   private fundUsers = asyncWrapper(async (req: IAuthRequest, res: Response) => {
+
+    // ✅ Block manual funding in production
+    if (config.app.env === 'production') {
+      throw new BadRequestError(
+        'Manual funding is not allowed in production — use Paystack'
+      );
+    }
+
     const { users } = req.body as FundUsersRequest; // Array<{ userId, amount }>
 
     const context = getRequestContext(req);

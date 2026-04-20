@@ -15,6 +15,9 @@ export enum LedgerEntryType {
   DEPOSIT = "DEPOSIT",
   ADJUSTMENT = "ADJUSTMENT",
   DEBIT = "DEBIT",
+  CREDIT = "CREDIT",
+  FEE = "FEE",
+  REVERSAL = "REVERSAL"
 }
 
 export interface LedgerEntryDocument extends Document {
@@ -88,7 +91,7 @@ export const LedgerEntrySchema = new Schema(
       required: true,
       immutable: true
     },
-  }, 
+  },
   { timestamps: { createdAt: true, updatedAt: false, immutable: true } }
 );
 

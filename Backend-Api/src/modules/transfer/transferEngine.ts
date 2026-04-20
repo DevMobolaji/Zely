@@ -14,7 +14,7 @@ import { Wallet, WalletDocument } from "../wallet/wallet.model";
 import { LedgerEntryNature } from "../ledger/ledger.entry.model";
 import { Account } from "../account/account.model";
 import { AccountDocument } from "../account/account.interface";
-import { LedgerAccountDocument } from "../ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountDocument, LedgerAccountType, LedgerOwnerType } from "../ledger/ledgerAccount.model";
 import { VaultDocument } from "../vault/vault.model";
 
 type BaseTransferInput = {
@@ -26,6 +26,8 @@ type BaseTransferInput = {
   amount: number;
   currency: string;
   idempotencyKey: string;
+  fee?: number;
+  totalDeducted?: number;
 };
 
 type WalletToWalletInput = BaseTransferInput & {
@@ -87,6 +89,9 @@ class TransferEngine {
 
     if (alreadyCompleted) return response;
 
+    const fee = this.input.fee ?? 0;
+    const totalDeducted = this.input.totalDeducted ?? amount;
+
     /** -------------------------
      * CONCURRENCY LOCKING
      * ------------------------- */
@@ -143,6 +148,55 @@ class TransferEngine {
 
     const txn = await builder.commit(session);
 
+    // ─── FEE LEDGER ENTRIES ────────────────────────────────────────────────
+    if (fee > 0) {
+      // Look up treasury ledger account
+      const treasuryLedgerAccount = await LedgerAccount.findOne({
+        ownerType: LedgerOwnerType.SYSTEM,
+        type: LedgerAccountType.SYSTEM_TREASURY,
+        currency,
+      }).session(session);
+
+      if (!treasuryLedgerAccount) {
+        throw new BadRequestError("TREASURY_ACCOUNT_NOT_FOUND");
+      }
+
+      const feeBuilder = new TransactionBuilder('FEE');
+
+      feeBuilder.addDebit({
+        ledgerAccountId: senderLedgerId,
+        amount: fee,
+        currency,
+        nature: LedgerEntryNature.DEBIT,
+        transactionRef: `${transactionRef}-FEE`,
+        referenceId,
+        referenceType: 'FEE',
+      });
+
+      feeBuilder.addCredit({
+        ledgerAccountId: treasuryLedgerAccount._id,
+        amount: fee,
+        currency,
+        nature: LedgerEntryNature.CREDIT,
+        transactionRef: `${transactionRef}-FEE`,
+        referenceId,
+        referenceType: 'FEE',
+      });
+
+      await feeBuilder.commit(session);
+
+
+      await Wallet.findOneAndUpdate(
+        {
+          userPublicId: treasuryLedgerAccount.userPublicId,
+          type: treasuryLedgerAccount.type,
+          currency
+        },
+        { $inc: { availableBalance: fee } },
+        { session, new: true }
+      );
+    }
+
     /** -------------------------
      * UNLOCK ACCOUNTS
      * ------------------------- */
@@ -172,6 +226,8 @@ class TransferEngine {
       transactionRef,
       referenceId,
       amount,
+      fee,
+      totalDeducted
     };
   }
 }

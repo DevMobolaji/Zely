@@ -20,7 +20,8 @@ const OutboxSchema = new Schema(
     lockedAt: { type: Date, default: null },   // 👈 REQUIRED
     sentAt: { type: Date, default: null },
 
-    payload: { type: Object, required: true },
+    // payload: { type: Object, required: true },
+    payload: { type: String, required: true },
 
     retryCount: { type: Number, default: 0 },
 
@@ -32,9 +33,14 @@ const OutboxSchema = new Schema(
     },
     version: { type: Number, required: true, default: 1 },
 
-    occurredAt: { type: Date, default: Date.now },
+    timestamp: { type: Date, default: Date.now },
+
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // ⚠️ Tell Mongoose NOT to use _id as the primary key for CDC
+    // Debezium uses the document _id from MongoDB oplog
+  }
 );
 
 // Required indexes
@@ -42,3 +48,4 @@ OutboxSchema.index({ status: 1, lockedAt: 1, createdAt: 1 });
 OutboxSchema.index({ aggregateId: 1, occurredAt: 1 });
 
 export const OutboxEvent = model("OutboxEvent", OutboxSchema);
+

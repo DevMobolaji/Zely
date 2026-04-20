@@ -13,8 +13,9 @@ export async function extEnsureIdempotence(
     // Atomically try to insert IN_PROGRESS at first instance
     const doc = await extIdempotenceModel.findOneAndUpdate(
       { idempotencyKey },
-      { $setOnInsert: { status: "IN_PROGRESS", createdAt: now, lastUpdatedAt: now }
-     },
+      {
+        $setOnInsert: { status: "IN_PROGRESS", createdAt: now, lastUpdatedAt: now }
+      },
       { upsert: true, new: true }
     );
 
@@ -27,7 +28,7 @@ export async function extEnsureIdempotence(
       }
 
       // If the document already existed as IN_PROGRESS
-      if (doc.status === "IN_PROGRESS" ) {
+      if (doc.status === "IN_PROGRESS") {
         const isStale =
           Date.now() - new Date(doc.lastUpdatedAt).getTime() >
           THRESHOLD;
@@ -70,18 +71,18 @@ export async function extEnsureIdempotence(
     return { alreadyCompleted: false };
 
   } catch (err: any) {
-  if (err.code === 11000) {
-    const existing = await extIdempotenceModel.findOne({ idempotencyKey })
-    if (existing?.status === "COMPLETED") {
-      return { alreadyCompleted: true, response: existing.response };
+    if (err.code === 11000) {
+      const existing = await extIdempotenceModel.findOne({ idempotencyKey })
+      if (existing?.status === "COMPLETED") {
+        return { alreadyCompleted: true, response: existing.response };
+      }
+      // Log duplicate attempt
+      console.error(`Duplicate idempotency attempt: ${idempotencyKey}`);
+      throw new BadRequestError("Transfer already in progress");
     }
-    // Log duplicate attempt
-    console.error(`Duplicate idempotency attempt: ${idempotencyKey}`);
-    throw new BadRequestError("Transfer already in progress");
-  }
 
-  throw err;
-}
+    throw err;
+  }
 }
 
 export async function markCompleted(
