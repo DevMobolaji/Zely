@@ -8,19 +8,28 @@ export const kafka = new Kafka({
     brokers: config.kafka.brokers,
     logLevel: logLevel.ERROR,
     retry: {
-        initialRetryTime: 100,
-        retries: 8,
+        initialRetryTime: 300,
+        retries: 10,
         maxRetryTime: 30_000,
         multiplier: 2,
     },
-})
+});
+
+export const createConsumer = () => {
+    return kafka.consumer({
+        groupId: config.kafka.groupId,
+        sessionTimeout: 30000,
+        heartbeatInterval: 3000,
+        rebalanceTimeout: 60000,
+    });
+};
 
 export const admin = kafka.admin()
 
 export async function createTopic(
     topic: string,
-    numPartitions = 3,
-    replicationFactor = 1
+    numPartitions = 6,
+    replicationFactor = 2
 ) {
     const existing = await admin.listTopics();
 

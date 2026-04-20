@@ -1,14 +1,18 @@
 import { kafka } from "../config/kafka.config";
 import { TOPICS } from "../config/topics";
 import { RetryEnvelope } from "./helpers/retry.envelope";
-import { intIdempotency } from "@/events/idempotency";
+import { completeIdempotency, initIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
-import mongoose from "mongoose";
 import { vaultEvents } from "@/events/vaults.events";
 import { retryOrDLQ } from "./helpers/retry.handler";
 import { validateWithSchema } from "../schema/zod.helper";
 import { VaultEventSchema } from "../schema/vault.schema";
-
+import { withMongoTransaction } from "@/events/mongo.wrapper";
+import {
+  kafkaMessagesProcessedTotal,
+  kafkaMessagesFailedTotal,
+  kafkaProcessingDuration,
+} from "@/infrastructure/resilience/metrics";
 
 const VAULT_CONSUMER_GROUP = "vault-consumer";
 const vaultConsumer = kafka.consumer({ groupId: VAULT_CONSUMER_GROUP });
@@ -22,33 +26,56 @@ export async function runVaultConsumer() {
   });
 
   await vaultConsumer.run({
-    eachMessage: async ({ topic, message }: { topic: string; message: any }) => {
+    autoCommit: false,
+    eachMessage: async ({ topic, partition, message }: { topic: string; partition: number; message: any }) => {
       if (!message.value) return;
 
-      const rawEvent = JSON.parse(message.value.toString());
+      // ✅ Start timer
+      const timer = kafkaProcessingDuration.startTimer({
+        topic,
+        consumer_group: VAULT_CONSUMER_GROUP,
+      });
 
-      const envelope: RetryEnvelope = rawEvent.meta ? rawEvent : {
-        meta: {
-          retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
-          createdAt: new Date().toISOString(),
-          originalConsumerGroup: VAULT_CONSUMER_GROUP,
-        },
-        event: rawEvent.event ? rawEvent.event : rawEvent,
-      };
+      let envelope: RetryEnvelope;
+      try {
+        const rawEvent = JSON.parse(message.value.toString());
+        envelope = rawEvent.meta ? rawEvent : {
+          meta: {
+            retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
+            createdAt: new Date().toISOString(),
+            originalConsumerGroup: VAULT_CONSUMER_GROUP,
+            originalTopic: topic,
+            processor: "vault",
+          },
+          event: rawEvent.event ? rawEvent.event : rawEvent,
+        };
+      } catch (e) {
+        logger.error("Failed to parse Kafka message", { topic, partition, offset: message.offset });
+        timer();
+        await vaultConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+        return;
+      }
 
-      const session = await mongoose.startSession();
+      const firstTime = await initIdempotency(
+        envelope.event.eventId,
+        topic,
+        VAULT_CONSUMER_GROUP
+      );
+
+      if (firstTime === "SKIP") {
+        kafkaMessagesProcessedTotal.inc({ topic, consumer_group: VAULT_CONSUMER_GROUP });
+        timer();
+        await vaultConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+        return;
+      }
 
       try {
-        session.startTransaction();
-
-        const firstTime = await intIdempotency(envelope.event.eventId, session, topic);
-
-        if (!firstTime) {
-          logger.info("Duplicate event skipped", { eventId: envelope.event.eventId, topic });
-          await session.commitTransaction();
-          return;
-        }
-
         const validatedEvent = validateWithSchema(VaultEventSchema, envelope.event) as {
           eventId: string;
           eventType: string;
@@ -64,32 +91,50 @@ export async function runVaultConsumer() {
 
         const validatedEnvelope: RetryEnvelope = {
           meta: envelope.meta,
-          event: validatedEvent, // properly validated event
+          event: validatedEvent,
         };
 
-        await vaultEvents(topic, validatedEnvelope, session);
+        await withMongoTransaction(async (session) => {
+          await vaultEvents(topic, validatedEnvelope, session);
+        });
 
-        // Commit if all succeeds
-        await session.commitTransaction();
+        await completeIdempotency(
+          envelope.event.eventId,
+          VAULT_CONSUMER_GROUP
+        );
+
+        // ✅ Success metrics
+        kafkaMessagesProcessedTotal.inc({ topic, consumer_group: VAULT_CONSUMER_GROUP });
+        timer();
+
+        await vaultConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+
       } catch (error: any) {
-        console.log(error.message)
-        if (session.inTransaction()) {
-          await session.abortTransaction();
-        }
+        // ✅ Failure metrics
+        kafkaMessagesFailedTotal.inc({ topic, consumer_group: VAULT_CONSUMER_GROUP });
+        timer();
 
         logger.error("Vault provisioning failed", {
           eventId: envelope.event.eventId,
           topic,
-          error: error.message
+          error: error.message,
         });
-        await retryOrDLQ({
-          topic,
-          message: envelope,
-          error,
-        });
-      } finally {
-        await session.endSession();
+
+        await retryOrDLQ({ topic, message: envelope, error });
+
+        await vaultConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
       }
     },
   });
+}
+
+export async function stopVaultConsumer() {
+  await vaultConsumer.disconnect();
+  logger.info("✅ Vault consumer disconnected");
 }

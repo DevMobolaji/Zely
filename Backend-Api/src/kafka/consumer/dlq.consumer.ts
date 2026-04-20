@@ -3,17 +3,27 @@ import { kafka } from "../config/kafka.config";
 import { initFailedEvents } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
 import { TOPICS } from "../config/topics";
+import {
+    kafkaMessagesProcessedTotal,
+    kafkaMessagesFailedTotal,
+    kafkaProcessingDuration,
+} from "@/infrastructure/resilience/metrics";
 
-const dlqConsumer = kafka.consumer({ groupId: "generic-dlq-sink" });
+
+export const DLQ_CONSUMER_GROUP = "generic-dlq-sink"
+const dlqConsumer = kafka.consumer({ groupId: DLQ_CONSUMER_GROUP });
 
 export async function startDLQSink() {
     const failedCollection = await initFailedEvents();
 
-    // Subscribe to all topics ending with .dlq
-    await dlqConsumer.subscribe({
-        topic: TOPICS.AUTH_EVENTS_DLQ,
-        fromBeginning: false,
-      });
+    const DLQ_TOPICS = [
+        TOPICS.AUTH_EVENTS_DLQ,
+        TOPICS.TRANSACTION_EVENTS_DLQ,
+    ];
+
+    for (const topic of DLQ_TOPICS) {
+        await dlqConsumer.subscribe({ topic, fromBeginning: false });
+    }
 
     await dlqConsumer.run({
         autoCommit: false,
@@ -23,6 +33,12 @@ export async function startDLQSink() {
                     { topic, partition, offset: (Number(message.offset) + 1).toString() },
                 ]);
             };
+
+            // ✅ Start processing timer
+            const timer = kafkaProcessingDuration.startTimer({
+                topic,
+                consumer_group: DLQ_CONSUMER_GROUP,
+            });
 
             try {
                 const raw = message.value?.toString();
@@ -49,11 +65,31 @@ export async function startDLQSink() {
                 );
 
                 logger.error("Stored failed event");
+
+                // ✅ Success metrics
+                kafkaMessagesProcessedTotal.inc({
+                    topic,
+                    consumer_group: DLQ_CONSUMER_GROUP,
+                });
+                timer();
+
                 await commitOffset();
             } catch (err) {
                 logger.error("Failed DLQ write (manual intervention required)", err);
+                // ✅ Failure metrics
+                kafkaMessagesFailedTotal.inc({
+                    topic,
+                    consumer_group: DLQ_CONSUMER_GROUP,
+                });
+                timer();
                 await commitOffset(); // still commit to prevent blocking the consumer
             }
         },
     });
+}
+
+
+export async function stopDLQSink() {
+    await dlqConsumer.disconnect();
+    logger.info("✅ DLQ sink disconnected");
 }

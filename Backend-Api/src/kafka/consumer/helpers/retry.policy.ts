@@ -27,7 +27,7 @@ export function resolveRetryPolicy(aggregateType: string) {
         maxRetries: AUTH_MAX_RETRIES
       };
 
-    case "TRANSACTION":
+    case "TRANSFER":
       return {
         levels: TRANSFER_RETRY_LEVELS,
         maxRetries: TRANSFER_MAX_RETRIES

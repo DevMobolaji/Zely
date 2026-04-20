@@ -8,6 +8,7 @@ export const TransferCompletedV1Schema = BaseEventSchema.extend({
   aggregateId: z.string(),
   payload: z.object({
     sender: z.object({
+      walletId: z.string(),
       userId: z.string(),
       email: z.string().email(),
       name: z.string(),
@@ -17,6 +18,7 @@ export const TransferCompletedV1Schema = BaseEventSchema.extend({
       accountType: z.string(),
     }),
     receiver: z.object({
+      walletId: z.string(),
       userId: z.string(),
       email: z.string().email(),
       name: z.string(),
@@ -25,6 +27,8 @@ export const TransferCompletedV1Schema = BaseEventSchema.extend({
       accountNumber: z.string(),
       accountType: z.string(),
     }),
+    fee: z.number(),
+    totalDeducted: z.number(),
     referenceId: z.string(),
     transactionRef: z.string(),
     transferType: z.string(),

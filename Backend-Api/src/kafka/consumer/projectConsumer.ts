@@ -2,44 +2,180 @@ import { handleTransactionCompleted } from "@/events/projectionEvt";
 import { kafka } from "../config/kafka.config";
 import { TOPICS } from "../config/topics";
 import { RetryEnvelope } from "./helpers/retry.envelope";
-import mongoose from "mongoose";
+import { withMongoTransaction } from "@/events/mongo.wrapper";
+import { completeIdempotency, initIdempotency } from "@/events/idempotency";
+import { logger } from "@/shared/utils/logger";
+import { retryOrDLQ } from "./helpers/retry.handler";
+import { validateWithSchema } from "../schema/zod.helper";
+import { TransferEventSchema } from "../schema/transfer.schema";
+import {
+  kafkaMessagesProcessedTotal,
+  kafkaMessagesFailedTotal,
+  kafkaProcessingDuration,
+} from "@/infrastructure/resilience/metrics";
+
 
 const PROJECTION_CONSUMER_GROUP = "projection-consumer";
 
-const consumer = kafka.consumer({ groupId: PROJECTION_CONSUMER_GROUP });
+const ProjectionConsumer = kafka.consumer({
+  groupId: PROJECTION_CONSUMER_GROUP,
+});
 
 export async function runProjectionConsumer() {
-  await consumer.connect();
+  await ProjectionConsumer.connect();
 
-  await consumer.subscribe({ topic: TOPICS.TRANSACTION_EVENTS, fromBeginning: false });
-  await consumer.subscribe({ topic: TOPICS.VAULT_EVENTS, fromBeginning: false });
+  // ✅ Now only listens to confirmed events — projections only run
+  // after the transfer consumer has successfully processed and published
+  await ProjectionConsumer.subscribe({
+    topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
+    fromBeginning: false,
+  });
 
-  await consumer.run({
-    eachMessage: async ({ topic, message }: {topic: string, message: any }) => {
+  await ProjectionConsumer.run({
+    autoCommit: false, // ✅ manual offset control
+    eachMessage: async ({
+      topic,
+      partition,
+      message,
+    }: {
+      topic: string;
+      partition: number;
+      message: any;
+    }) => {
+      if (!message.value) return;
+
+      // ✅ Start processing timer
+      const timer = kafkaProcessingDuration.startTimer({
+        topic,
+        consumer_group: PROJECTION_CONSUMER_GROUP,
+      });
+
       const rawEvent = JSON.parse(message.value.toString());
 
-      const envelope: RetryEnvelope = rawEvent.meta
-        ? rawEvent
-        : {
-          meta: {
-            retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
-            createdAt: new Date().toISOString(),
-            originalConsumerGroup: PROJECTION_CONSUMER_GROUP, // ✅ FIXED
-          },
-          event: rawEvent.event ?? rawEvent,
-        };
+      const envelope: RetryEnvelope = {
+        meta: {
+          retryCount: Number(
+            message.headers?.["x-retry-count"] ??
+            rawEvent.meta?.retryCount ??
+            0
+          ),
+          createdAt: rawEvent.meta?.createdAt ?? new Date().toISOString(),
+          originalConsumerGroup: PROJECTION_CONSUMER_GROUP,
+          originalTopic: topic,
+          lastError: rawEvent.meta?.lastError,
+          processor: "projection",
+        },
+        event: rawEvent.event ?? rawEvent,
+      };
+
+      logger.info("Received confirmed event for projection", {
+        topic,
+        eventId: envelope.event.eventId,
+      });
+
+
+      /** -------------------------
+       * VALIDATION
+       * ------------------------- */
+      const validatedEvent = validateWithSchema(
+        TransferEventSchema,
+        envelope.event
+      ) as {
+        eventId: string;
+        eventType: string;
+        version: 1;
+        aggregateType: string;
+        aggregateId: string;
+        payload: object;
+        occurredAt?: string;
+        action: string;
+        status: string;
+        context: object;
+      };
+
+      const validatedEnvelope: RetryEnvelope = {
+        meta: envelope.meta,
+        event: validatedEvent,
+      };
+
+      /** -------------------------
+           * IDEMPOTENCY CHECK
+           * ------------------------- */
+      const firstTime = await initIdempotency(
+        envelope.event.eventId,
+        topic,
+        PROJECTION_CONSUMER_GROUP
+      );
+
+      if (firstTime === "SKIP") return;
 
       try {
-        await handleTransactionCompleted(topic, envelope);
-      } catch (err) {
-        // await retryOrDLQ({
-        //   topic,
-        //   message: envelope,
-        //   error,
-        //   consumerGroup: PROJECTION_CONSUMER_GROUP,
-        // });
-        // send to retryOrDLQ here (missing currently)
+        await withMongoTransaction(async (session) => {
+
+          /** -------------------------
+           * PROJECTION HANDLER
+           * ------------------------- */
+          await handleTransactionCompleted(topic, validatedEnvelope, session);
+        });
+
+        await completeIdempotency(
+          envelope.event.eventId,
+          PROJECTION_CONSUMER_GROUP
+        );
+
+        // ✅ Success metrics
+        kafkaMessagesProcessedTotal
+          .inc({
+            topic,
+            consumer_group: PROJECTION_CONSUMER_GROUP,
+          });
+        timer();
+
+        /** -------------------------
+         * COMMIT OFFSET ON SUCCESS
+         * ------------------------- */
+        await ProjectionConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
+      } catch (error: any) {
+        logger.error("Projection event processing failed", {
+          topic,
+          eventId: envelope.event.eventId,
+          error: error.message,
+        });
+
+        // ✅ Failure metrics
+        kafkaMessagesFailedTotal.inc({
+          topic,
+          consumer_group: PROJECTION_CONSUMER_GROUP,
+        });
+        timer();
+
+        /** -------------------------
+         * RETRY OR DLQ ON FAILURE
+         * ------------------------- */
+        await retryOrDLQ({ topic, message: envelope, error });
+
+        /** -------------------------
+         * COMMIT OFFSET AFTER ROUTING
+         * ------------------------- */
+        await ProjectionConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
       }
     },
   });
+}
+
+export async function stopProjectionConsumer() {
+  await ProjectionConsumer.disconnect();
+  logger.info("✅ Projection consumer disconnected");
 }

@@ -1,7 +1,41 @@
-// dlq.producer.ts
+// // dlq.producer.ts
+// import { producer } from "../config";
+// import { logger } from "@/shared/utils/logger";
+// import { RetryEnvelope } from "../consumer/helpers/retry.envelope";
+
+// export async function sendToDLQ(
+//   baseTopic: string,
+//   envelope: RetryEnvelope,
+//   error: Error
+// ) {
+//   const key = envelope.event.eventId || "unknown";
+//   console.log("This is the baseTopic from dlq", baseTopic)
+
+//   await producer.send({
+//     topic: `${baseTopic}.dlq`, // final sink per original topic
+//     messages: [
+//       {
+//         key,
+//         value: JSON.stringify(envelope), // full object
+//         headers: {
+//           "x-error": error.message,
+//           "x-failed-at": new Date().toISOString(),
+//           "x-retry-count": String(envelope.meta.retryCount ?? 0),
+//         },
+//       },
+//     ],
+//   });
+
+//   logger.error("Event sent to DLQ");
+// }
+
+
+
 import { producer } from "../config";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "../consumer/helpers/retry.envelope";
+import { withKafkaBreaker } from '@/infrastructure/resilience/breakers/kafka.breaker';
+import { kafkaMessagesFailedTotal } from '@/infrastructure/resilience/metrics';
 
 export async function sendToDLQ(
   baseTopic: string,
@@ -9,23 +43,48 @@ export async function sendToDLQ(
   error: Error
 ) {
   const key = envelope.event.eventId || "unknown";
-  console.log("This is the baseTopic from dlq", baseTopic)
+  const dlqTopic = `${baseTopic}.dlq`;
 
-  await producer.send({
-    topic: `${baseTopic}.dlq`, // final sink per original topic
-    messages: [
-      {
-        key,
-        value: JSON.stringify(envelope), // full object
-        headers: {
-          "x-error": error.message,
-          "x-failed-at": new Date().toISOString(),
-          "x-retry-count": String(envelope.meta.retryCount ?? 0),
-        },
-      },
-    ],
-  });
+  try {
+    await withKafkaBreaker(async () => {
+      await producer.send({
+        topic: dlqTopic,
+        messages: [
+          {
+            key,
+            value: JSON.stringify(envelope),
+            headers: {
+              "x-error": error.message,
+              "x-failed-at": new Date().toISOString(),
+              "x-retry-count": String(envelope.meta.retryCount ?? 0),
+            },
+          },
+        ],
+      });
+    }, 'sendToDLQ');
 
-  logger.error("Event sent to DLQ");
+    kafkaMessagesFailedTotal.inc({
+      topic: dlqTopic,
+      consumer_group: 'dlq-producer',
+    });
+
+    logger.error("Event sent to DLQ", {
+      eventId: envelope.event.eventId,
+      topic: dlqTopic,
+      error: error.message,
+    });
+
+  } catch (dlqErr: any) {
+    // DLQ publish failed — this is the last resort
+    // Log everything so nothing is silently lost
+    logger.error("CRITICAL: Failed to send event to DLQ — Kafka circuit open", {
+      eventId: envelope.event.eventId,
+      originalTopic: baseTopic,
+      dlqTopic,
+      originalError: error.message,
+      dlqError: dlqErr.message,
+      envelope: JSON.stringify(envelope),
+    });
+    // Don't throw — we've logged everything needed for manual recovery
+  }
 }
-

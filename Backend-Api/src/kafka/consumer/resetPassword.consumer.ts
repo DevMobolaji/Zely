@@ -1,6 +1,5 @@
-import mongoose from "mongoose";
 import { kafka } from "../config/kafka.config";
-import { intIdempotency } from "@/events/idempotency";
+import { initIdempotency, completeIdempotency } from "@/events/idempotency";
 import { TOPICS } from "../config/topics";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
@@ -8,47 +7,74 @@ import { validateWithSchema } from "../schema/zod.helper";
 import { AuthEventSchema } from "../schema/user.schema";
 import { retryOrDLQ } from "./helpers/retry.handler";
 import { resetPasswordProcessor } from "@/events/resetPasswordProcessor.evt";
-
+import {
+  kafkaMessagesProcessedTotal,
+  kafkaMessagesFailedTotal,
+  kafkaProcessingDuration,
+} from "@/infrastructure/resilience/metrics";
 
 const AUTH_PASSWORD_RESET_CONSUMER = "resetPassword-consumer";
 const resetPasswordConsumer = kafka.consumer({ groupId: AUTH_PASSWORD_RESET_CONSUMER });
 
 export async function runPasswordConsumer() {
   await resetPasswordConsumer.connect();
+
   await resetPasswordConsumer.subscribe({
     topic: TOPICS.PASSWORD_EVENTS,
     fromBeginning: false,
   });
 
   await resetPasswordConsumer.run({
-    eachMessage: async ({ topic, message }: { topic: string; message: any }) => {
+    autoCommit: false,
+    eachMessage: async ({ topic, partition, message }: { topic: string; partition: number; message: any }) => {
       if (!message.value) return;
 
-      const rawEvent = JSON.parse(message.value.toString());
+      // ✅ Start timer
+      const timer = kafkaProcessingDuration.startTimer({
+        topic,
+        consumer_group: AUTH_PASSWORD_RESET_CONSUMER,
+      });
 
-      const envelope: RetryEnvelope = rawEvent.meta ? rawEvent : {
-        meta: {
-          retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
-          createdAt: new Date().toISOString(),
-          originalConsumerGroup: AUTH_PASSWORD_RESET_CONSUMER,
-        },
-        event: rawEvent.event ? rawEvent.event : rawEvent,
-      };
+      let envelope: RetryEnvelope;
+      try {
+        const rawEvent = JSON.parse(message.value.toString());
+        envelope = rawEvent.meta ? rawEvent : {
+          meta: {
+            retryCount: Number(message.headers?.["x-retry-count"] ?? 0),
+            createdAt: new Date().toISOString(),
+            originalConsumerGroup: AUTH_PASSWORD_RESET_CONSUMER,
+            originalTopic: topic,
+            processor: "auth",
+          },
+          event: rawEvent.event ? rawEvent.event : rawEvent,
+        };
+      } catch (e) {
+        logger.error("Failed to parse Kafka message", { topic, partition, offset: message.offset });
+        timer();
+        await resetPasswordConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+        return;
+      }
 
-      const session = await mongoose.startSession();
+      const firstTime = await initIdempotency(
+        envelope.event.eventId,
+        topic,
+        AUTH_PASSWORD_RESET_CONSUMER
+      );
+
+      if (firstTime === "SKIP") {
+        kafkaMessagesProcessedTotal.inc({ topic, consumer_group: AUTH_PASSWORD_RESET_CONSUMER });
+        timer();
+        await resetPasswordConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+        return;
+      }
 
       try {
-        session.startTransaction();
-
-        // Idempotency check
-        const firstTime = await intIdempotency(envelope.event.eventId, session, envelope.event.eventType);
-        if (!firstTime) {
-          logger.info("Duplicate retry skipped", { eventId: envelope.event.eventId, topic });
-          await session.commitTransaction();
-          return;
-        }
-
-        // Validate payload
         const validatedEvent = validateWithSchema(AuthEventSchema, envelope.event) as {
           eventId: string;
           eventType: string;
@@ -64,25 +90,48 @@ export async function runPasswordConsumer() {
 
         const validatedEnvelope: RetryEnvelope = {
           meta: envelope.meta,
-          event: validatedEvent, // properly validated event
+          event: validatedEvent,
         };
 
-        await resetPasswordProcessor(topic, validatedEnvelope)
+        await resetPasswordProcessor(topic, validatedEnvelope);
 
-        await session.commitTransaction();
+        await completeIdempotency(
+          envelope.event.eventId,
+          AUTH_PASSWORD_RESET_CONSUMER
+        );
+
+        // ✅ Success metrics
+        kafkaMessagesProcessedTotal.inc({ topic, consumer_group: AUTH_PASSWORD_RESET_CONSUMER });
+        timer();
+
+        await resetPasswordConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+
       } catch (error: any) {
-        if (session.inTransaction()) await session.abortTransaction();
+        // ✅ Failure metrics
+        kafkaMessagesFailedTotal.inc({ topic, consumer_group: AUTH_PASSWORD_RESET_CONSUMER });
+        timer();
 
-        logger.error("Password reset processing failed", { topic, eventId: envelope.event.eventId, error: error.message });
-
-        await retryOrDLQ({
-          topic: envelope.event.eventType,
-          message: envelope,
-          error,
+        logger.error("Password reset processing failed", {
+          topic,
+          eventId: envelope.event.eventId,
+          error: error.message,
         });
-      } finally {
-        await session.endSession();
+
+        await retryOrDLQ({ topic, message: envelope, error });
+
+        await resetPasswordConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
       }
     },
   });
+}
+
+export async function stopPasswordConsumer() {
+  await resetPasswordConsumer.disconnect();
+  logger.info("✅ Password consumer disconnected");
 }
