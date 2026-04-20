@@ -12,7 +12,7 @@ import Controller from '@/config/interfaces/controller.interfaces';
 
 // Infrastructure
 import redis from "@/infrastructure/cache/redis.cli";
-import mongo from "@/config/mongo"
+import mongo from '@/infrastructure/database/mongo'
 import { createBullBoard } from '@bull-board/api';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
@@ -26,9 +26,9 @@ import ErrorMiddleware from '@/shared/middleware/errorHandler';
 
 //KAFKA
 import { startKafkaProducer, shutdownKafkaProducer, setupKafkaTopics } from "@/kafka/config"
-import { runTransferConsumer } from '@/kafka/consumer/transfer.consumer';
-import { reconciliationQueue } from '@/workers/reconcileLedger.worker';
-import { runAuthConsumer } from '@/kafka/consumer/auth.consumer';
+import { isTransferConsumerReady, runTransferConsumer } from '@/kafka/consumer/transfer.consumer';
+//import { reconciliationQueue } from '@/workers/reconcileLedger.worker';
+import { runAuthConsumer, stopAuthConsumer } from '@/kafka/consumer/auth.consumer';
 import { waitForTopicsReady } from '@/kafka/config/waitForTopicsReady';
 import { kafka } from '@/kafka/config/kafka.config';
 import { getKafkaHealthStatus } from '@/kafka/config/kafka.health';
@@ -41,11 +41,16 @@ import { logger } from '@/shared/utils/logger';
 import mongoose from 'mongoose';
 import emailQueue from './queues/email.queue';
 import { requestIdempotencyKey } from '@/shared/middleware/request-idempotency';
-import { runPasswordConsumer } from '@/kafka/consumer/resetPassword.consumer';
-import { runRetryConsumer } from '@/kafka/consumer/retryConsumer';
-import { startDLQSink } from '@/kafka/consumer/dlq.consumer';
-import { runVaultConsumer } from '@/kafka/consumer/vault.consumer';
-import { runProjectionConsumer } from '@/kafka/consumer/projectConsumer';
+import { runPasswordConsumer, stopPasswordConsumer } from '@/kafka/consumer/resetPassword.consumer';
+import { runRetryConsumer, stopRetryConsumer } from '@/kafka/consumer/retryConsumer';
+import { startDLQSink, stopDLQSink } from '@/kafka/consumer/dlq.consumer';
+import { runVaultConsumer, stopVaultConsumer } from '@/kafka/consumer/vault.consumer';
+import { runProjectionConsumer, stopProjectionConsumer } from '@/kafka/consumer/projectConsumer';
+import { runOutboxRouter, stopOutboxRouter } from '@/kafka/config/outboxRouter';
+import { registry } from './resilience';
+import { metricsMiddleware } from '@/shared/middleware/metrics.middleware';
+import { seedFeeConfig } from '@/modules/fee/fee.seeder';
+import ensureSystemLedger from '@/modules/ledger/system ledger/create.system.ledger';
 
 
 
@@ -65,10 +70,11 @@ class App {
         this.initializeSecurityMiddleware();
         this.initializeParsingMiddleware();
         this.initializeLoggingMiddleware();
-        this.initializeBullBoard();
         this.initializeCustomMiddleware();
         this.initializeRoutes(controllers);
         this.initializeHealthChecks();
+        this.initializedMetricsEndpoint();
+        this.initializeBullBoard();
         this.initializeErrorMiddleware();
         this.initializeGracefulShutdown();
     }
@@ -79,7 +85,6 @@ class App {
             await this.connectToMongoDB();
             await this.connectToRedis();
             await this.initializeKafka();
-            await this.initializeBullBoard();
 
             logger.info('✅ All services initialized successfully');
         } catch (error) {
@@ -92,6 +97,12 @@ class App {
         try {
             await mongo.connect();
             logger.info('✅ MongoDB connected successfully');
+
+            await ensureSystemLedger('NGN');
+            logger.info('✅ System accounts ready');
+
+            await seedFeeConfig();
+            logger.info('✅ Fee config ready');
         } catch (error) {
             logger.error('❌ MongoDB connection failed:', error);
             throw new Error('MongoDB connection failed - cannot start application');
@@ -139,7 +150,7 @@ class App {
 
         try {
             createBullBoard({
-                queues: [new BullMQAdapter(emailQueue), new BullMQAdapter(reconciliationQueue)],
+                queues: [new BullMQAdapter(emailQueue) /* Add other queues here */],
                 serverAdapter,
             });
             this.express.use('/admin/queues', serverAdapter.getRouter());
@@ -201,9 +212,9 @@ class App {
     }
 
 
-     // ================================================
-     // LOGGING MIDDLEWARE
-     // ================================================
+    // ================================================
+    // LOGGING MIDDLEWARE
+    // ================================================
 
     private initializeLoggingMiddleware(): void {
         // Morgan HTTP logger
@@ -226,6 +237,7 @@ class App {
      */
 
     private initializeCustomMiddleware(): void {
+        this.express.use(metricsMiddleware); // Metrics middleware should be first to capture all requests
         this.express.use(requestIdMiddleware);
         this.express.use("/transfer", requestIdempotencyKey)
         this.express.use(deviceMiddleware);
@@ -247,6 +259,7 @@ class App {
                 environment: config.app.env,
                 documentation: `/api/${config.app.apiVersion}/docs`,
                 health: '/health',
+                metric: '/metric',
             });
         });
 
@@ -255,6 +268,19 @@ class App {
             this.express.use(`/api/${config.app.apiVersion}`, controller.route);
         });
     }
+
+    private initializedMetricsEndpoint(): void {
+        // In initializeHealthChecks or initializeRoutes
+        this.express.get('/metrics', async (req: Request, res: Response) => {
+            try {
+                res.set('Content-Type', registry.contentType);
+                res.end(await registry.metrics());
+            } catch (err) {
+                res.status(500).end(err);
+            }
+        });
+    }
+
 
     private initializeHealthChecks(): void {
         this.express.get('/health', (req: Request, res: Response) => {
@@ -273,6 +299,7 @@ class App {
                 const mongoHealth = await this.checkMongoHealth();
                 const redisHealth = await redis.getHealthStatus();
                 const kafkaHealth = await getKafkaHealthStatus();
+                const consumerReady = isTransferConsumerReady();
 
                 const health = {
                     success: true,
@@ -281,6 +308,7 @@ class App {
                     uptime: process.uptime(),
                     environment: config.app.env,
                     services: {
+                        transferConsumer: { ready: consumerReady },
                         mongodb: mongoHealth,
                         redis: redisHealth,
                         kafka: kafkaHealth,
@@ -377,95 +405,54 @@ class App {
             }
         });
     }
-
     private initializeGracefulShutdown(): void {
-        const shutdown = async (signal: string, exitCode: number = 0) => {
-            // Prevent multiple shutdown calls
-            if (this.isShuttingDown) {
-                logger.warn('Shutdown already in progress');
-                return;
-            }
-
+        const shutdown = async (signal: string, exitCode = 0) => {
+            if (this.isShuttingDown) return;
             this.isShuttingDown = true;
-
             logger.info(`Received ${signal}. Starting graceful shutdown...`);
 
+            // Hard deadline — no matter what
+            const hardExit = setTimeout(() => {
+                logger.error('Shutdown timed out — forcing exit');
+                process.exit(1);
+            }, 30_000).unref();
+
             try {
-                // Step 1: Stop accepting new requests
                 if (this.server) {
-                    await new Promise<void>((resolve) => {
-                        this.server!.close(() => {
-                            logger.info('✅ HTTP server closed');
-                            resolve();
-                        });
-                    });
-
-                    // Give active requests 30 seconds to complete
-                    setTimeout(() => {
-                        logger.warn('Forcing shutdown after timeout');
-                    }, 30000);
+                    await Promise.race([
+                        new Promise<void>((resolve) => this.server!.close(() => resolve())),
+                        new Promise<void>((_, reject) =>
+                            setTimeout(() => reject(new Error('Server close timeout')), 10_000)
+                        ),
+                    ]);
+                    logger.info('✅ HTTP server closed');
                 }
+                await shutdownKafkaProducer().catch((e) => logger.error('Kafka shutdown error', e));
+                await redis.disconnect().catch((e) => logger.error('Redis shutdown error', e));
+                await mongo.disconnect().catch((e) => logger.error('Mongo shutdown error', e));
 
-                // Step 2: Close Kafka connections (non-critical)
-                try {
-                    await shutdownKafkaProducer();
-                    logger.info('✅ Kafka connections closed');
-                } catch (error) {
-                    logger.error('Error closing Kafka:', error);
-                }
-
-                // Step 3: Close Redis connection
-                try {
-                    await redis.disconnect();
-                    logger.info('✅ Redis connection closed');
-                } catch (error) {
-                    logger.error('Error closing Redis:', error);
-                }
-
-                // Step 4: Close MongoDB connection (LAST)
-                try {
-                    await mongo.disconnect();
-                    logger.info('✅ MongoDB connection closed');
-                } catch (error) {
-                    logger.error('Error closing MongoDB:', error);
-                }
-
-                logger.info('Graceful shutdown completed');
+                clearTimeout(hardExit);
+                logger.info('Graceful shutdown complete');
                 process.exit(exitCode);
-            } catch (error) {
-                logger.error('Error during graceful shutdown', error);
+            } catch (err) {
+                logger.error('Shutdown error', err);
                 process.exit(1);
             }
         };
 
-        // Handle uncaught exceptions
-        process.on('uncaughtException', (error: Error) => {
-            logger.error('[FATAL] Uncaught Exception:', error);
+        process.on('SIGTERM', () => shutdown('SIGTERM'));
+        process.on('SIGINT', () => shutdown('SIGINT'));
+        process.on('uncaughtException', (err) => {
+            logger.error('[FATAL] Uncaught Exception:', err);
+            setTimeout(() => process.exit(1), 5_000).unref();
             shutdown('uncaughtException', 1);
         });
-
-        // Handle unhandled promise rejections
-        process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-            logger.error('[FATAL] Unhandled Rejection:', { reason, promise });
+        process.on('unhandledRejection', (reason) => {
+            logger.error('[FATAL] Unhandled Rejection:', reason);
+            setTimeout(() => process.exit(1), 5_000).unref();
             shutdown('unhandledRejection', 1);
         });
-
-        // Handle SIGTERM (from Docker, Kubernetes, etc.)
-        process.on('SIGTERM', () => {
-            shutdown('SIGTERM', 0);
-        });
-
-        // Handle SIGINT (Ctrl+C)
-        process.on('SIGINT', () => {
-            shutdown('SIGINT', 0);
-        });
-
-        // Handle PM2 graceful reload
-        process.on('message', (msg) => {
-            if (msg === 'shutdown') {
-                shutdown('PM2 shutdown', 0);
-            }
-        });
+        process.on('message', (msg) => { if (msg === 'shutdown') shutdown('PM2'); });
     }
 }
 

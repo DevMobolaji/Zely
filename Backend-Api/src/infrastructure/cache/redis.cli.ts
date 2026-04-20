@@ -1,15 +1,17 @@
 import Redis from 'ioredis';
-import {config} from "@/config/index"
+import { config } from "@/config/index"
 import { logger } from '@/shared/utils/logger';
+import { withRedisBreaker } from '@/infrastructure/resilience/breakers/redis.breaker';
+
 
 class RedisConnection {
     del(redisKey: string) {
-      throw new Error("Method not implemented.");
+        throw new Error("Method not implemented.");
     }
     private client: Redis | null;
     private isConnected: boolean;
 
-    
+
     constructor() {
         this.client = null;
         this.isConnected = false;
@@ -64,10 +66,12 @@ class RedisConnection {
         });
 
         // Graceful shutdown
-        process.on('SIGINT', async () => {
-            await this.disconnect();
-            process.exit(0);
-        });
+        //APP.JS HANDLES THIS NOW
+        // process.on('SIGINT', async () => {
+        //     logger.info('👋 Redis: Received SIGINT, shutting down gracefully...');
+        //     await this.disconnect();
+        //     process.exit(0);
+        // });
     }
 
     public getClient() {
@@ -99,7 +103,7 @@ class RedisConnection {
                 maxRetriesPerRequest: config.redis.maxRetriesPerRequest,
                 enableReadyCheck: config.redis.enableReadyCheck,
                 enableOfflineQueue: config.redis.enableOfflineQueue,
-                connectTimeout: 10000, 
+                connectTimeout: 10000,
                 keepAlive: 30000,
             });
 
@@ -142,61 +146,54 @@ class RedisConnection {
      * Set a value with optional TTL (Time To Live)
      * WHY TTL: Automatic cleanup of old data (sessions, cache)
      */
-    
-    async set(key: string, value: unknown, ttl?: number): Promise<boolean> {
-        if (!key) {
-            throw new Error("Redis key must be a non-empty string");
-        }
 
+    async set(key: string, value: unknown, ttl?: number): Promise<boolean> {
+        if (!key) throw new Error("Redis key must be a non-empty string");
         if (ttl !== undefined && (!Number.isInteger(ttl) || ttl < 0)) {
             throw new Error("TTL must be a non-negative integer");
         }
 
         const stringValue = typeof value === "string" ? value : JSON.stringify(value);
 
-        try {
-            if (ttl !== undefined) {
-                await this.redis.setex(key, ttl, stringValue);
-            } else {
-                await this.redis.set(key, stringValue);
-            }
-            return true;
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            logger.error("❌ Redis set failed:", message);
-            throw error;
-        }
+        return withRedisBreaker(
+            async () => {
+                if (ttl !== undefined) {
+                    await this.redis.setex(key, ttl, stringValue);
+                } else {
+                    await this.redis.set(key, stringValue);
+                }
+                return true;
+            },
+            async () => {
+                logger.warn("Redis circuit open — set operation skipped", { key });
+                return false; // graceful degradation
+            },
+            `set:${key}`
+        );
     }
 
     /**
      * Get a value by key
      */
-    
+
     async get<T = unknown>(key: string, parseJson: boolean = true): Promise<T | string | null> {
-        if (!key) {
-            throw new Error("Redis key must be a non-empty string");
-        }
+        if (!key) throw new Error("Redis key must be a non-empty string");
 
-        try {
-            const value = await this.redis.get(key);
-
-            if (value === null) return null;
-
-            if (parseJson) {
-                try {
-                    return JSON.parse(value) as T;
-                } catch {
-                    // fallback to raw string if parse fails
-                    return value;
+        return withRedisBreaker(
+            async () => {
+                const value = await this.redis.get(key);
+                if (value === null) return null;
+                if (parseJson) {
+                    try { return JSON.parse(value) as T; } catch { return value; }
                 }
-            }
-
-            return value;
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            logger.error("❌ Redis get failed:", message);
-            throw error;
-        }
+                return value;
+            },
+            async () => {
+                logger.warn("Redis circuit open — get operation returning null", { key });
+                return null; // graceful degradation
+            },
+            `get:${key}`
+        ) as Promise<T | string | null>;
     }
 
     /**
@@ -205,14 +202,14 @@ class RedisConnection {
     async delete(key: string): Promise<number> {
         if (!key) throw new Error("Redis key must be a non-empty string");
 
-        try {
-            const result = await this.redis.del(key);
-            return result;
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error('❌ Redis: Delete operation failed:', errorMessage);
-            throw error;
-        }
+        return withRedisBreaker(
+            async () => this.redis.del(key),
+            async () => {
+                logger.warn("Redis circuit open — delete operation skipped", { key });
+                return 0; // graceful degradation
+            },
+            `delete:${key}`
+        );
     }
 
     /**
@@ -310,7 +307,7 @@ class RedisConnection {
     async getHealthStatus() {
         if (!this.client) {
             return { isConnected: false, error: "Redis client not initialized. Call connect() first." };
-          }
+        }
 
         try {
             const info = await this.redis.info();

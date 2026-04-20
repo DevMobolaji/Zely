@@ -1,12 +1,13 @@
 import redisClient from "@/infrastructure/cache/redis.cli";
 import { hashOtp, verifyOtp } from "./hashToken";
-
+import { randomInt } from 'crypto';
+import { isRedisConnectionError } from "@/kafka/consumer/helpers/retry.error";
 
 
 export interface OTPConfig {
-  length?: number;           
-  expiryMinutes?: number;    
-  maxAttempts?: number; 
+  length?: number;
+  expiryMinutes?: number;
+  maxAttempts?: number;
   type?: 'numeric' | 'alphanumeric';
 }
 
@@ -16,6 +17,7 @@ export interface OTPData {
   maxAttempts: number;
   expiresAt: Date;
   createdAt: Date;
+  eventId?: string;
 }
 
 export interface OTPVerifyResult {
@@ -45,17 +47,11 @@ export class OTPManager {
   private generateCode(length: number = 6, type: 'numeric' | 'alphanumeric' = 'numeric'): string {
     if (type === 'alphanumeric') {
       const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-      let code = '';
-      for (let i = 0; i < length; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      return code;
+      return Array.from({ length }, () => chars[randomInt(chars.length)]).join('');
     }
-
-    // Numeric OTP
-    const min = Math.pow(10, length - 1);
-    const max = Math.pow(10, length) - 1;
-    return Math.floor(min + Math.random() * (max - min + 1)).toString();
+    // Numeric — pad to ensure correct length
+    const max = Math.pow(10, length);
+    return randomInt(max).toString().padStart(length, '0');
   }
 
 
@@ -66,17 +62,38 @@ export class OTPManager {
   async create(
     identifier: string,
     purpose: OTPPurpose,
-    config: OTPConfig = {}
-  ): Promise<{ code: string; expiresAt: Date; expiryMinutes: number }> {
+    config: OTPConfig = {},
+    eventId?: string
+  ): Promise<{ code: string; expiresAt: Date; expiryMinutes: number, reused?: boolean }> {
     const {
       length = 6,
       expiryMinutes = 10,
       maxAttempts = 5,
     } = config;
 
+    const redisKey = this.getRedisKey(identifier, purpose);
+
+    // ✅ Idempotency: if OTP already exists for this event, return it as-is
+    if (eventId) {
+      const existing = await this.redis.getClient().get(redisKey);
+      if (existing) {
+        const otpData: OTPData = JSON.parse(existing);
+        if (otpData.eventId === eventId) {
+          // Same event retried — don't create a new OTP, just return placeholder
+          // We can't return the plain code (it's hashed) so caller re-uses email send only
+          return {
+            code: '__REUSED__',
+            expiresAt: new Date(otpData.expiresAt),
+            expiryMinutes,
+            reused: true
+          };
+        }
+      }
+    }
+
+
     const code = this.generateCode(length);
     const hashedOtp = hashOtp(code);
-    const redisKey = this.getRedisKey(identifier, purpose);
     const now = Date.now();
     const expiresAt = new Date(now + expiryMinutes * 60 * 1000);
 
@@ -85,18 +102,23 @@ export class OTPManager {
       attempts: 0,
       maxAttempts,
       expiresAt,
-      createdAt: new Date()
+      createdAt: new Date(),
+      eventId
     };
+
+    console.log("OTPData", otpData)
 
     // Store in Redis with auto-expiry
     const expirySeconds = expiryMinutes * 60;
-    await this.redis.getClient().setex(
-      redisKey,
-      expirySeconds,
-      JSON.stringify(otpData)
-    );
+    const pipeline = this.redis.getClient().pipeline();
 
-    return { code, expiresAt, expiryMinutes };
+    pipeline.setex(redisKey, expirySeconds, JSON.stringify(otpData));        // ✅ hashed OTP
+    pipeline.setex(`${redisKey}:pending`, expirySeconds, code);              // ✅ plain code
+    await pipeline.exec()
+    console.log('CREATE KEY:', redisKey);
+
+    return { code, expiresAt, expiryMinutes, reused: false };
+
   }
 
   async verify(
@@ -105,6 +127,7 @@ export class OTPManager {
     purpose: OTPPurpose
   ): Promise<OTPVerifyResult> {
     const redisKey = this.getRedisKey(identifier, purpose);
+    console.log('VERIFY KEY:', redisKey);
 
     try {
       const data = await this.redis.getClient().get(redisKey);
@@ -115,8 +138,10 @@ export class OTPManager {
         error: 'OTP_NOT_FOUND'
       };
 
+      console.log('VERIFY KEY:', redisKey);
+
       const otpData: OTPData = JSON.parse(data);
-      
+
       // OTP not found or expired
       if (!otpData) {
         return {
@@ -147,8 +172,7 @@ export class OTPManager {
       }
 
       const isOtpValid = await verifyOtp(code, otpData.code);
-      console.log(isOtpValid)
-      
+
       // Verify code
       if (!isOtpValid) {
         // Increment attempts
@@ -180,8 +204,10 @@ export class OTPManager {
       }
 
       // SUCCESS - Delete OTP
-      await this.redis.getClient().del(redisKey);
-      await this.redis.getClient().del(`th`);
+      await this.redis.getClient().pipeline()
+        .del(redisKey)
+        .del(`${redisKey}:pending`)
+        .exec();
 
       return {
         success: true,
@@ -189,6 +215,7 @@ export class OTPManager {
       };
     } catch (error) {
       console.error('OTP verification error:', error);
+      if (isRedisConnectionError(error)) throw error;
       return {
         success: false,
         message: 'Verification failed',
@@ -257,7 +284,7 @@ export class OTPManager {
       }
 
       const otpData: OTPData = JSON.parse(data);
-      
+
       const createdAt = new Date(otpData.createdAt).getTime();
       const now = Date.now();
       const elapsedSeconds = (now - createdAt) / 1000;
@@ -318,7 +345,7 @@ export class OTPManager {
       };
     }
   }
-}   
+}
 
 
 export const OTPConfigs = {

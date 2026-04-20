@@ -49,6 +49,7 @@ const envSchema = z.object({
     RESEND_API_KEY: z.string().optional(),
     EMAIL_FROM: z.string().optional(),
     EMAIL_FROM_NAME: z.string().optional(),
+    TEST_RECIPIENT: z.string().optional(),
 
     // Rate limiting
     RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900_000),
@@ -68,6 +69,7 @@ const envSchema = z.object({
     //CORS
     CORS_ORIGIN: z.string().min(1),
     ALLOWED_DOMAINS: z.string().min(1),
+
 });
 
 
@@ -108,9 +110,9 @@ export const config = {
         maxRetriesPerRequest: env.REDIS_MAX_RETRIES_PER_REQUEST,
         enableReadyCheck: env.REDIS_ENABLE_READY_CHECK,
         enableOfflineQueue: env.REDIS_ENABLE_OFFLINE_QUEUE,
-        hashPrefix: env.HASH_PREFIX,        
+        hashPrefix: env.HASH_PREFIX,
         latestPrefix: env.LATEST_PREFIX,
-        userDevicesPrefix: env.DEVICES_PREFIX 
+        userDevicesPrefix: env.DEVICES_PREFIX
 
     },
 
@@ -150,8 +152,10 @@ export const config = {
             apiKey: env.RESEND_API_KEY,
             from: env.EMAIL_FROM ?? "noreply@fintech.local",
             fromName: env.EMAIL_FROM_NAME ?? "Fintech",
+            testRecipient: env.TEST_RECIPIENT ?? "",
         }
         : null,
+
 
     logging: {
         level: env.LOG_LEVEL,
@@ -165,6 +169,8 @@ export const config = {
     },
 
     pepper: env.PEPPER
+
+
 } as const;
 
 /* =========================

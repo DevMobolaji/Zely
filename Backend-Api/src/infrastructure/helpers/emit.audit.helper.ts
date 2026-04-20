@@ -32,7 +32,23 @@ export const emitOutboxEvent = async ({ topic, eventId, eventType, action, statu
           eventType,
           action,
           status,
-          payload,
+          payload: JSON.stringify({
+            meta: {
+              retryCount: 0,
+              createdAt: new Date().toISOString(),
+              version,
+            },
+            event: {
+              eventId,
+              eventType,
+              aggregateId,
+              aggregateType,
+              payload,         // your actual business data
+              context,
+              occurredAt: new Date().toISOString(),
+              version,
+            },
+          }),
           context,
           aggregateId,
           aggregateType,
