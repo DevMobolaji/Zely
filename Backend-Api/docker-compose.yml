@@ -1,11 +1,43 @@
 services:
+  # ─── Zely API ───────────────────────────────────────
+  zely-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zely-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    depends_on:
+      - mongo1
+      - mongo2
+      - mongo3
+      - redis
+      - kafka
+    networks:
+      - zely_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+
+
+  # ─── Kafka ──────────────────────────────────────────
   kafka:
     image: apache/kafka:latest
     container_name: zely
+    hostname: kafka
+    user: root
     ports:
-      - "9094:9094" # External access (Node app)
-      - "9092:9092" # Internal Docker network (kafka-ui)
-      - "9093:9093" # Controller
+      - "9094:9094"
+      - "9092:9092"
+      - "9093:9093"
     volumes:
       - ./server.properties:/opt/kafka/config/kraft/server.properties:ro
     command: >
@@ -14,7 +46,10 @@ services:
         /opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
       "
     restart: unless-stopped
+    networks:
+      - zely_network
 
+  # ─── Kafka UI ───────────────────────────────────────
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: zely-ui
@@ -22,82 +57,286 @@ services:
       - "8080:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: fintech-cluster
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9094
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_KRAFT_MODE: "true"
     depends_on:
       - kafka
+    networks:
+      - zely_network
+
+  # ─── MongoDB Replica Set ────────────────────────────
+  mongo1:
+    user: "999:999"
+    image: mongo:7.0
+    container_name: mongo1
+    restart: always
+    ports:
+      - "127.0.0.1:27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    command: mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo-keyfile --maxConns 1000
+    volumes:
+      - mongo1_data:/data/db
+      - ./keyfile:/etc/mongo-keyfile:ro
+    networks:
+      - zely_network
+
+  mongo2:
+    image: mongo:7.0
+    container_name: mongo2
+    restart: always
+    ports:
+      - "127.0.0.2:27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    command: mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo-keyfile --maxConns 1000
+    volumes:
+      - mongo2_data:/data/db
+      - ./keyfile:/etc/mongo-keyfile:ro
+    networks:
+      - zely_network
+
+  mongo3:
+    image: mongo:7.0
+    container_name: mongo3
+    restart: always
+    ports:
+      - "127.0.0.3:27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    command: mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo-keyfile --maxConns 1000
+    volumes:
+      - mongo3_data:/data/db
+      - ./keyfile:/etc/mongo-keyfile:ro
+    networks:
+      - zely_network
+
+  # ─── Debezium ───────────────────────────────────────
+  debezium:
+    image: debezium/connect:2.5
+    container_name: zely-debezium
+    restart: unless-stopped
+    depends_on:
+      - kafka
+      - mongo1
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: zely-debezium-group
+      CONFIG_STORAGE_TOPIC: zely_debezium_configs
+      OFFSET_STORAGE_TOPIC: zely_debezium_offsets
+      STATUS_STORAGE_TOPIC: zely_debezium_status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    networks:
+      - zely_network
+
+  # ─── Redis ──────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: zely-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - zely_network
+
+  # ─── Debezium Connector Init ─────────────────────────
+  debezium-init:
+    image: curlimages/curl:latest
+    container_name: zely-debezium-init
+    restart: "no"
+    depends_on:
+      - debezium
+    networks:
+      - zely_network
+    environment:
+      MONGO_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo '⏳ Waiting for Debezium...'
+        until curl -s -o /dev/null -w '%{http_code}' http://debezium:8083/connectors | grep -q '200'; do
+          echo 'Retrying...'
+          sleep 5
+        done
+        echo '✅ Debezium ready!'
+        curl -s -X DELETE http://debezium:8083/connectors/mongo-outbox-connector || true
+        sleep 2
+        cat > /tmp/connector.json << ENDJSON
+        {
+          "name": "mongo-outbox-connector",
+          "config": {
+            "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+            "mongodb.connection.string": "mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0&authSource=admin",
+            "mongodb.name": "zely_app_cluster",
+            "topic.prefix": "outbox",
+            "database.include.list": "zely_app",
+            "collection.include.list": "zely_app.outboxevents",
+            "capture.mode": "change_streams_update_full",
+            "snapshot.mode": "never",
+            "transforms": "unwrap",
+            "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
+            "transforms.unwrap.drop.tombstones": "false",
+            "transforms.unwrap.delete.handling.mode": "drop",
+            "transforms.unwrap.sanitize.field.names": "false",
+            "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+            "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+            "value.converter.schemas.enable": "false",
+            "errors.tolerance": "none",
+            "errors.log.enable": "true",
+            "errors.log.include.messages": "true"
+          }
+        }
+        ENDJSON
+        curl -s -X POST http://debezium:8083/connectors \
+          -H "Content-Type: application/json" \
+          -d @/tmp/connector.json > /dev/null &&
+        echo '✅ Connector registered!'
+
+  # ─── Prometheus ─────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: zely-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+    networks:
+      - zely_network
+
+  # ─── Grafana ────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: zely-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_DOMAIN: localhost
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    networks:
+      - zely_network
+
+# ─── Push Gateway ────────────────────────────────────────
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: zely-pushgateway
+    restart: unless-stopped
+    ports:
+      - "9091:9091"
+    networks:
+      zely_network:
+          aliases:
+            - pushgateway
 
 
-      # version: "3.9"
+    # ─── Email Worker ────────────────────────────────────
+  zely-email-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zely-email-worker
+    restart: unless-stopped
+    healthcheck:
+      disable: true 
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    command: ["node", "dist/workers/email.worker.js"]
+    depends_on:
+      - mongo1
+      - redis
+      - kafka
+    networks:
+      - zely_network
 
-# services:
-#   kafka:
-#     image: apache/kafka:latest
-#     container_name: zely-kafka
-#     ports:
-#       - "9094:9094" # External access (Node app)
-#       - "9092:9092" # Internal Docker network
-#       - "9093:9093" # Controller
-#     volumes:
-#       - ./server.properties:/opt/kafka/config/kraft/server.properties:ro
-#     command: >
-#       sh -c "
-#         /opt/kafka/bin/kafka-storage.sh format
-#         --ignore-formatted
-#         --cluster-id ISD9nLq1QYq9v9xJf9J3PA
-#         --config /opt/kafka/config/kraft/server.properties &&
-#         /opt/kafka/bin/kafka-server-start.sh
-#         /opt/kafka/config/kraft/server.properties
-#       "
-#     restart: unless-stopped
 
-#   mongo:
-#     image: mongo:6.0
-#     container_name: zely-mongo
-#     command:
-#       [
-#         "--replSet",
-#         "rs0",
-#         "--bind_ip_all",
-#         "--unixSocketPrefix="
-#       ]
-#     ports:
-#       - "27017:27017"
-#     volumes:
-#       - mongo_data:/data/db
-#     restart: unless-stopped
+   # ─── Email Poller ────────────────────────────────────
+  zely-email-poller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zely-email-poller
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    command: ["node", "dist/workers/email.poller.js"]
+    depends_on:
+      - mongo1
+      - redis
+      - kafka
+    networks:
+      - zely_network
 
-#   connect:
-#     image: debezium/connect:2.5
-#     container_name: zely-connect
-#     depends_on:
-#       - kafka
-#       - mongo
-#     ports:
-#       - "8083:8083"
-#     environment:
-#       BOOTSTRAP_SERVERS: kafka:9092
-#       GROUP_ID: connect-cluster
-#       CONFIG_STORAGE_TOPIC: connect_configs
-#       OFFSET_STORAGE_TOPIC: connect_offsets
-#       STATUS_STORAGE_TOPIC: connect_statuses
-#     volumes:
-#       - ./mongo-outbox-connector.json:/connector.json
-#     restart: unless-stopped
 
-#   kafka-ui:
-#     image: provectuslabs/kafka-ui:latest
-#     container_name: zely-ui
-#     ports:
-#       - "8080:8080"
-#     environment:
-#       KAFKA_CLUSTERS_0_NAME: fintech-cluster
-#       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-#       KAFKA_CLUSTERS_0_KRAFT_MODE: "true"
-#     depends_on:
-#       - kafka
-#     restart: unless-stopped
+  # ─── Outbox Worker ───────────────────────────────────
+  zely-outbox-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zely-outbox-worker
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    command: ["node", "dist/workers/outbox.worker.js"]
+    depends_on:
+      - mongo1
+      - redis
+      - kafka
+    networks:
+      - zely_network
 
-# volumes:
-#   mongo_data:
+volumes:
+  mongo1_data:
+  mongo2_data:
+  mongo3_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
 
+networks:
+  zely_network:
+    driver: bridge

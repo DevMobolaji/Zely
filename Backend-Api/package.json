@@ -5,9 +5,11 @@
   "main": "index.js",
   "scripts": {
     "start": "nodemon -r tsconfig-paths/register src/index.ts",
-    "worker:outbox": "ts-node -r tsconfig-paths/register src/workers/index.ts",
+    "build": "tsc --project tsconfig.json && tsc-alias -p tsconfig.json",
+    "start:prod": "pm2-runtime ecosystem.config.js",
+    "worker:poller": "ts-node -r tsconfig-paths/register src/workers/email.poller.ts",
     "worker:email": "ts-node -r tsconfig-paths/register src/workers/email.worker.ts",
-    "worker:reconcile": "ts-node -r tsconfig-paths/register src/workers/reconcileLedger.worker.ts",
+    "worker:outbox": "ts-node -r tsconfig-paths/register src/workers/outbox.worker.ts",
     "run-migrations": "ts-node -r tsconfig-paths/register src/db/runMigration.ts"
   },
   "keywords": [],
@@ -16,9 +18,11 @@
   "dependencies": {
     "@bull-board/api": "^6.16.2",
     "@bull-board/express": "^6.16.2",
+    "argon2": "^0.44.0",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.66.4",
     "chalk": "^5.6.2",
+    "cockatiel": "^3.2.1",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -39,6 +43,7 @@
     "nanoid": "^5.1.6",
     "nodemon": "^3.1.11",
     "pg": "^8.16.3",
+    "prom-client": "^15.1.3",
     "redis": "^5.9.0",
     "resend": "^6.6.0",
     "ts-node": "^10.9.2",
@@ -71,6 +76,7 @@
     "grpc-tools": "^1.13.1",
     "grpc_tools_node_protoc_ts": "^5.3.3",
     "ioredis": "^5.8.2",
-    "node": "^25.2.1"
+    "node": "^25.2.1",
+    "tsc-alias": "^1.8.16"
   }
 }

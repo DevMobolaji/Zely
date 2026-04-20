@@ -7,6 +7,7 @@ yarn.lock
 .env
 .env.local
 .env.*.local
+.env.production
 
 # Logs
 logs/
@@ -58,3 +59,11 @@ dump.rdb
 # Misc
 .cache/
 .parcel-cache/
+
+# MongoDB keyfile (contains secrets)
+keyfile
+
+# Debezium connector init script (contains credentials)
+init-connectors.sh
+
+mongo-outbox-connector.json

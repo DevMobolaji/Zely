@@ -2,26 +2,31 @@
   "name": "mongo-outbox-connector",
   "config": {
     "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
-
-    "mongodb.connection.string": "mongodb://mongo:27017/?replicaSet=rs0",
-    "mongodb.name": "mongo",
-
-    "database.include.list": "auth",
-    "collection.include.list": "auth.outboxevents",
-
+    "mongodb.connection.string": "mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0&authSource=admin",
+    "mongodb.name": "zely_app_cluster",
     "topic.prefix": "outbox",
-
+    "database.include.list": "zely_app",
+    "collection.include.list": "zely_app.outboxevents",
     "capture.mode": "change_streams_update_full",
-
+    "snapshot.mode": "never",
     "transforms": "unwrap",
-    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
-    "transforms.unwrap.drop.tombstones": "true",
+    "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
+    "transforms.unwrap.drop.tombstones": "false",
     "transforms.unwrap.delete.handling.mode": "drop",
-
-    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "key.converter.schemas.enable": false,
-
+    "transforms.unwrap.sanitize.field.names": "false",
+    "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+    "transforms.outbox.route.by.field": "topic",
+    "transforms.outbox.route.topic.replacement": "${routedByValue}",
+    "transforms.outbox.table.field.event.id": "eventId",
+    "transforms.outbox.table.field.event.key": "aggregateId",
+    "transforms.outbox.table.field.event.payload": "payload",
+    "transforms.outbox.table.field.event.timestamp": "occurredAt",
+    "transforms.outbox.expand.json.payload": "true",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
     "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "value.converter.schemas.enable": false
+    "value.converter.schemas.enable": "true",
+    "errors.tolerance": "none",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
   }
 }
