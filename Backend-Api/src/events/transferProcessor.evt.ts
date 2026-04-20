@@ -1,68 +1,189 @@
-
 import mongoose from "mongoose";
-import emailQueue from "@/infrastructure/queues/email.queue";
 import { logger } from "@/shared/utils/logger";
 import { PermanentError, TransientError } from "@/kafka/consumer/helpers/retry.error";
+import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
+import { producer } from "@/kafka/config/kafka.config";
+import { TOPICS } from "@/kafka/config/topics";
+import { EmailOutboxModel } from "@/kafka/emails/email.Outbox";
 
 
-interface TransferEmailJobData {
-  email: string;
-  name: string;
-  amount: number;
-  currency: string;
-  fromUserEmail: string;
-  fromUserId: string;
-  toUserId: string;
-  fromAccountType: string,
-  toAccountType: string,
-  fromAccountLast4: string,
-  toAccountLast4: string,
-  previousBalance: number;
-  currentBalance: number;
-  toPreviousBalance: number,
-  toCurrentBalance: number,
-  referenceId: string;
-  referenceType: string;
-  transactionRef: string;
-  type: string;
-  transferType: string
-  transactionId: string
+/** -------------------------
+ * PUBLISH TO CONFIRMED TOPIC
+ * Retries inline with exponential backoff.
+ * Only routes to DLQ after exhausting all attempts.
+ * ------------------------- */
+
+import { withKafkaBreaker } from '@/infrastructure/resilience/breakers/kafka.breaker';
+import { kafkaMessagesProcessedTotal } from '@/infrastructure/resilience/metrics';
+
+export async function publishConfirmedEvent(
+  envelope: RetryEnvelope,
+  maxAttempts = 3,
+  baseDelayMs = 300
+): Promise<void> {
+  const key = envelope.event.eventId || "unknown";
+  const value = JSON.stringify(envelope);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await withKafkaBreaker(async () => {
+        await producer.send({
+          topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
+          messages: [
+            {
+              key,
+              value,
+              headers: {
+                "x-source-topic": TOPICS.TRANSACTION_EVENTS,
+              },
+            },
+          ],
+        });
+      }, 'publishConfirmedEvent');
+
+      kafkaMessagesProcessedTotal.inc({
+        topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
+        consumer_group: 'transfer-producer',
+      });
+
+      logger.info("Event published to confirmed.transfer.events", {
+        eventId: envelope.event.eventId,
+      });
+      return;
+
+    } catch (err: any) {
+      const isLastAttempt = attempt === maxAttempts;
+
+      if (isLastAttempt) {
+        logger.error("Failed to publish confirmed event after all attempts", {
+          eventId: envelope.event.eventId,
+          error: err.message,
+        });
+        // Don't throw — outbox pattern guarantees eventual delivery
+        // Debezium will pick up the outbox record and route it when Kafka recovers
+        return;
+      }
+
+      const delay = baseDelayMs * 2 ** (attempt - 1);
+      logger.warn(`Publish attempt ${attempt} failed, retrying in ${delay}ms`, {
+        eventId: envelope.event.eventId,
+        error: err.message,
+      });
+      await new Promise((res) => setTimeout(res, delay));
+    }
+  }
+}
+/** -------------------------
+ * WRITE TO EMAIL OUTBOX
+ * Writes email intent to MongoDB inside the caller's session.
+ * The poller picks it up and dispatches to BullMQ.
+ * jobId unique constraint prevents duplicate outbox records on replay.
+ * ------------------------- */
+
+async function writeToEmailOutbox(
+  {
+    jobName,
+    payload,
+    jobId,
+    eventId,
+    transactionRef,
+    aggregateType,
+    envelope,
+  }: {
+    jobName: string;
+    payload: Record<string, any>;
+    jobId: string;
+    eventId: string;
+    transactionRef?: string;
+    aggregateType: string;
+    envelope: RetryEnvelope;
+  },
+  session: mongoose.ClientSession
+): Promise<void> {
+  try {
+    await EmailOutboxModel.create(
+      [
+        {
+          jobName,
+          payload,
+          jobId,
+          eventId,
+          transactionRef,
+          aggregateType,
+          envelope,
+          status: "PENDING",
+        },
+      ],
+      { session }
+    );
+  } catch (err: any) {
+    // Duplicate jobId — outbox record already exists from a previous attempt
+    // This is safe to skip — the poller will dispatch it
+    if (err.code === 11000) {
+      logger.warn("Email outbox record already exists, skipping", {
+        jobId,
+        eventId,
+      });
+      return;
+    }
+    throw err;
+  }
 }
 
+/** -------------------------
+ * PROCESS TRANSFER EVENTS
+ * ------------------------- */
 export async function processTransferEvents(
   topic: string,
-  envelope: any,
-  session: mongoose.ClientSession) {
+  envelope: RetryEnvelope,
+  session: mongoose.ClientSession
+) {
+  const { payload, version, eventType, eventId } = envelope.event as any;
+  const {
+    transactionRef,
+    sender,
+    receiver,
+    amount,
+    currency,
+    transferType,
+    referenceId,
+  } = payload;
 
-  const { payload, version, eventType } = envelope.event;
-  const { transactionRef, sender, receiver, amount, currency, transferType, referenceId } = payload
+  /** -------------------------
+   * GUARDS
+   * ------------------------- */
+  if (version !== 1) {
+    throw new PermanentError(`Unsupported event version: ${version}`);
+  }
 
-    if (version !== 1) {
-      throw new PermanentError(`Unsupported event version: ${version}`);
-    }
+  if (!topic.startsWith("transaction.")) {
+    throw new PermanentError(`Unsupported topic: ${topic}`);
+  }
 
-    if (!topic.startsWith("transaction.")) {
-      throw new PermanentError(`Unsupported topic: ${topic}`);
-    }
+  if (!transactionRef || !sender || !receiver || !amount || !currency) {
+    throw new PermanentError(`Missing required fields for ${eventType}`);
+  }
 
-    if (!transactionRef || !sender || !receiver || !amount || !currency) {
-      throw new PermanentError(`Missing required field for TRANSFER_COMPLETED`);
-    }
+  if (amount === 5) {
+    throw new TransientError("Simulated transient error for testing retries");
+  }
 
-    if (amount === 500) {
-      throw new TransientError("Simulating transient Error")
-    }
+  /** -------------------------
+   * EVENT ROUTING
+   * ------------------------- */
+  switch (eventType) {
+    case "TRANSACTION_COMPLETED": {
+      const jobId = `${transactionRef}:${eventType}`;
 
-
-    switch (eventType) {
-      case "TRANSACTION_COMPLETED":
-        try {
-          if (transferType === "INTERNAL_TRANSFER") {
-            await emailQueue.add('transferCompleted', {
+      if (transferType === "INTERNAL_TRANSFER") {
+        await writeToEmailOutbox(
+          {
+            jobName: "transferCompleted",
+            payload: {
               email: receiver.email,
               name: receiver.name,
-              amount: amount as number,
-              currency: currency,
+              amount,
+              currency,
               fromUserEmail: sender.email,
               fromUserId: sender.userId,
               fromAccountType: sender.accountType,
@@ -74,17 +195,30 @@ export async function processTransferEvents(
               toPreviousBalance: receiver.previousBalance,
               toCurrentBalance: receiver.currentBalance,
               transactionId: transactionRef,
-              referenceId: referenceId,
+              referenceId,
               referenceType: transferType,
-              transactionRef: transactionRef,
+              transactionRef,
               type: "INTERNAL_TRANSFER",
-              transferType: payload.transferType
-            } as TransferEmailJobData);
+              transferType,
+            },
+            jobId,
+            eventId,
+            transactionRef,
+            aggregateType: "TRANSFER",
+            envelope,
+          },
+          session
+        );
 
-            logger.info("Internal Transfer completed successfully");
-          } else if (transferType === "P2P_TRANSFER") {
-            // For sender
-            await emailQueue.add("sendTransferEmail", {
+        logger.info("Internal transfer email written to outbox", {
+          transactionRef,
+        });
+      } else if (transferType === "P2P_TRANSFER") {
+        // Sender email
+        await writeToEmailOutbox(
+          {
+            jobName: "sendTransferEmail",
+            payload: {
               recipientEmail: sender.email,
               recipientName: sender.name,
               amount,
@@ -100,11 +234,22 @@ export async function processTransferEvents(
               toAccountType: receiver.accountType,
               toAccountLast4: receiver.accountNumber.slice(-4),
               senderEmail: sender.email,
-              senderName: sender.name
-            });
+              senderName: sender.name,
+            },
+            jobId: `${jobId}:sender`,
+            eventId,
+            transactionRef,
+            aggregateType: "TRANSFER",
+            envelope,
+          },
+          session
+        );
 
-            // For receiver
-            await emailQueue.add("sendTransferEmail", {
+        // Receiver email
+        await writeToEmailOutbox(
+          {
+            jobName: "sendTransferEmail",
+            payload: {
               recipientEmail: receiver.email,
               recipientName: receiver.name,
               amount,
@@ -112,7 +257,7 @@ export async function processTransferEvents(
               previousBalance: receiver.previousBalance,
               currentBalance: receiver.currentBalance,
               transactionId: transactionRef,
-              referenceId: referenceId,
+              referenceId,
               type: "CREDIT",
               transferType,
               fromAccountType: sender.accountType,
@@ -120,47 +265,54 @@ export async function processTransferEvents(
               toAccountType: receiver.accountType,
               toAccountLast4: receiver.accountNumber.slice(-4),
               senderEmail: sender.email,
-              senderName: sender.name
-            });
+              senderName: sender.name,
+            },
+            jobId: `${jobId}:receiver`,
+            eventId,
+            transactionRef,
+            aggregateType: "TRANSFER",
+            envelope,
+          },
+          session
+        );
 
-            logger.info("P2P transfer completed successfully");
-          }
+        logger.info("P2P transfer emails written to outbox");
+      } else {
+        throw new PermanentError(`Unsupported transferType: ${transferType}`);
+      }
 
-          logger.info("Transfer completed notification sent");
-        } catch (err: any) {
-          if (err instanceof PermanentError || err instanceof TransientError) {
-            throw err;
-          }
-          throw new TransientError(`Provisioning failed: ${err.message}`);
-        }
+      logger.info("Transfer event processing complete", { transactionRef });
+      break;
+    }
 
-        break;
-
-      case "TRANSFER_FAILED": 
-        try {
-          // 🔹 Send failure notification
-          await emailQueue.add("transferFailed", {
+    case "TRANSFER_FAILED": {
+      await writeToEmailOutbox(
+        {
+          jobName: "transferFailed",
+          payload: {
             transactionRef,
             reason: payload.reason,
             type: "TRANSFER_FAILED",
-          });
+          },
+          jobId: `${transactionRef}:${eventType}`,
+          eventId,
+          transactionRef,
+          aggregateType: "TRANSFER",
+          envelope,
+        },
+        session
+      );
 
-          logger.warn("Transfer failed notification sent", {
-            transactionRef,
-            reason: payload.reason,
-          });
-        } catch (error: any) {
-          logger.error("Failed to resend verification OTP", {
-            topic,
-            email: payload.email,
-            error: error instanceof Error ? error.message : error,
-          });
+      logger.warn("Transfer failed email written to outbox", {
+        transactionRef,
+        reason: payload.reason,
+      });
 
-          throw error
-        }
-
-      default:
-        throw new PermanentError(`Unhandled eventType: ${eventType}`);
+      // ✅ No publish to confirmed topic — failed transfers have nothing to project
+      break;
     }
-  }
 
+    default:
+      throw new PermanentError(`Unhandled eventType: ${eventType}`);
+  }
+}

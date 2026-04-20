@@ -48,48 +48,70 @@ export const initFailedEvents = async () => {
 };
 
 
-export const intIdempotency = async (
+// idempotency.ts
+
+export const initIdempotency = async (
   eventId: string,
-  session: mongoose.ClientSession | null,
   topic?: string,
   consumerGroup?: string
-): Promise<"PROCESSED" | "SKIP"> => {
+): Promise<"PROCESSED" | "SKIP" | "RETRY"> => {
   const collection = await initProcessedEvents();
+  if (!consumerGroup) throw new Error("consumerGroup is required");
 
-  if (!consumerGroup) {
-    throw new Error("consumerGroup is required for idempotency");
-  }
-
+  // ✅ Insert OUTSIDE the transaction — no session here
   try {
-    await collection.insertOne(
-      {
-        eventId,
-        topic,
-        consumerGroup,
-        status: "COMPLETED",
-        processedAt: new Date(),
-        updatedAt: new Date(),
-      },
-      session ? { session } : undefined
-    );
+    await collection.insertOne({
+      eventId,
+      topic,
+      consumerGroup,
+      status: "PROCESSING",
+      processedAt: new Date(),
+      updatedAt: new Date(),
+    });
     return "PROCESSED";
   } catch (err: any) {
     if (err.code !== 11000) throw err;
 
-    const existing = await collection.findOne(
-      { eventId, consumerGroup },
-      session ? { session } : undefined
-    )
+    // ✅ Find OUTSIDE the transaction too
+    const existing = await collection.findOne({ eventId, consumerGroup });
 
     if (!existing) return "PROCESSED";
 
-    if (existing.status === "COMPLETED") {
-      return "SKIP"; 
+    if (existing.status === "COMPLETED") return "SKIP";
+
+    if (existing.status === "PROCESSING") {
+      const ageMs = Date.now() - existing.updatedAt.getTime();
+      const STALE_THRESHOLD_MS = 2 * 1000;
+
+      if (ageMs > STALE_THRESHOLD_MS) {
+        // Stale — take ownership
+        await collection.updateOne(
+          { eventId, consumerGroup },
+          { $set: { status: "PROCESSING", updatedAt: new Date() } }
+        );
+        return "RETRY";
+      }
+
+      // Fresh PROCESSING — another instance handling it
+      return "SKIP";
     }
 
-    // PROCESSING → possible crash scenario
-    return "SKIP"; // or implement stale logic if needed
+    return "SKIP";
   }
 };
 
+// ✅ Complete OUTSIDE the transaction too
+export const completeIdempotency = async (
+  eventId: string,
+  consumerGroup: string,
+  retryTopic?: string,
+): Promise<void> => {
+  const collection = await initProcessedEvents();
+
+  await collection.updateOne(
+    { eventId, consumerGroup },
+    { $set: { status: "COMPLETED", retryTopic, updatedAt: new Date() } }
+    // ✅ No session — outside the transaction
+  );
+};
 

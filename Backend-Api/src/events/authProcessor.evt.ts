@@ -8,13 +8,14 @@ import { generateAccountNumber } from "@/shared/utils/id.generator";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import { logger } from "@/shared/utils/logger";
-import { PermanentError, TransientError } from "@/kafka/consumer/helpers/retry.error";
+import { isBullQueueError, isPermanentBusinessError, isRedisConnectionError, PermanentError, TransientError } from "@/kafka/consumer/helpers/retry.error";
 import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
 import { OTPConfigs, OTPPurpose } from "@/config/otp.manager";
 import OTPManager from "@/config/otp.manager";
 import redis from "@/infrastructure/cache/redis.cli";
 import emailQueue from "@/infrastructure/queues/email.queue";
 import { sendToDLQ } from "@/kafka/producer/sendToDlq";
+import redisClient from "@/infrastructure/cache/redis.cli";
 
 
 import crypto from "crypto";
@@ -33,11 +34,10 @@ export const deriveOutboxEventId = (
   return `EVT_${hash}`;
 };
 
-
 export async function processAuthEvent(
   topic: string,
   envelope: RetryEnvelope,
-  session: mongoose.ClientSession
+  session: mongoose.ClientSession,
 ) {
   const { eventId, payload, version, eventType } = envelope.event;
 
@@ -50,51 +50,71 @@ export async function processAuthEvent(
   }
 
   const otpManager = new OTPManager(redis)
+
   switch (eventType) {
-    case "USER_REGISTER_SUCCESS":
-      try {
-        const { code } = await otpManager.create(
+    case "USER_REGISTER_SUCCESS": {
+      const otpManager = new OTPManager(redis);
+
+      let otpCode: string;
+
+      const { code, reused } = await otpManager.create(
+        payload.email,
+        OTPPurpose.EMAIL_VERIFICATION,
+        OTPConfigs.emailVerification,
+        eventId
+      );
+
+      console.log(code, reused)
+
+      if (reused && code === '__REUSED_NO_CODE__') {
+        logger.warn(`[v${version}] Pending OTP expired, creating fresh`, { email: payload.email });
+        const fresh = await otpManager.create(
           payload.email,
           OTPPurpose.EMAIL_VERIFICATION,
           OTPConfigs.emailVerification
         );
-
-        await emailQueue.add("sendVerification", {
-          email: payload.email,
-          name: payload.name,
-          otp: code,
-          type: "VERIFICATION",
-        });
-
-        logger.info(`[v${version}] Verification email sent`);
-
-      } catch (err: any) {
-        // Handle transient errors (Redis/Queue connection issues)
-        const isConnectionError =
-          err.message?.includes('Redis') ||
-          err.message?.includes('ECONNREFUSED') ||
-          err.message?.includes('Queue') ||
-          err.code === 'ECONNREFUSED';
-
-        if (isConnectionError) {
-          // Temporary issue → retry
-          throw new TransientError(err.message);
-        }
-
-        // Handle permanent errors (validation/business logic errors)
-        const isPermanentError =
-          err.message?.includes('Invalid email') ||
-          err.message?.includes('User not found');
-
-        if (isPermanentError) {
-          await sendToDLQ(topic, payload, err);
-          logger.error("Permanent error sending verification email", { userId: payload.userId, error: err.message });
-          return;
-        }
-
-        throw new TransientError(err.message);
+        otpCode = fresh.code;
+      } else {
+        otpCode = code;
       }
+
+      await emailQueue.add(
+        "sendVerification",
+        { email: payload.email, name: payload.name, otp: otpCode, type: "VERIFICATION" },
+        { attempts: 3, backoff: { type: 'exponential', delay: 2000 } }
+      );
+
+      logger.info(`[v${version}] Verification email queued`, { email: payload.email });
       break;
+    }
+
+    case "USER_EMAIL_RESEND_SUCCESS": {
+      const otpManager = new OTPManager(redis);
+
+      const result = await otpManager.resend(
+        payload.email,
+        OTPPurpose.EMAIL_VERIFICATION,
+        OTPConfigs.emailVerification,
+        60
+      );
+
+      if (!result.success) {
+        logger.info("OTP resend blocked by cooldown", {
+          email: payload.email,
+          waitSeconds: result.waitSeconds,
+        });
+        return;
+      }
+
+      await emailQueue.add(
+        "sendVerification",
+        { email: payload.email, name: payload.name, otp: result.code, type: "VERIFICATION" },
+        { attempts: 3, backoff: { type: 'exponential', delay: 2000 } }
+      );
+
+      logger.info(`[v${version}] Verification OTP resent`, { email: payload.email });
+      break;
+    }
     case "USER_VERIFY_EMAIL_SUCCESS":
       try {
 
@@ -262,7 +282,6 @@ export async function processAuthEvent(
         }
         throw new TransientError(`Provisioning failed: ${err.message}`);
       }
-      break;
 
     case "USER_EMAIL_RESEND_SUCCESS":
       try {
