@@ -1,7 +1,4 @@
-// ─── Registry must be created before ANY other import ────────────────────────
-// prom-client registers metrics at module load time. If any imported module
-// touches the shared registry from metrics.ts, those metrics bleed in here.
-// Creating the registry first and never importing metrics.ts prevents this.
+
 import { Registry, Counter, Histogram, Gauge, Pushgateway } from "prom-client";
 const workerRegistry = new Registry();
 
