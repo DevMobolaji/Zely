@@ -27,16 +27,26 @@ import redis from "@/infrastructure/cache/redis.cli";
 import { emailQueue } from "@/infrastructure/queues/email.queue";
 import { accountStatus } from "./authinterface";
 
-import OTPManager, { OTPConfigs, OTPPurpose } from "@/config/otp.manager";
+import OTPManager, { OTPConfigs, OTPPurpose } from "@/modules/helpers/otp.manager"
 import { invalidateAllUsrSess, isPasswordInHistory, storeResetMetadata } from "../helpers/auth.helpers";
 import { markOldTokenForDeletionAfter } from "@/infrastructure/helpers/markOld";
 import { NotFoundError } from "@/shared/errors/notFoundError";
 import { deriveOutboxEventId } from "@/events/authProcessor.evt";
 
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import { PasswordResetTokenModel } from "@/infrastructure/helpers/psdtoken.model";
+import { logger } from "@/shared/utils/logger";
+import { config } from "@/config/index";
+
+
+
+
 class userService {
 
     private userModel = User
-    private otpManager = new OTPManager(redis)
+    private otpManager = new OTPManager()
+    private static readonly RESET_TOKEN_TTL_MS = 20 * 60 * 1000;  // 20 min
 
     private createResponseDTO(user: any, accessToken: string, refreshToken: string) {
         return {
@@ -175,7 +185,7 @@ class userService {
                 await emitOutboxEvent(
                     {
                         topic: "auth.events",
-                        eventId: deriveOutboxEventId(user.userId, "USER_EMAIL_VERIFIED_SUCCESS", eventId), 
+                        eventId: deriveOutboxEventId(user.userId, "USER_EMAIL_VERIFIED_SUCCESS", eventId),
                         eventType: AuditAction.USER_VERIFY_EMAIL_SUCCESS,
                         action: AuditAction.USER_VERIFY_EMAIL_SUCCESS,
                         status: AuditStatus.PENDING,
@@ -422,12 +432,13 @@ class userService {
         const eventId = generateEventId();
         const normalizedEmail = email.toLowerCase().trim();
         const user = await this.userModel.findOne({ email: normalizedEmail }).exec();
+
         if (!user) {
             AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.FAILED, { email });
             return {
                 success: true,
                 message: 'If an account exists with this email, a password reset code will be sent.'
-            }
+            };
         }
 
         if (user.security.lockedUntil && user.security.lockedUntil > new Date()) {
@@ -435,19 +446,9 @@ class userService {
             throw new BadRequestError(`Account locked until ${user.security.lockedUntil.toISOString()}`);
         }
 
-        const throttle = await this.otpManager.shouldThrottle(email, OTPPurpose.PASSWORD_RESET, 120);
-
-        if (throttle?.shouldThrottle) {
-            // Only present to frontend, not DLQ or retry
-            throw new BadRequestError(`Throttled: Please wait ${throttle.waitSeconds}s before requesting a new code`);
-
-        }
-
-        const { code, expiryMinutes } = await this.otpManager.create(
-            email,
-            OTPPurpose.PASSWORD_RESET,
-            OTPConfigs.passwordReset
-        );
+        // NOTE: throttling happens in the consumer when create() runs.
+        // We can also do an early throttle check here for fast UX feedback,
+        // but the consumer is the authoritative one.
 
         await storeResetMetadata(email, {
             ipAddress: context.ip,
@@ -463,193 +464,259 @@ class userService {
             }
         );
 
-        await emitOutboxEvent(
-            {
-                topic: "password.events",
-                eventId,
-                eventType: AuditAction.PASSWORD_RESET_REQUESTED,
-                action: AuditAction.PASSWORD_RESET_REQUESTED,
-                status: AuditStatus.PENDING,
-                payload: {
-                    email: user.email,
-                    name: user.name,
-                    code: code,
-                    expiryMinutes
-                },
-                aggregateType: "PASSWORD_RESET_REQUESTED",
-                aggregateId: email,
-                version: 1,
-                context,
+        // Emit event WITHOUT the code. Consumer generates it.
+        await emitOutboxEvent({
+            topic: "password.events",
+            eventId,
+            eventType: AuditAction.PASSWORD_RESET_REQUESTED,
+            action: AuditAction.PASSWORD_RESET_REQUESTED,
+            status: AuditStatus.PENDING,
+            payload: {
+                email: user.email,
+                name: user.name,
+                // no code here ✅
             },
-        )
+            aggregateType: "PASSWORD_RESET_REQUESTED",
+            aggregateId: email,
+            version: 1,
+            context,
+        });
 
         await AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.SUCCESS, { normalizedEmail });
 
         return {
             success: true,
             message: 'If an account exists with this email, a password reset code will be sent.'
-        }
+        };
     }
 
     public async verifyResetCode(email: string, code: string, context: IRequestContext) {
         const eventId = generateEventId();
+        const normalizedEmail = email.toLowerCase().trim();
 
+        // 1. Verify the OTP
         const verifyResult = await this.otpManager.verify(
-            email,
+            normalizedEmail,
             code,
-            OTPPurpose.PASSWORD_RESET
-        )
+            OTPPurpose.PASSWORD_RESET,
+        );
 
         if (!verifyResult.success) {
-            AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.FAILED, { email });
+            AuditLogger.logAttempt(
+                context,
+                AuditAction.FORGET_PASSWORD_ATTEMPT,
+                AuditStatus.FAILED,
+                { email: normalizedEmail },
+            );
             throw new BadRequestError(verifyResult.message);
         }
 
-        const resetToken = await generateResetToken(email);
+        // 2. Find user — needed for passwordVersion binding
+        const user = await this.userModel.findOne({ email: normalizedEmail }).exec();
+        if (!user) {
+            // Defensive — shouldn't happen since OTP just verified
+            throw new BadRequestError('User not found');
+        }
 
-        // Store reset token in Redis (5 minute expiry)
-        await redis.getClient().setex(
-            `password_reset_token:${email}`,
-            20 * 60,  // 5 minutes to complete reset
-            JSON.stringify({
-                resetToken,
-                email,
-                ipAddress: context.ip,
-                userAgent: context.userAgent,
-                verifiedAt: new Date()
-            })
+        // 3. Generate JWT bound to user's current passwordVersion
+        const jti = crypto.randomUUID();
+        const issuedAt = new Date();
+        const expiresAt = new Date(issuedAt.getTime() + userService.RESET_TOKEN_TTL_MS);
+
+        const resetToken = jwt.sign(
+            {
+                email: normalizedEmail,
+                purpose: 'password_reset',
+                jti,
+                pwdv: user.passwordVersion ?? 0,
+            },
+            config.jwt.resetSecret!,
+            { expiresIn: '20m' },
         );
 
-        await emitOutboxEvent(
-            {
-                topic: "password.events",
-                eventId,
-                eventType: AuditAction.USER_PASSWORD_RESET_CODE_VERIFIED,
-                action: AuditAction.USER_PASSWORD_RESET_CODE_VERIFIED,
-                status: AuditStatus.PENDING,
-                payload: {
-                    email,
-                },
-                aggregateType: "PASSWORD_RESET_CODE_VERIFIED",
-                aggregateId: email,
-                version: 1,
-                context,
-            },
-        )
+        // 4. Persist token state for replay prevention + audit
+        await PasswordResetTokenModel.create({
+            jti,
+            identifier: normalizedEmail,
+            issuedAt,
+            expiresAt,
+            consumedAt: null,
+            ipAddress: context.ip,
+            userAgent: context.userAgent,
+        });
 
-        await AuditLogger.logAttempt(context, AuditAction.FORGET_PASSWORD_ATTEMPT, AuditStatus.SUCCESS, { email });
+        // 5. Emit outbox event (no plaintext token — ever)
+        await emitOutboxEvent({
+            topic: "password.events",
+            eventId,
+            eventType: AuditAction.USER_PASSWORD_RESET_CODE_VERIFIED,
+            action: AuditAction.USER_PASSWORD_RESET_CODE_VERIFIED,
+            status: AuditStatus.PENDING,
+            payload: {
+                email: normalizedEmail,
+            },
+            aggregateType: "PASSWORD_RESET_CODE_VERIFIED",
+            aggregateId: normalizedEmail,
+            version: 1,
+            context,
+        });
+
+        AuditLogger.logAttempt(
+            context,
+            AuditAction.FORGET_PASSWORD_ATTEMPT,
+            AuditStatus.SUCCESS,
+            { email: normalizedEmail },
+        );
 
         return {
             success: true,
             message: 'Code verified successfully',
             data: {
-                resetToken,  // Frontend uses this to reset password
-                expiresIn: 300  // 5 minutes in seconds
-            }
-        }
+                resetToken,         // returned in JSON body, never in URL
+                expiresIn: 1200,    // 20 min in seconds
+            },
+        };
     }
 
-    public async resetPassword(email: string, token: string, newPassword: string, confirmPassword: string, context: IRequestContext) {
+    public async resetPassword(
+        email: string,
+        token: string,
+        newPassword: string,
+        confirmPassword: string,
+        context: IRequestContext,
+    ) {
         const normalizedEmail = email.toLowerCase().trim();
         const eventId = generateEventId();
-        const tokenKey = `password_reset_token:${normalizedEmail}`
-
-        const pwdToken = await redis.getClient().get(tokenKey)
-
-        if (!pwdToken) {
-            throw new BadRequestError("Invalid or expired reset token")
-        }
-
-        const { resetToken, storedEmail } = JSON.parse(pwdToken);
-
-        if (token !== resetToken) {
-            throw new BadRequestError("Invalid or expired reset token")
-        }
 
         if (newPassword !== confirmPassword) {
-            throw new BadRequestError("Passwords do not match")
+            throw new BadRequestError('Passwords do not match');
         }
 
-        const user = await this.userModel.findOne({ storedEmail }).select("+passwordHistory").exec();
+        // 2. Verify JWT signature + expiry
+        let payload: any;
+        try {
+            payload = jwt.verify(token, config.jwt.resetSecret!);
+        } catch (err) {
+            throw new BadRequestError('Invalid or expired reset token');
+        }
+
+        if (payload.purpose !== 'password_reset') {
+            throw new BadRequestError('Invalid reset token');
+        }
+
+        // 3. Token must match the email being reset (defense against cross-account use)
+        if (payload.email !== normalizedEmail) {
+            throw new BadRequestError('Invalid reset token');
+        }
+
+        // 4. Find user — needed for passwordVersion check + history check
+        const user = await this.userModel
+            .findOne({ email: normalizedEmail })
+            .select('+passwordHistory')
+            .exec();
+
         if (!user) {
-            throw new BadRequestError("User not found")
+            throw new BadRequestError('User not found');
         }
 
-        // const passwordStrength = this.checkPasswordStrength(newPassword);
-        // if (!passwordStrength.isStrong) {
-        //     res.status(400).json({
-        //         success: false,
-        //         error: {
-        //             code: 'WEAK_PASSWORD',
-        //             message: 'Password is too weak',
-        //             details: passwordStrength.issues
-        //         }
-        //     });
-        //     return;
-        // }
-
-        const isPasswordReused = await isPasswordInHistory(user, newPassword);
-        console.log(user)
-        console.log(isPasswordReused)
-        if (isPasswordReused) {
-            throw new BadRequestError("Password has been used before, cant reuse")
+        // 5. Verify token's passwordVersion matches user's current
+        // (prevents using an old token after a successful reset has happened since)
+        if ((user.passwordVersion ?? 0) !== payload.pwdv) {
+            throw new BadRequestError('Reset token is no longer valid');
         }
+
+        // 6. Password history check
+        const isReused = await isPasswordInHistory(user, newPassword);
+        if (isReused) {
+            throw new BadRequestError('Password has been used before, cant reuse');
+        }
+
+        // 7. Atomic consume — prevents replay
+        const tokenDoc = await PasswordResetTokenModel.findOneAndUpdate(
+            { jti: payload.jti, consumedAt: null },
+            {
+                $set: {
+                    consumedAt: new Date(),
+                    ipAtConsume: context.ip,
+                    userAgentAtConsume: context.userAgent,
+                },
+            },
+            { new: true },
+        );
+
+        if (!tokenDoc) {
+            throw new BadRequestError('Reset token has already been used');
+        }
+
+        // 8. Soft device binding — log mismatches, don't block
+        if (
+            tokenDoc.ipAddress !== context.ip ||
+            tokenDoc.userAgent !== context.userAgent
+        ) {
+            logger.warn('Password reset used from different device than issued', {
+                email: normalizedEmail,
+                jti: payload.jti,
+                issuedFrom: { ip: tokenDoc.ipAddress, ua: tokenDoc.userAgent },
+                usedFrom: { ip: context.ip, ua: context.userAgent },
+            });
+        }
+
+        // 9. Hash and update — bumping passwordVersion invalidates all outstanding tokens
         const hashedPwd = await hashedPassword(newPassword);
-        console.log(hashedPwd)
-        console.log(newPassword)
 
         await User.updateOne(
-            { email },
+            { email: normalizedEmail },
             {
-                password: hashedPwd,
-                passwordChangedAt: new Date(),
-                failedLoginAttempts: 0,
-                accountLockedUntil: null,
-                passwordResetCount: 0,
+                $set: {
+                    password: hashedPwd,
+                    passwordChangedAt: new Date(),
+                    failedLoginAttempts: 0,
+                    accountLockedUntil: null,
+                    passwordResetCount: 0,
+                },
+                $inc: { passwordVersion: 1 },
                 $push: {
                     passwordHistory: {
                         $each: [hashedPwd],
-                        $slice: -5
-                    }
-                }
+                        $slice: -5,
+                    },
+                },
             },
-            { runValidators: true }
+            { runValidators: true },
         );
 
-        await invalidateAllUsrSess(email)
+        // 10. Side effects: invalidate sessions, kill any stray OTPs
+        await invalidateAllUsrSess(normalizedEmail);
+        await this.otpManager.invalidate(normalizedEmail, OTPPurpose.PASSWORD_RESET);
 
-        await redis.getClient().del(`password_reset_token:${email}`);
-        await redis.getClient().del(`password_reset_meta:${email}`);
-
-        await this.otpManager.delete(email, OTPPurpose.PASSWORD_RESET);
-
-        await redis.getClient().del(pwdToken);
-
-        await emitOutboxEvent(
-            {
-                topic: "password.events",
-                eventId,
-                eventType: AuditAction.PASSWORD_RESET_SUCCESS,
-                action: AuditAction.PASSWORD_RESET_SUCCESS,
-                status: AuditStatus.PENDING,
-                payload: {
-                    email,
-                    name: user.name,
-
-                },
-                aggregateType: "PASSWORD_RESET_SUCCESS",
-                aggregateId: email,
-                version: 1,
-                context,
+        // 11. Emit success event
+        await emitOutboxEvent({
+            topic: "password.events",
+            eventId,
+            eventType: AuditAction.PASSWORD_RESET_SUCCESS,
+            action: AuditAction.PASSWORD_RESET_SUCCESS,
+            status: AuditStatus.PENDING,
+            payload: {
+                email: normalizedEmail,
+                name: user.name,
             },
-        )
+            aggregateType: "PASSWORD_RESET_SUCCESS",
+            aggregateId: normalizedEmail,
+            version: 1,
+            context,
+        });
 
-        await AuditLogger.logUserAction(context, AuditAction.USER_PASSWORD_RESET, AuditStatus.SUCCESS, user._id.toString());
+        AuditLogger.logUserAction(
+            context,
+            AuditAction.USER_PASSWORD_RESET,
+            AuditStatus.SUCCESS,
+            user._id.toString(),
+        );
 
         return {
             success: true,
             message: 'Password reset successful. Please login with your new password.',
-        }
+        };
     }
 
     public async logout(cookie: string, context: IRequestContext) {

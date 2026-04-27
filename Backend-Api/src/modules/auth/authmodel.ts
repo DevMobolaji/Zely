@@ -3,6 +3,7 @@ import validator from "validator";
 
 import User, { accountStatus, UserRole, IUserMethods, UserModel } from "./authinterface";
 import { hashedPassword } from "@/config/password";
+import { KycTier } from "../transactionLimit/transaction.limit.model";
 
 const userSchema = new Schema<User, UserModel, IUserMethods>({
     name: {
@@ -18,7 +19,7 @@ const userSchema = new Schema<User, UserModel, IUserMethods>({
             },
             message: "Password must be at least 8 characters long",
         },
-    },     
+    },
     email: {
         type: String,
         required: true,
@@ -56,6 +57,11 @@ const userSchema = new Schema<User, UserModel, IUserMethods>({
         type: Boolean,
         default: false
     },
+    kycTier: {
+        type: String,
+        enum: Object.values(KycTier),
+        default: KycTier.TIER_1,
+    },
     mfaSecretEnc: {
         type: String,
         default: null
@@ -83,6 +89,7 @@ const userSchema = new Schema<User, UserModel, IUserMethods>({
             default: null
         }
     },
+    passwordVersion: { type: Number, default: 0 },
     passwordChangedAt: {
         type: Date,
         default: null

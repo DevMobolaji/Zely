@@ -12,6 +12,19 @@ import { extractRequestContext, getRequestContext } from "@/shared/middleware/re
 import { UserRegistrationResponse } from "@/config/interfaces/userResponse.interface";
 import { requireAuth } from "shared/middleware/auth.middleware";
 import { IAuthRequest } from "@/config/interfaces/request.interface";
+import {
+    registerLimiters,
+    verifyEmailLimiters,
+    resendVerificationLimiters,
+    loginLimiters,
+    refreshTokenLimiters,
+    forgotPasswordLimiters,
+    confirmResetCodeLimiters,
+    resetPasswordLimiters,
+    logoutLimiters,
+    logoutAllLimiters,
+    meLimiters,
+} from "@/infrastructure/helpers/ratelimiter"
 
 
 
@@ -25,17 +38,17 @@ class AuthController implements Controller {
     }
 
     private initializeRoutes(): void {
-        this.route.post(`${this.path}/register`, validateRequest(validationSchema.register, 'body'), this.register);
-        this.route.post(`${this.path}/verify`, validateRequest(validationSchema.verifyEmail, 'body'), this.verify);
-        this.route.post(`${this.path}/resend-verification`, validateRequest(validationSchema.resendVerification, 'body'), this.resendVerification);
-        this.route.post(`${this.path}/login`, validateRequest(validationSchema.login, 'body'), this.login);
-        this.route.get(`${this.path}/me`, requireAuth, this.getUserById);
-        this.route.post(`${this.path}/refresh-token`, this.refreshToken);
-        this.route.post(`${this.path}/forgot-password`, validateRequest(validationSchema.forgotPassword, 'body'), this.forgotPassword);
-        this.route.post(`${this.path}/confirm-reset-code`, validateRequest(validationSchema.verifyResetCode, 'body'), this.confirmResetCode);
-        this.route.post(`${this.path}/reset-password`, this.resetPassword);
-        this.route.post(`${this.path}/logout`, this.logout);
-        this.route.post(`${this.path}/logout-all`, requireAuth, this.forceLogoutAll);
+        this.route.post(`${this.path}/register`, ...registerLimiters, validateRequest(validationSchema.register, 'body'), this.register);
+        this.route.post(`${this.path}/verify`, ...verifyEmailLimiters, validateRequest(validationSchema.verifyEmail, 'body'), this.verify);
+        this.route.post(`${this.path}/resend-verification`, ...resendVerificationLimiters, validateRequest(validationSchema.resendVerification, 'body'), this.resendVerification);
+        this.route.post(`${this.path}/login`, ...loginLimiters, validateRequest(validationSchema.login, 'body'), this.login);
+        this.route.get(`${this.path}/me`, ...meLimiters, requireAuth, this.getUserById);
+        this.route.post(`${this.path}/refresh-token`, ...refreshTokenLimiters, this.refreshToken);
+        this.route.post(`${this.path}/forgot-password`, ...forgotPasswordLimiters, validateRequest(validationSchema.forgotPassword, 'body'), this.forgotPassword);
+        this.route.post(`${this.path}/confirm-reset-code`, ...confirmResetCodeLimiters, validateRequest(validationSchema.verifyResetCode, 'body'), this.confirmResetCode);
+        this.route.post(`${this.path}/reset-password`, ...resetPasswordLimiters, this.resetPassword);
+        this.route.post(`${this.path}/logout`, ...logoutLimiters, this.logout);
+        this.route.post(`${this.path}/logout-all`, ...logoutAllLimiters, requireAuth, this.forceLogoutAll);
     }
 
     private createResponseDTO(userId: string, name: string, email: string, role: UserRole, emailVerified: boolean, refreshToken: string, accessToken?: string): UserRegistrationResponse {
@@ -88,14 +101,14 @@ class AuthController implements Controller {
 
         const userResponse = this.createResponseDTO(tk.userId, tk.name, tk.email, tk.role, tk.isEmailVerified, tk.refreshToken, tk.accessToken);
 
-        return res.status(StatusCodes.OK).json({ ok: true,user: userResponse });
+        return res.status(StatusCodes.OK).json({ ok: true, user: userResponse });
     })
 
     //HANDLES LOGOUT ROUTE
     private logout = asyncWrapper(async (req: IAuthRequest, res: Response) => {
         const cookie = req.cookies?.refreshToken;
         if (!cookie) return res.status(200).send({ ok: true });
-        
+
         await this.userService.logout(cookie, getRequestContext(req));
 
         clearRefreshCookie(res)

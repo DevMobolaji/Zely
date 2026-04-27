@@ -133,13 +133,14 @@ export async function runTransferConsumer() {
       };
 
       try {
-        const firstTime = await initIdempotency(
+
+        const IdmChks = await initIdempotency(
           envelope.event.eventId,
           topic,
           TRANSFER_CONSUMER_GROUP
         );
 
-        if (firstTime === "SKIP") {
+        if (IdmChks.decision === "SKIP") {
           kafkaMessagesProcessedTotal.inc({
             topic,
             consumer_group: TRANSFER_CONSUMER_GROUP,
@@ -154,12 +155,15 @@ export async function runTransferConsumer() {
 
         await withMongoTransaction(async (session) => {
           await processTransferEvents(topic, validatedEnvelope, session);
-        });
 
-        await completeIdempotency(
-          envelope.event.eventId,
-          TRANSFER_CONSUMER_GROUP
-        );
+          await completeIdempotency(
+            envelope.event.eventId,
+            TRANSFER_CONSUMER_GROUP,
+            IdmChks.version,
+            session,
+          )
+
+        });
 
         // ✅ Success metrics
         kafkaMessagesProcessedTotal.inc({

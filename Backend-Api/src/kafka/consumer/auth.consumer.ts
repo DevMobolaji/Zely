@@ -91,13 +91,13 @@ export async function runAuthConsumer() {
         event: validatedEvent,
       };
 
-      const firstTime = await initIdempotency(
+      const IdmChks = await initIdempotency(
         envelope.event.eventId,
         topic,
         AUTH_CONSUMER_GROUP
       );
 
-      if (firstTime === "SKIP") {
+      if (IdmChks.decision === "SKIP") {
         kafkaMessagesProcessedTotal.inc({
           topic,
           consumer_group: AUTH_CONSUMER_GROUP,
@@ -112,13 +112,17 @@ export async function runAuthConsumer() {
 
       try {
         const result = await withMongoTransaction(async (session) => {
-          return await processAuthEvent(topic, validatedEnvelope, session);
-        });
+          const result = await processAuthEvent(topic, validatedEnvelope, session);
 
-        await completeIdempotency(
-          envelope.event.eventId,
-          AUTH_CONSUMER_GROUP
-        );
+          await completeIdempotency(
+            envelope.event.eventId,
+            AUTH_CONSUMER_GROUP,
+            IdmChks.version,
+            session,
+          )
+
+          return result
+        });
 
         if (result?.email) {
           await emailQueue.add("sendWelcomeEmail", {

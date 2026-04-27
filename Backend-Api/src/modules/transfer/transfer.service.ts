@@ -14,7 +14,9 @@ import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import { logger } from "@/shared/utils/logger";
 import { extEnsureIdempotence } from "../helpers/ext.idempotence";
 import { calculateFeeBreakdown } from "../fee/transfer.fee.engine";
-
+import { enforceTransactionLimits, enforceReceiverBalanceCap, commitTransactionLimits, rollbackTransactionLimits } from "@/modules/transactionLimit/transactionLimit.service";
+import { KycTier } from "../transactionLimit/transaction.limit.model";
+import UserModel from "../auth/authmodel";
 
 class TransferService {
   public async p2pTransfer(
@@ -71,6 +73,51 @@ class TransferService {
       await ensureWalletsAreActive(senderWallet._id, receiverWallet._id, session);
 
       /** -------------------------
+      * TRANSACTION LIMITS
+      * ------------------------- */
+      const senderUser = await UserModel.findOne(
+        { userId: dto.senderId },
+        { kycTier: 1 }
+      ).session(session).lean();
+
+      console.log("THis is the sendUser", senderUser)
+
+      const receiverUser = await UserModel.findOne(
+        { _id: receiverAccount.userId },
+        { kycTier: 1 }
+      ).session(session).lean();
+
+      console.log("This is the receiverUser", receiverUser)
+
+
+      const senderTier = senderUser?.kycTier ?? KycTier.TIER_1;
+      const receiverTier = receiverUser?.kycTier ?? KycTier.TIER_1;
+      console.log(senderTier)
+      console.log(receiverTier)
+
+
+      const ennf = await enforceTransactionLimits({
+        userId: senderAccount.userId.toString(),
+        userPublicId: dto.senderId,
+        kycTier: senderTier,
+        amount: dto.amount,
+        currency: dto.currency,
+        senderWallet,
+        session,
+      });
+
+      console.log(ennf)
+
+      const rev = await enforceReceiverBalanceCap({
+        receiverWallet,
+        receiverKycTier: receiverTier,
+        amount: dto.amount,
+        currency: dto.currency,
+      });
+
+      console.log(rev)
+
+      /** -------------------------
        * BALANCE SNAPSHOT
        * ------------------------- */
       const prevSenderBalance = senderWallet.availableBalance;
@@ -84,6 +131,8 @@ class TransferService {
         dto.currency,
         'P2P_TRANSFER'
       );
+
+      console.log(fee, totalDeducted)
 
       const senderWalletLocked = await lockWalletFunds(senderWallet._id, totalDeducted, session);
 
@@ -177,6 +226,14 @@ class TransferService {
       );
 
       await session.commitTransaction();
+
+      // Commit limits to Redis after successful transaction
+      await commitTransactionLimits({
+        userPublicId: dto.senderId,
+        amount: dto.amount,
+        currency: dto.currency,
+      });
+
       return result;
 
     } catch (e) {
@@ -185,6 +242,11 @@ class TransferService {
           // The session/transaction may have already been closed by the driver
           if (session.inTransaction()) {
             await session.abortTransaction();
+            await rollbackTransactionLimits({
+              userPublicId: dto.senderId,
+              amount: dto.amount,
+              currency: dto.currency,
+            });
           }
         } catch (abortErr) {
           // Log but don't rethrow — the original error is what matters

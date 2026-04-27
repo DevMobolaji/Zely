@@ -2,6 +2,8 @@ import emailQueue from "@/infrastructure/queues/email.queue";
 import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
 import { PermanentError, TransientError } from "@/kafka/consumer/helpers/retry.error";
 import { logger } from "@/shared/utils/logger";
+import { completeIdempotency, initIdempotency } from "./idempotency";
+import OTPManager, { OTPConfigs, OTPPurpose, OTPThrottleError } from "@/modules/helpers/otp.manager";
 
 
 export async function resetPasswordProcessor(
@@ -10,6 +12,8 @@ export async function resetPasswordProcessor(
 ) {
   const { payload, version, eventType } = envelope.event;
   const { code, expiryMinutes, email, name } = payload ?? {};
+
+  console.log(payload)
 
   try {
     if (version !== 1) {
@@ -27,25 +31,34 @@ export async function resetPasswordProcessor(
     switch (eventType) {
 
       case "PASSWORD_RESET_REQUESTED": {
-        if (!code || !expiryMinutes) {
-          throw new PermanentError(
-            `Missing OTP payload fields for PASSWORD_RESET_REQUESTED`
+
+        const OtpManager = new OTPManager()
+
+        try {
+          const { code, expiryMinutes } = await OtpManager.create(
+            payload.email,
+            OTPPurpose.PASSWORD_RESET,
+            OTPConfigs.passwordReset,
           );
+
+          await emailQueue.add("sendPasswordReset", {
+            email: payload.email,
+            name: payload.name,
+            otp: code,
+            expiryMinutes,
+            type: "PASSWORD_RESET_REQUEST",
+          }, { attempts: 3, backoff: { type: 'exponential', delay: 2000 } });
+
+        } catch (err) {
+          if (err instanceof OTPThrottleError) {
+            // User already got one recently. Drop silently.
+            logger.info("Password reset throttled at consumer", { email: payload.email });
+            break;
+          }
+          throw err;
         }
 
-        await emailQueue.add("passwordResetRequest", {
-          email,
-          name,
-          otp: code,
-          expiryMinutes,
-          type: "PASSWORD_RESET_REQUEST",
-        });
-
-        logger.info("Password reset code sent", {
-          email,
-          expiresIn: expiryMinutes,
-        });
-
+        logger.info("Password reset code queued", { email });
         break;
       }
 

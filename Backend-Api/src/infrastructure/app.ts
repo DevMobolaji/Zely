@@ -49,8 +49,9 @@ import { runProjectionConsumer, stopProjectionConsumer } from '@/kafka/consumer/
 import { runOutboxRouter, stopOutboxRouter } from '@/kafka/config/outboxRouter';
 import { registry } from './resilience';
 import { metricsMiddleware } from '@/shared/middleware/metrics.middleware';
-import { seedFeeConfig } from '@/modules/fee/fee.seeder';
+import { seedFeeConfig } from '@/infrastructure/seeder/fee.seeder';
 import ensureSystemLedger from '@/modules/ledger/system ledger/create.system.ledger';
+import { ensureTransactionLimits } from './seeder/transactionLimits.seeder';
 
 
 
@@ -103,6 +104,10 @@ class App {
 
             await seedFeeConfig();
             logger.info('✅ Fee config ready');
+
+            await ensureTransactionLimits();
+            logger.info('✅ Transaction limits initialized');
+
         } catch (error) {
             logger.error('❌ MongoDB connection failed:', error);
             throw new Error('MongoDB connection failed - cannot start application');
@@ -237,6 +242,7 @@ class App {
      */
 
     private initializeCustomMiddleware(): void {
+        this.express.set("trust proxy", 1)
         this.express.use(metricsMiddleware); // Metrics middleware should be first to capture all requests
         this.express.use(requestIdMiddleware);
         this.express.use("/transfer", requestIdempotencyKey)

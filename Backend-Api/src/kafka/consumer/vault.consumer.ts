@@ -65,8 +65,17 @@ export async function runVaultConsumer() {
         VAULT_CONSUMER_GROUP
       );
 
-      if (firstTime === "SKIP") {
-        kafkaMessagesProcessedTotal.inc({ topic, consumer_group: VAULT_CONSUMER_GROUP });
+      const IdmChks = await initIdempotency(
+        envelope.event.eventId,
+        topic,
+
+      );
+
+      if (IdmChks.decision === "SKIP") {
+        kafkaMessagesProcessedTotal.inc({
+          topic,
+          consumer_group: VAULT_CONSUMER_GROUP,
+        });
         timer();
         await vaultConsumer.commitOffsets([{
           topic, partition,
@@ -96,12 +105,16 @@ export async function runVaultConsumer() {
 
         await withMongoTransaction(async (session) => {
           await vaultEvents(topic, validatedEnvelope, session);
+
+          await completeIdempotency(
+            envelope.event.eventId,
+            vaultConsumer,
+            IdmChks.version,
+            session,
+          )
+
         });
 
-        await completeIdempotency(
-          envelope.event.eventId,
-          VAULT_CONSUMER_GROUP
-        );
 
         // ✅ Success metrics
         kafkaMessagesProcessedTotal.inc({ topic, consumer_group: VAULT_CONSUMER_GROUP });

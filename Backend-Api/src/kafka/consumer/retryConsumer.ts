@@ -207,26 +207,41 @@ export async function runRetryConsumer() {
       /** -------------------------
        * PROCESS WITH TRANSACTION
        * ------------------------- */
-      const firstTime = await initIdempotency(
+      const IdmChks = await initIdempotency(
         envelope.event.eventId,
-        originalTopic,
-        originalConsumerGroup
+        topic,
+        RETRY_CONSUMER_GROUP
       );
 
-      if (firstTime === "SKIP") return;
+      if (IdmChks.decision === "SKIP") {
+        kafkaMessagesProcessedTotal.inc({
+          topic,
+          consumer_group: RETRY_CONSUMER_GROUP,
+        });
+        timer();
+
+        await retryConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+        return;
+      }
+
       try {
         await withMongoTransaction(async (session) => {
 
           await processor(originalTopic, envelope, session);
           logger.info("Processor completed", { eventId: envelope.event.eventId }); // ← does this log?
 
-        });
+          await completeIdempotency(
+            envelope.event.eventId,
+            originalConsumerGroup,
+            IdmChks.version,
+            topic,
+            session// use current retry topic for idempotency record
+          );
 
-        await completeIdempotency(
-          envelope.event.eventId,
-          originalConsumerGroup,
-          topic, // use current retry topic for idempotency record
-        );
+        });
 
         kafkaMessagesProcessedTotal.inc({ topic, consumer_group: RETRY_CONSUMER_GROUP });
         timer();

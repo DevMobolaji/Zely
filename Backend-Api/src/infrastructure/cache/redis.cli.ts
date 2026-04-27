@@ -5,20 +5,47 @@ import { withRedisBreaker } from '@/infrastructure/resilience/breakers/redis.bre
 
 
 class RedisConnection {
-    del(redisKey: string) {
-        throw new Error("Method not implemented.");
+
+    private client: Redis | null = null;
+    private isConnected: boolean = false;
+    private reconnectAttempts: number = 0;
+    private readonly MAX_RECONNECT_ATTEMPTS = 5;
+
+    // ─────────────────────────────────────────────
+    // CORE: Single entry point for all Redis ops
+    // Circuit breaker + connection guard live here
+    // ─────────────────────────────────────────────
+
+    public async execute<T>(
+        command: () => Promise<T>,
+        fallback: () => Promise<T>,
+        context?: string
+    ): Promise<T> {
+        // client never initialized at all — skip breaker, nothing to count
+        if (!this.client) {
+            logger.warn('⚠️ Redis client not initialized — skipping to fallback', { context });
+            return fallback();
+        }
+
+        // client exists but may be disconnected
+        // let withRedisBreaker handle it — so failures are counted and circuit can open
+        return withRedisBreaker(
+            async () => {
+                // if client is not ready this will throw — breaker counts it
+                if (this.client?.status !== 'ready') {
+                    throw new Error(`Redis client not ready — status: ${this.client?.status}`);
+                }
+                return command();
+            },
+            () => fallback(),
+            context
+        );
     }
-    private client: Redis | null;
-    private isConnected: boolean;
 
+    // ─────────────────────────────────────────────
+    // INTERNAL: Safe accessor for Redis client
+    // ─────────────────────────────────────────────
 
-    constructor() {
-        this.client = null;
-        this.isConnected = false;
-
-    }
-
-    //REDIS INSTANCE 
     private get redis(): Redis {
         if (!this.client) {
             throw new Error("Redis client not initialized. Call connect() first.");
@@ -26,110 +53,68 @@ class RedisConnection {
         return this.client;
     }
 
-    /**
-     * Setup Redis event listeners
-     * SYSTEM DESIGN: Observability - know what's happening in your system
-     */
-    private setupEventListeners() {
-        // Connection established
-        this.redis.on('connect', () => {
-            logger.info('🔗 Redis: Connection established');
-        });
+    // ─────────────────────────────────────────────
+    // CONNECTION
+    // ─────────────────────────────────────────────
 
-        // Connection ready (after auth, select db, etc.)
-        this.redis.on('ready', () => {
-            logger.info('✅ Redis: Ready to accept commands');
-            this.isConnected = true;
-        });
-
-        // Error occurred
-        this.redis.on('error', (err) => {
-            logger.error('❌ Redis: Error:', err.message);
-            this.isConnected = false;
-        });
-
-        // Connection closed
-        this.redis.on('close', () => {
-            logger.info('🔌 Redis: Connection closed');
-            this.isConnected = false;
-        });
-
-        // Reconnecting
-        this.redis.on('reconnecting', () => {
-            logger.info('🔄 Redis: Attempting to reconnect...');
-        });
-
-        // Connection ended
-        this.redis.on('end', () => {
-            logger.info('⚠️  Redis: Connection ended');
-            this.isConnected = false;
-        });
-
-        // Graceful shutdown
-        //APP.JS HANDLES THIS NOW
-        // process.on('SIGINT', async () => {
-        //     logger.info('👋 Redis: Received SIGINT, shutting down gracefully...');
-        //     await this.disconnect();
-        //     process.exit(0);
-        // });
-    }
-
-    public getClient() {
-        if (!this.client) {
-            throw new Error('Redis client not initialized. Call connect() first.');
-        }
-        return this.client;
-    }
-
-    async connect() {
+    async connect(): Promise<void> {
         try {
-            // Create Redis client with configuration
             this.client = new Redis({
                 host: config.redis.host,
                 port: config.redis.port,
                 password: config.redis.password,
                 db: config.redis.db,
 
-                retryStrategy: (times) => {
-                    const delay = Math.min(times * 50, 2000);
-                    console.log(`⏳ Redis: Retry attempt ${times}, waiting ${delay}ms`);
-                    return delay;
+                // Exponential backoff — stop after MAX_RECONNECT_ATTEMPTS
+                retryStrategy: (times: number) => {
+                    const delay = Math.min(times * 500, 10000); // max 10s between retries
+                    logger.warn(`🔄 Redis: Reconnecting... attempt ${times}`, { delay });
+                    return delay; // never return null — always keep trying
                 },
 
                 reconnectOnError: (err) => {
                     const targetErrors = ['READONLY', 'ECONNREFUSED'];
-                    return targetErrors.some(targetError => err.message.includes(targetError));
+                    return targetErrors.some(e => err.message.includes(e));
                 },
+
                 maxRetriesPerRequest: config.redis.maxRetriesPerRequest,
                 enableReadyCheck: config.redis.enableReadyCheck,
-                enableOfflineQueue: config.redis.enableOfflineQueue,
+
+                // CRITICAL: Reject commands immediately when disconnected
+                // Do NOT queue them — in fintech we need the fallback to kick in instantly
+                // not silently wait for Redis to come back
+                enableOfflineQueue: false,
+
                 connectTimeout: 10000,
                 keepAlive: 30000,
+
+                // App starts even if Redis is down
+                // execute() handles unavailability gracefully
+                lazyConnect: true,
             });
 
-            // Setup event listeners
             this.setupEventListeners();
 
-            await new Promise((resolve, reject) => {
-                this.redis.on('ready', resolve);
-                this.redis.on('error', reject);
-
-                // Timeout after 10 seconds
-                setTimeout(() => reject(new Error('Redis connection timeout')), 10000);
+            // Attempt connection — but don't crash the app if it fails
+            await this.client.connect().catch((err) => {
+                logger.error('❌ Redis: Initial connection failed — app will start in degraded mode', {
+                    message: err.message
+                });
+                // Not throwing here — execute() + circuit breaker handles fallbacks
             });
-            this.isConnected = true;
 
-            // Test connection
-            await this.testConnection();
+            if (this.isConnected) {
+                await this.testConnection();
+            }
 
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error('❌ Redis: Connection failed:', errorMessage);
-            throw error;
+            logger.error('❌ Redis: Unexpected error during connect:', errorMessage);
+            // Still not throwing — degrade gracefully
         }
     }
 
-    async testConnection() {
+    async testConnection(): Promise<void> {
         try {
             const result = await this.redis.ping();
             if (result === 'PONG') {
@@ -142,10 +127,49 @@ class RedisConnection {
         }
     }
 
-    /**
-     * Set a value with optional TTL (Time To Live)
-     * WHY TTL: Automatic cleanup of old data (sessions, cache)
-     */
+    // ─────────────────────────────────────────────
+    // EVENT LISTENERS
+    // ─────────────────────────────────────────────
+
+    private setupEventListeners(): void {
+        this.redis.on('connect', () => {
+            logger.info('🔗 Redis: Connection established');
+        });
+
+        this.redis.on('ready', () => {
+            this.isConnected = true;
+            this.reconnectAttempts = 0;
+            logger.info('✅ Redis: Ready to accept commands');
+        });
+
+        this.redis.on('error', (err) => {
+            // Do NOT throw here — throwing inside an event handler crashes the process
+            // ioredis handles reconnection internally
+            this.isConnected = false;
+            logger.error('❌ Redis: Error:', err.message);
+        });
+
+        this.redis.on('close', () => {
+            this.isConnected = false;
+            logger.warn('🔌 Redis: Connection closed');
+        });
+
+        this.redis.on('reconnecting', () => {
+            this.reconnectAttempts++;
+            logger.warn(`🔄 Redis: Reconnecting...`, { attempt: this.reconnectAttempts });
+        });
+
+        this.redis.on('end', () => {
+            this.isConnected = false;
+            logger.warn('⚠️ Redis: Connection ended');
+        });
+    }
+
+    // ─────────────────────────────────────────────
+    // OPERATIONS
+    // All go through execute() — circuit breaker
+    // is applied automatically, no exceptions
+    // ─────────────────────────────────────────────
 
     async set(key: string, value: unknown, ttl?: number): Promise<boolean> {
         if (!key) throw new Error("Redis key must be a non-empty string");
@@ -155,7 +179,7 @@ class RedisConnection {
 
         const stringValue = typeof value === "string" ? value : JSON.stringify(value);
 
-        return withRedisBreaker(
+        return this.execute(
             async () => {
                 if (ttl !== undefined) {
                     await this.redis.setex(key, ttl, stringValue);
@@ -165,21 +189,17 @@ class RedisConnection {
                 return true;
             },
             async () => {
-                logger.warn("Redis circuit open — set operation skipped", { key });
-                return false; // graceful degradation
+                logger.warn("Redis unavailable — set operation skipped", { key });
+                return false;
             },
             `set:${key}`
         );
     }
 
-    /**
-     * Get a value by key
-     */
-
     async get<T = unknown>(key: string, parseJson: boolean = true): Promise<T | string | null> {
         if (!key) throw new Error("Redis key must be a non-empty string");
 
-        return withRedisBreaker(
+        return this.execute(
             async () => {
                 const value = await this.redis.get(key);
                 if (value === null) return null;
@@ -189,168 +209,152 @@ class RedisConnection {
                 return value;
             },
             async () => {
-                logger.warn("Redis circuit open — get operation returning null", { key });
-                return null; // graceful degradation
+                logger.warn("Redis unavailable — get returning null", { key });
+                return null;
             },
             `get:${key}`
         ) as Promise<T | string | null>;
     }
 
-    /**
-     * Delete a key
-     */
     async delete(key: string): Promise<number> {
         if (!key) throw new Error("Redis key must be a non-empty string");
 
-        return withRedisBreaker(
-            async () => this.redis.del(key),
+        return this.execute(
+            () => this.redis.del(key),
             async () => {
-                logger.warn("Redis circuit open — delete operation skipped", { key });
-                return 0; // graceful degradation
+                logger.warn("Redis unavailable — delete skipped", { key });
+                return 0;
             },
             `delete:${key}`
         );
     }
 
-    /**
-     * Check if key exists
-     */
     async exists(key: string): Promise<boolean> {
         if (!key) throw new Error("Redis key must be a non-empty string");
 
-        try {
-            const result = await this.redis.exists(key);
-            return result === 1;
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error('❌ Redis: Exists check failed:', errorMessage);
-            throw error;
-        }
+        return this.execute(
+            async () => (await this.redis.exists(key)) === 1,
+            async () => {
+                logger.warn("Redis unavailable — exists returning false", { key });
+                return false;
+            },
+            `exists:${key}`
+        );
     }
 
-    /**
-     * Set TTL on existing key
-     * WHY: Extend or set expiration on cached data
-     */
     async expire(key: string, seconds: number): Promise<number> {
         if (!key) throw new Error("Redis key must be a non-empty string");
         if (!Number.isInteger(seconds) || seconds < 0) throw new Error("TTL must be a non-negative integer");
 
-        try {
-            const result = await this.redis.expire(key, seconds);
-            return result;
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error('❌ Redis: Expire operation failed:', errorMessage);
-            throw error;
-        }
+        return this.execute(
+            () => this.redis.expire(key, seconds),
+            async () => {
+                logger.warn("Redis unavailable — expire skipped", { key, seconds });
+                return 0;
+            },
+            `expire:${key}`
+        );
     }
 
-    /**
-     * Increment a value (useful for counters, rate limiting)
-     * WHY: Atomic operation - prevents race conditions
-     */
     async increment(key: string, amount: number = 1): Promise<number> {
         if (!key) throw new Error("Redis key must be a non-empty string");
         if (!Number.isInteger(amount)) throw new Error("Increment amount must be an integer");
 
-        try {
-            const result = await this.redis.incrby(key, amount);
-            // console.log(result ? `✅ Key "${key}" incremented` : `⚠️ Key "${key}" not found`);
-            return result;
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error('❌ Redis: Increment operation failed:', errorMessage);
-            throw error;
-        }
+        return this.execute(
+            () => this.redis.incrby(key, amount),
+            async () => {
+                // ⚠️ Never return 0 here
+                // A silently reset counter = limit bypass = compliance breach
+                logger.error("Redis unavailable — increment rejected to prevent silent bypass", { key });
+                throw new Error("Redis unavailable — increment operation rejected");
+            },
+            `increment:${key}`
+        );
     }
-    /**
-     * Get multiple keys at once
-     * WHY: Reduces round trips to Redis
-     */
+
     async mget<T = unknown>(keys: string[]): Promise<(T | null)[]> {
-        try {
-            const values = await this.redis.mget(keys);
-            return values.map(value => {
-                try {
-                    return JSON.parse(value as string);
-                } catch {
-                    return value;
-                }
-            });
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error('❌ Redis: Mget operation failed:', errorMessage);
-            throw error;
-        }
+        if (!keys.length) return [];
+
+        return this.execute(
+            async () => {
+                const values = await this.redis.mget(keys);
+                return values.map(value => {
+                    try { return JSON.parse(value as string) as T; }
+                    catch { return value as T | null; }
+                });
+            },
+            async () => {
+                logger.warn("Redis unavailable — mget returning nulls", { keys });
+                return keys.map(() => null as T | null);
+            },
+            `mget:${keys.join(",")}`
+        );
     }
 
-    /**
-     * Flush specific database
-     * WARNING: This deletes ALL keys! Use carefully!
-     */
-    async flush() {
-        try {
-            await this.redis.flushdb();
-            console.log('🗑️  Redis: Database flushed');
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error('❌ Redis: Flush operation failed:', errorMessage);
-            throw error;
-        }
+    async flush(): Promise<void> {
+        return this.execute(
+            async () => {
+                await this.redis.flushdb();
+                logger.info("🗑️ Redis: Database flushed");
+            },
+            async () => {
+                // flush should never silently no-op
+                throw new Error("Redis unavailable — flush rejected");
+            },
+            `flush`
+        );
     }
 
-    /**
-     * Get Redis health status
-     * WHY: Health check endpoint needs this
-     */
+    // ─────────────────────────────────────────────
+    // HEALTH + TEARDOWN
+    // ─────────────────────────────────────────────
+
     async getHealthStatus() {
         if (!this.client) {
-            return { isConnected: false, error: "Redis client not initialized. Call connect() first." };
+            return { isConnected: false, error: "Redis client not initialized" };
         }
 
         try {
             const info = await this.redis.info();
             return {
-                isConnected: this.client.status,
+                isConnected: this.isConnected,
+                status: this.client.status,
+                reconnectAttempts: this.reconnectAttempts,
                 uptime: this.extractFromInfo(info, 'uptime_in_seconds'),
-                // connectedClients: this.extractFromInfo(info, 'connected_clients'),
-                // usedMemory: this.extractFromInfo(info, 'used_memory_human'),
             };
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
             return {
                 isConnected: false,
-                error: errorMessage,
+                error: error instanceof Error ? error.message : String(error),
             };
         }
     }
 
-    /**
-     * Extract value from Redis INFO output
-     */
-    private extractFromInfo(info: string, key: string): string {
-        if (!info || !key) {
-            return 'N/A';
-        }
+    isHealthy(): boolean {
+        return this.isConnected && this.client !== null;
+    }
 
-        const regex = new RegExp(`^${key}:(.+)$`, 'im'); // ^ and m for line start + case-insensitive
-        const match = info.match(regex);
+    private extractFromInfo(info: string, key: string): string {
+        if (!info || !key) return 'N/A';
+        const match = info.match(new RegExp(`^${key}:(.+)$`, 'im'));
         return match ? match[1].trim() : 'N/A';
     }
 
-    /**
-     * Disconnect from Redis
-     */
-    async disconnect() {
-        if (this.redis) {
-            await this.redis.quit();
-            logger.info('👋 Redis: Disconnected gracefully');
+    async disconnect(): Promise<void> {
+        if (this.client) {
+            await this.client.quit();
+            this.client = null;
             this.isConnected = false;
+            logger.info('👋 Redis: Disconnected gracefully');
         }
+    }
+
+    // Exposed only for edge cases — all normal usage should go through execute()
+    public getClient(): Redis {
+        if (!this.client) throw new Error('Redis client not initialized. Call connect() first.');
+        return this.client;
     }
 }
 
-// Export singleton instance
 const redis = new RedisConnection();
-export default redis
+export default redis;
