@@ -1,5 +1,5 @@
 // src/db/seeders/fee.config.seeder.ts
-import { FeeConfig } from "./fee.model";
+import { FeeConfig } from "@/modules/fee/fee.model";
 import { logger } from '@/shared/utils/logger';
 
 const DEFAULT_NGN_P2P_TIERS = [

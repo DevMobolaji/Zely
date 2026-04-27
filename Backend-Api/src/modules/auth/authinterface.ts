@@ -1,4 +1,5 @@
 import { Document, Model } from "mongoose"
+import { KycTier } from "../transactionLimit/transaction.limit.model";
 
 export enum UserRole {
     ADMIN = "ADMIN",
@@ -33,9 +34,11 @@ export interface IUserDocument {
     role: UserRole;
     mfaEnabled?: boolean;
     passwordAttempts: number;
+    passwordVersion: number;
     mfaSecretEnc?: string; // AES-GCM encrypted secret
     createdAt?: Date;
     updatedAt?: Date;
+    kycTier: KycTier;
     security: ISecurityState;
     passwordChangedAt?: Date | null;
     passwordResetCount?: number;
@@ -53,8 +56,8 @@ export default interface User extends Document, IUserDocument, IUserMethods { }
 
 // Model type
 export interface UserModel extends Model<User, {}, IUserMethods> {
-    userId: any;
-    email: any;
-    role: any;
-    isEmailVerified: any;
+    userId: string;
+    email: string;
+    role: UserRole;
+    isEmailVerified: boolean;
 }

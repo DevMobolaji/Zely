@@ -99,15 +99,29 @@ export async function runProjectionConsumer() {
       };
 
       /** -------------------------
-           * IDEMPOTENCY CHECK
-           * ------------------------- */
-      const firstTime = await initIdempotency(
+       * IDEMPOTENCY CHECK
+       * ------------------------- */
+
+      const IdkChks = await initIdempotency(
         envelope.event.eventId,
         topic,
         PROJECTION_CONSUMER_GROUP
       );
 
-      if (firstTime === "SKIP") return;
+
+      if (IdkChks.decision === "SKIP") {
+        kafkaMessagesProcessedTotal.inc({
+          topic,
+          consumer_group: PROJECTION_CONSUMER_GROUP,
+        });
+        timer();
+
+        await ProjectionConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+        return;
+      }
 
       try {
         await withMongoTransaction(async (session) => {
@@ -116,12 +130,16 @@ export async function runProjectionConsumer() {
            * PROJECTION HANDLER
            * ------------------------- */
           await handleTransactionCompleted(topic, validatedEnvelope, session);
+
+          await completeIdempotency(
+            envelope.event.eventId,
+            PROJECTION_CONSUMER_GROUP,
+            IdkChks.version,
+            session
+          );
         });
 
-        await completeIdempotency(
-          envelope.event.eventId,
-          PROJECTION_CONSUMER_GROUP
-        );
+
 
         // ✅ Success metrics
         kafkaMessagesProcessedTotal

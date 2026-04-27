@@ -21,9 +21,11 @@ const envSchema = z.object({
     // JWT
     JWT_ACCESS_SECRET: z.string().min(32),
     JWT_REFRESH_SECRET: z.string().min(32),
+    JWT_RESET_SECRET: z.string().min(32),
     JWT_ACCESS_EXPIRY: z.string().default("15m"),
     JWT_REFRESH_EXPIRY: z.string().default("7d"),
     JWT_COOKIE_NAME: z.string().default("rToken"),
+
 
     // Database
     MONGODB_URI: z.string().min(1),
@@ -134,6 +136,7 @@ export const config = {
         accessExpiry: env.JWT_ACCESS_EXPIRY,
         refreshExpiry: env.JWT_REFRESH_EXPIRY,
         refreshCookieName: env.JWT_COOKIE_NAME,
+        resetSecret: env.JWT_RESET_SECRET
     },
 
     security: {
