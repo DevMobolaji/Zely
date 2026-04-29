@@ -14,7 +14,7 @@ export const KYC_CONSUMER_GROUP = "kyc-consumer";
 const kycConsumer = kafka.consumer({ groupId: KYC_CONSUMER_GROUP });
 
 export async function runKycConsumer() {
-  kycConsumer.connect()
+  await kycConsumer.connect()
 
   await kycConsumer.subscribe({
     topic: TOPICS.KYC_EVENTS,

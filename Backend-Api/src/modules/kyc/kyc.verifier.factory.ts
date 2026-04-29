@@ -17,9 +17,10 @@ export function getActiveKycVerifier(): KycVerifier {
       cachedVerifier = new DojahKycVerifier();
       break;
     case "ADMIN":
-    default:
       cachedVerifier = new AdminKycVerifier();
       break;
+    default:
+      throw new Error(`Unsupported KYC provider: ${provider}`);
   }
 
   logger.info(`✅ KYC verifier initialized: ${cachedVerifier.providerName}`);

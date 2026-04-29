@@ -68,40 +68,14 @@ export async function runProjectionConsumer() {
         event: rawEvent.event ?? rawEvent,
       };
 
-      logger.info("Received confirmed event for projection", {
-        topic,
-        eventId: envelope.event.eventId,
-      });
+      logger.info("Received confirmed event for projection");
 
-
-      /** -------------------------
-       * VALIDATION
-       * ------------------------- */
-      // const validatedEvent = validateWithSchema(
-      //   TransferEventSchema,
-      //   envelope.event
-      // ) as {
-      //   eventId: string;
-      //   eventType: string;
-      //   version: 1;
-      //   aggregateType: string;
-      //   aggregateId: string;
-      //   payload: object;
-      //   occurredAt?: string;
-      //   action: string;
-      //   status: string;
-      //   context: object;
-      // };
 
       let validatedEvent;
       try {
-        validatedEvent = validateWithSchema(TransferEventSchema, envelope);
-      } catch (err) {
-        logger.warn("Skipping non-transfer event on projection topic", {
-          eventType: envelope.event?.eventType,
-          eventId: envelope.event?.eventId,
-        });
-        // commit offset and skip
+        validatedEvent = validateWithSchema(TransferEventSchema, envelope.event);
+      } catch (err: any) {
+        logger.warn("Skipping non-transfer event on projection topic");
         await ProjectionConsumer.commitOffsets([
           { topic, partition, offset: (parseInt(message.offset) + 1).toString() },
         ]);
@@ -112,8 +86,6 @@ export async function runProjectionConsumer() {
         meta: envelope.meta,
         event: validatedEvent,
       };
-
-
 
       /** -------------------------
        * IDEMPOTENCY CHECK

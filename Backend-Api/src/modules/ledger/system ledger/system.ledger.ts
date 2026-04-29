@@ -46,6 +46,8 @@ class SystemLedger {
 
         const ensureSystem = await ensureSystemLedger("NGN");
 
+        //console.log(ensureSystem)
+
         // --- Resolve user account and wallet ---
         const account = await resolveAccountByAccountNumber(user.accountNumber, "MAIN_CHECKINGS", "NGN", session);
 
@@ -96,7 +98,9 @@ class SystemLedger {
         const txn = await builder.commit(session);
 
         const userBalBefore = await Wallet.findById(wallet._id).session(session);
-        const sysBalBefore = await Wallet.findById(ensureSystem.MAIN_CHECKINGS.ownerId).session(session);
+        const sysBalBefore = await Wallet.findOne({
+          ledgerAccountId: senderLedgerId.toString()
+        }).session(session)
 
 
         await Wallet.updateOne(
@@ -112,7 +116,9 @@ class SystemLedger {
         );
 
         const UserBalAfter = await Wallet.findById(wallet._id).session(session);
-        const sysBalAfter = await Wallet.findById(ensureSystem.MAIN_CHECKINGS.ownerId).session(session);
+        const sysBalAfter = await Wallet.findOne({
+          ledgerAccountId: senderLedgerId
+        }).session(session)
 
         // --- Mark idempotency ---
         await markCompleted(
@@ -132,29 +138,31 @@ class SystemLedger {
             payload: {
               sender: {
                 walletId: sysBalAfter?.walletId,
-                email: "system@zely.app",
-                name: "ADMIN_SYSTEM_USER",
                 userId: ensureSystem.MAIN_CHECKINGS.userPublicId,
+                name: "ADMIN_SYSTEM_USER",
+                email: "system@zely.app",
+                accountType: ensureSystem.MAIN_CHECKINGS.type,
+                accountNumber: "1234567899",
                 previousBalance: sysBalBefore?.availableBalance,
                 currentBalance: sysBalAfter?.availableBalance,
-                accountType: ensureSystem.MAIN_CHECKINGS.type,
-                accountNumber: "789098767890"
               },
               receiver: {
                 walletId: wallet.walletId,
-                email: wallet.userId.email,
-                name: wallet.userId.name,
                 userId: wallet.userPublicId,
+                name: wallet.userId.name,
+                email: wallet.userId.email,
+                accountType: account.type,
+                accountNumber: account.accountNumber,
                 previousBalance: userBalBefore?.availableBalance,
                 currentBalance: UserBalAfter?.availableBalance,
-                accountNumber: account.accountNumber,
-                accountType: account.type
               },
 
               amount: user.amount,
+              fee: 0,
+              totalDeducted: 0,
               currency: "NGN",
-              transactionRef,
               referenceId,
+              transactionRef,
               transferType: "INTERNAL_SYSTEM_TRANSFER"
 
             },
