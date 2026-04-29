@@ -33,7 +33,7 @@
 
 import { producer } from "../config";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "../consumer/helpers/retry.envelope";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
 import { withKafkaBreaker } from '@/infrastructure/resilience/breakers/kafka.breaker';
 import { kafkaMessagesFailedTotal } from '@/infrastructure/resilience/metrics';
 

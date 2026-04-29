@@ -19,7 +19,7 @@ export interface AccessPayload {
 
 export const requireAuth = async (
     req: Request & { user?: any },
-    res: Response,
+    _res: Response,
     next: NextFunction
 ) => {
     const header = req.headers.authorization;

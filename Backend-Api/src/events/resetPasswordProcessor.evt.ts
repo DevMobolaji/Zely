@@ -1,6 +1,6 @@
 import emailQueue from "@/infrastructure/queues/email.queue";
-import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
-import { PermanentError, TransientError } from "@/kafka/consumer/helpers/retry.error";
+import { RetryEnvelope } from "@/kafka/retry.helpers/retry.envelope";
+import { PermanentError, TransientError } from "@/kafka/retry.helpers/retry.error";
 import { logger } from "@/shared/utils/logger";
 import { completeIdempotency, initIdempotency } from "./idempotency";
 import OTPManager, { OTPConfigs, OTPPurpose, OTPThrottleError } from "@/modules/helpers/otp.manager";

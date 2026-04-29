@@ -25,5 +25,11 @@ export const TOPICS = {
   // ======================
   VAULT_EVENTS: "vault.events",
   VAULT_EVENTS_DLQ: "vault.events.dlq",
+
+  // ======================
+  // KYC DOMAIN
+  // ======================
+  KYC_EVENTS: "kyc.events",
+  KYC_EVENTS_DLQ: "kyc.events.dlq",
 };
 

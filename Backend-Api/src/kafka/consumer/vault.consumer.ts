@@ -1,10 +1,10 @@
 import { kafka } from "../config/kafka.config";
-import { TOPICS } from "../config/topics";
-import { RetryEnvelope } from "./helpers/retry.envelope";
+import { TOPICS } from "../config/kafka.topics";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
 import { completeIdempotency, initIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
 import { vaultEvents } from "@/events/vaults.events";
-import { retryOrDLQ } from "./helpers/retry.handler";
+import { retryOrDLQ } from "../retry.helpers/retry.handler";
 import { validateWithSchema } from "../schema/zod.helper";
 import { VaultEventSchema } from "../schema/vault.schema";
 import { withMongoTransaction } from "@/events/mongo.wrapper";

@@ -1,8 +1,8 @@
 // retry.producer.ts
 import { producer } from "../config/kafka.config";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "../consumer/helpers/retry.envelope";
-import { resolveRetryPolicy } from "../consumer/helpers/retry.policy";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
+import { resolveRetryPolicy } from "../retry.helpers/retry.policy";
 import { withKafkaBreaker } from '@/infrastructure/resilience/breakers/kafka.breaker';
 import { kafkaMessagesProcessedTotal } from '@/infrastructure/resilience/metrics';
 

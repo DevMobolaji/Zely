@@ -32,7 +32,7 @@ import { runAuthConsumer, stopAuthConsumer } from '@/kafka/consumer/auth.consume
 import { waitForTopicsReady } from '@/kafka/config/waitForTopicsReady';
 import { kafka } from '@/kafka/config/kafka.config';
 import { getKafkaHealthStatus } from '@/kafka/config/kafka.health';
-import { TOPICS } from '@/kafka/config/topics';
+import { TOPICS } from '@/kafka/config/kafka.topics';
 
 
 // Config
@@ -46,12 +46,13 @@ import { runRetryConsumer, stopRetryConsumer } from '@/kafka/consumer/retryConsu
 import { startDLQSink, stopDLQSink } from '@/kafka/consumer/dlq.consumer';
 import { runVaultConsumer, stopVaultConsumer } from '@/kafka/consumer/vault.consumer';
 import { runProjectionConsumer, stopProjectionConsumer } from '@/kafka/consumer/projectConsumer';
-import { runOutboxRouter, stopOutboxRouter } from '@/kafka/config/outboxRouter';
+import { runOutboxRouter, stopOutboxRouter } from '@/kafka/config/debezium.outboxrouter';
 import { registry } from './resilience';
 import { metricsMiddleware } from '@/shared/middleware/metrics.middleware';
 import { seedFeeConfig } from '@/infrastructure/seeder/fee.seeder';
 import ensureSystemLedger from '@/modules/ledger/system ledger/create.system.ledger';
 import { ensureTransactionLimits } from './seeder/transactionLimits.seeder';
+import { runKycConsumer } from '@/kafka/consumer/kyc.consumer';
 
 
 
@@ -136,6 +137,7 @@ class App {
             await runTransferConsumer();
             await runProjectionConsumer()
             await runVaultConsumer()
+            await runKycConsumer()
             await runRetryConsumer()
             await startDLQSink()
 

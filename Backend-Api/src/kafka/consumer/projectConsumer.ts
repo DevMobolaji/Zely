@@ -1,11 +1,11 @@
 import { handleTransactionCompleted } from "@/events/projectionEvt";
 import { kafka } from "../config/kafka.config";
-import { TOPICS } from "../config/topics";
-import { RetryEnvelope } from "./helpers/retry.envelope";
+import { TOPICS } from "../config/kafka.topics";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
 import { withMongoTransaction } from "@/events/mongo.wrapper";
 import { completeIdempotency, initIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
-import { retryOrDLQ } from "./helpers/retry.handler";
+import { retryOrDLQ } from "../retry.helpers/retry.handler";
 import { validateWithSchema } from "../schema/zod.helper";
 import { TransferEventSchema } from "../schema/transfer.schema";
 import {
@@ -77,26 +77,43 @@ export async function runProjectionConsumer() {
       /** -------------------------
        * VALIDATION
        * ------------------------- */
-      const validatedEvent = validateWithSchema(
-        TransferEventSchema,
-        envelope.event
-      ) as {
-        eventId: string;
-        eventType: string;
-        version: 1;
-        aggregateType: string;
-        aggregateId: string;
-        payload: object;
-        occurredAt?: string;
-        action: string;
-        status: string;
-        context: object;
-      };
+      // const validatedEvent = validateWithSchema(
+      //   TransferEventSchema,
+      //   envelope.event
+      // ) as {
+      //   eventId: string;
+      //   eventType: string;
+      //   version: 1;
+      //   aggregateType: string;
+      //   aggregateId: string;
+      //   payload: object;
+      //   occurredAt?: string;
+      //   action: string;
+      //   status: string;
+      //   context: object;
+      // };
+
+      let validatedEvent;
+      try {
+        validatedEvent = validateWithSchema(TransferEventSchema, envelope);
+      } catch (err) {
+        logger.warn("Skipping non-transfer event on projection topic", {
+          eventType: envelope.event?.eventType,
+          eventId: envelope.event?.eventId,
+        });
+        // commit offset and skip
+        await ProjectionConsumer.commitOffsets([
+          { topic, partition, offset: (parseInt(message.offset) + 1).toString() },
+        ]);
+        return;
+      }
 
       const validatedEnvelope: RetryEnvelope = {
         meta: envelope.meta,
         event: validatedEvent,
       };
+
+
 
       /** -------------------------
        * IDEMPOTENCY CHECK

@@ -1,5 +1,5 @@
 import { ClientSession, Types } from "mongoose";
-import { LedgerAccount, LedgerAccountDocument, LedgerAccountType, LedgerOwnerType } from "../ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountDocument, LedgerAccountType, LedgerOwnerType } from "../ledger/ledger.account.model";
 import BadRequestError from "@/shared/errors/badRequest";
 import { IUser, Wallet, WalletDocument, WalletType } from "../wallet/wallet.model";
 import { Account } from "../account/account.model";

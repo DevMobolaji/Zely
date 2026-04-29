@@ -14,7 +14,7 @@ import { Wallet, WalletDocument } from "../wallet/wallet.model";
 import { LedgerEntryNature } from "../ledger/ledger.entry.model";
 import { Account } from "../account/account.model";
 import { AccountDocument } from "../account/account.interface";
-import { LedgerAccount, LedgerAccountDocument, LedgerAccountType, LedgerOwnerType } from "../ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountDocument, LedgerAccountType, LedgerOwnerType } from "../ledger/ledger.account.model";
 import { VaultDocument } from "../vault/vault.model";
 
 type BaseTransferInput = {

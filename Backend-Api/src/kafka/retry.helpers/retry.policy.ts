@@ -18,6 +18,15 @@ export const TRANSFER_RETRY_LEVELS = [
 
 export const TRANSFER_MAX_RETRIES = TRANSFER_RETRY_LEVELS.length;
 
+export const KYC_RETRY_LEVELS = [
+  { topic: "kyc.retry.1", delayMs: 5_000 },      // 5 seconds
+  { topic: "kyc.retry.2", delayMs: 30_000 },     // 30 seconds
+  { topic: "kyc.retry.3", delayMs: 120_000 },    // 2 minutes
+  { topic: "kyc.retry.4", delayMs: 600_000 },    // 10 minutes
+  { topic: "kyc.retry.5", delayMs: 3_600_000 },  // 1 hour
+];
+
+export const KYC_MAX_RETRIES = KYC_RETRY_LEVELS.length;
 
 export function resolveRetryPolicy(aggregateType: string) {
   switch (aggregateType) {
@@ -31,6 +40,12 @@ export function resolveRetryPolicy(aggregateType: string) {
       return {
         levels: TRANSFER_RETRY_LEVELS,
         maxRetries: TRANSFER_MAX_RETRIES
+      };
+
+    case "KYC":
+      return {
+        levels: KYC_RETRY_LEVELS,
+        maxRetries: KYC_MAX_RETRIES
       };
 
     default:

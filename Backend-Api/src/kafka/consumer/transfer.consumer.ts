@@ -1,11 +1,11 @@
 import { admin, connectAdmin, kafka } from "../config/kafka.config";
 import { logger } from "@/shared/utils/logger";
 import { completeIdempotency, initIdempotency } from "@/events/idempotency";
-import { TOPICS } from "../config/topics";
-import { RetryEnvelope } from "./helpers/retry.envelope";
+import { TOPICS } from "../config/kafka.topics";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
 import { validateWithSchema } from "../schema/zod.helper";
 import { TransferEventSchema } from "../schema/transfer.schema";
-import { retryOrDLQ } from "./helpers/retry.handler";
+import { retryOrDLQ } from "../retry.helpers/retry.handler";
 import { processTransferEvents, publishConfirmedEvent } from "@/events/transferProcessor.evt";
 import { withMongoTransaction } from "@/events/mongo.wrapper";
 import {
@@ -132,27 +132,26 @@ export async function runTransferConsumer() {
         event: validatedEvent,
       };
 
-      try {
+      const IdmChks = await initIdempotency(
+        envelope.event.eventId,
+        topic,
+        TRANSFER_CONSUMER_GROUP
+      );
 
-        const IdmChks = await initIdempotency(
-          envelope.event.eventId,
+      if (IdmChks.decision === "SKIP") {
+        kafkaMessagesProcessedTotal.inc({
           topic,
-          TRANSFER_CONSUMER_GROUP
-        );
+          consumer_group: TRANSFER_CONSUMER_GROUP,
+        });
+        timer();
+        await transferConsumer.commitOffsets([{
+          topic, partition,
+          offset: (parseInt(message.offset) + 1).toString(),
+        }]);
+        return;
+      }
 
-        if (IdmChks.decision === "SKIP") {
-          kafkaMessagesProcessedTotal.inc({
-            topic,
-            consumer_group: TRANSFER_CONSUMER_GROUP,
-          });
-          timer();
-          await transferConsumer.commitOffsets([{
-            topic, partition,
-            offset: (parseInt(message.offset) + 1).toString(),
-          }]);
-          return;
-        }
-
+      try {
         await withMongoTransaction(async (session) => {
           await processTransferEvents(topic, validatedEnvelope, session);
 

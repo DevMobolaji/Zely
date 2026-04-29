@@ -1,11 +1,12 @@
 import z from "zod";
-import { BaseEventSchema } from "./user.schema";
+import { BaseEventSchema } from "./index.schema";
 
 export const TransferCompletedV1Schema = BaseEventSchema.extend({
   eventType: z.literal("TRANSACTION_COMPLETED"),
   version: z.literal(1),
   aggregateType: z.literal("TRANSFER"),
   aggregateId: z.string(),
+  eventId: z.string(),
   payload: z.object({
     sender: z.object({
       walletId: z.string(),

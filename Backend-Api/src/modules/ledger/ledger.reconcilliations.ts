@@ -1,5 +1,5 @@
 import { Wallet, WalletStatus } from "@/modules/wallet/wallet.model";
-import { LedgerAccount, LedgerAccountType } from "@/modules/ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountType } from "@/modules/ledger/ledger.account.model";
 import { LedgerEntry, LedgerEntryNature } from "@/modules/ledger/ledger.entry.model";
 import { logger } from "@/shared/utils/logger";
 import mongoose from "mongoose";

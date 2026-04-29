@@ -1,12 +1,12 @@
 import { kafka } from "../config/kafka.config";
 import { completeIdempotency, initIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "./helpers/retry.envelope";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
 import { processAuthEvent } from "@/events/authProcessor.evt";
-import { retryOrDLQ } from "./helpers/retry.handler";
+import { retryOrDLQ } from "../retry.helpers/retry.handler";
 import { validateWithSchema } from "../schema/zod.helper";
 import { AuthEventSchema } from "../schema/user.schema";
-import { TOPICS } from "../config/topics";
+import { TOPICS } from "../config/kafka.topics";
 import emailQueue from "@/infrastructure/queues/email.queue";
 import { withMongoTransaction } from "@/events/mongo.wrapper";
 import {

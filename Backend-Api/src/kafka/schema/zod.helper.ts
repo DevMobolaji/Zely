@@ -1,6 +1,6 @@
 // events/validateEvent.ts
 import { ZodTypeAny } from "zod";
-import { PermanentError } from "../consumer/helpers/retry.error";
+import { PermanentError } from "../retry.helpers/retry.error";
 
 export function validateWithSchema<T>(
   schema: ZodTypeAny,

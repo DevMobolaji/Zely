@@ -19,7 +19,7 @@ export function extractRequestContext(req: IAuthRequest): IRequestContext {
 
 export function attachRequestContext(
     req: IAuthRequest,
-    res: Response,
+    _res: Response,
     next: NextFunction
 ): void {
     if (!req.requestId) {
