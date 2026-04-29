@@ -72,6 +72,13 @@ const envSchema = z.object({
     CORS_ORIGIN: z.string().min(1),
     ALLOWED_DOMAINS: z.string().min(1),
 
+
+    //KYC
+    KYC_PROVIDER: z.string().min(1),
+    DOJAH_API_KEY: z.string().min(1),
+    DOJAH_APP_ID: z.string().min(1),
+    DOJAH_BASE_URL: z.string().min(1)
+
 });
 
 
@@ -137,6 +144,15 @@ export const config = {
         refreshExpiry: env.JWT_REFRESH_EXPIRY,
         refreshCookieName: env.JWT_COOKIE_NAME,
         resetSecret: env.JWT_RESET_SECRET
+    },
+
+    kyc: {
+        provider: env.KYC_PROVIDER ?? "ADMIN",
+        dojah: {
+            apiKey: env.DOJAH_API_KEY,
+            appId: env.DOJAH_APP_ID,
+            baseUrl: env.DOJAH_BASE_URL ?? "https://api.dojah.io",
+        },
     },
 
     security: {

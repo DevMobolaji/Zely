@@ -1,4 +1,4 @@
-import { LedgerAccount, LedgerAccountType, LedgerOwnerType } from "@/modules/ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountType, LedgerOwnerType } from "@/modules/ledger/ledger.account.model";
 import mongoose from "mongoose";
 import { generateLedgerAccountId, generateWalletId } from "@/shared/utils/id.generator";
 import { ensureSystemUser } from "@/infrastructure/helpers/systemUser.helper";

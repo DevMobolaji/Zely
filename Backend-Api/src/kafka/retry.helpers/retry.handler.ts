@@ -1,7 +1,7 @@
 // retry.handler.ts
 import { PermanentError, TransientError } from "./retry.error";
-import { sendToRetry } from "../../producer/retryProducer";
-import { sendToDLQ } from "../../producer/sendToDlq";
+import { sendToRetry } from "../producer/retry.producer";
+import { sendToDLQ } from "../producer/sendToDlq";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "./retry.envelope";
 

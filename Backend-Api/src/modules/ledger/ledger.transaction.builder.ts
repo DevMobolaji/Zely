@@ -1,7 +1,7 @@
 import BadRequestError from "@/shared/errors/badRequest";
 import { ClientSession, Types } from "mongoose";
-import { LedgerTransactionModel } from "../transfer/Transaction.builder.model";
-import { LedgerAccount } from "./ledgerAccount.model";
+import { LedgerTransactionModel } from "./ledger.transaction.model";
+import { LedgerAccount } from "./ledger.account.model";
 import { AddCreditInput, AddDebitInput, LedgerEntryInput } from "@/config/interfaces/ledgerEntry.interface";
 import { LedgerEntry } from "./ledger.entry.model";
 import { generateLedgerId } from "@/shared/utils/id.generator";

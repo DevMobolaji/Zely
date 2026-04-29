@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BaseEventSchema } from "./user.schema";
+import { BaseEventSchema } from "./index.schema";
 
 export const VaultCreatedV1Schema = BaseEventSchema.extend({
   eventType: z.literal("VAULT_CREATED"),

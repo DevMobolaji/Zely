@@ -1,7 +1,7 @@
 import { config } from "@/config/index";
 import mongoose from "mongoose";
 import { logger } from "@/shared/utils/logger";
-import { runOutboxRouter } from "@/kafka/config/outboxRouter";
+import { runOutboxRouter } from "@/kafka/config/debezium.outboxrouter";
 
 async function bootstrap() {
   try {

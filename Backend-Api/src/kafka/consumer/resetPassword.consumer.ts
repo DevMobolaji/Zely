@@ -1,11 +1,11 @@
 import { kafka } from "../config/kafka.config";
 import { initIdempotency, completeIdempotency } from "@/events/idempotency";
-import { TOPICS } from "../config/topics";
+import { TOPICS } from "../config/kafka.topics";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "@/kafka/consumer/helpers/retry.envelope";
+import { RetryEnvelope } from "@/kafka/retry.helpers/retry.envelope";
 import { validateWithSchema } from "../schema/zod.helper";
 import { AuthEventSchema } from "../schema/user.schema";
-import { retryOrDLQ } from "./helpers/retry.handler";
+import { retryOrDLQ } from "../retry.helpers/retry.handler";
 import { resetPasswordProcessor } from "@/events/resetPasswordProcessor.evt";
 import {
   kafkaMessagesProcessedTotal,

@@ -1,6 +1,6 @@
 import { admin, connectAdmin, kafka } from "./kafka.config";
 import { logger } from "@/shared/utils/logger";
-import { TOPICS } from "./topics";
+import { TOPICS } from "./kafka.topics";
 import { OutboxEvent } from "@/modules/audit/outbox.model";
 
 const ROUTER_GROUP = "outbox-router";
@@ -15,6 +15,7 @@ const TOPIC_ROUTE_MAP: Record<string, string> = {
   [TOPICS.AUDIT_EVENTS]: TOPICS.AUDIT_EVENTS,
   [TOPICS.VAULT_EVENTS]: TOPICS.VAULT_EVENTS,
   [TOPICS.PASSWORD_EVENTS]: TOPICS.PASSWORD_EVENTS,
+  [TOPICS.KYC_EVENTS]: TOPICS.KYC_EVENTS,
 };
 
 export async function runOutboxRouter() {

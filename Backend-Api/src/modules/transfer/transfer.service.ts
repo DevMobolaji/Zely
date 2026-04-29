@@ -1,13 +1,12 @@
-import { deductWalletFunds, ensureWalletsAreActive, findVault, findWalletByType, lockVaultToPreventConcurrency, lockWalletFunds, lookUpAccounts, lookUpLedgerAccount, lookUpLedgerAccountForP2p, lookUpPrimaryWallets, LookUpVaultLedger, lookupVaultLedger, resolveAccountByUserId, unlockVault, unlockWalletFunds } from "../helpers/resolvers";
+import { deductWalletFunds, ensureWalletsAreActive, findVault, findWalletByType, lockVaultToPreventConcurrency, lockWalletFunds, lookUpAccounts, lookUpLedgerAccount, lookUpLedgerAccountForP2p, lookUpPrimaryWallets, LookUpVaultLedger, resolveAccountByUserId, unlockVault } from "../helpers/resolvers";
 import BadRequestError from "@/shared/errors/badRequest";
-import TransferEngine from "./transferEngine";
+import TransferEngine from "./transfer.engine";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 import { internalTransferRequest, TransferRequestInput, vaultTransferRequest } from "./transfer.interface";
-import { generateIdempotencyKey } from "@/shared/utils/id.generator";
-import mongoose, { Types } from "mongoose";
+import mongoose from "mongoose";
 import { Wallet, WalletDocument, WalletType } from "../wallet/wallet.model";
 import vaultModel, { VaultDocument } from "../vault/vault.model";
-import { LedgerAccount, LedgerOwnerType } from "../ledger/ledgerAccount.model";
+import { LedgerOwnerType } from "../ledger/ledger.account.model";
 import { NotFoundError } from "@/shared/errors/notFoundError";
 import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
@@ -80,23 +79,15 @@ class TransferService {
         { kycTier: 1 }
       ).session(session).lean();
 
-      console.log("THis is the sendUser", senderUser)
-
       const receiverUser = await UserModel.findOne(
         { _id: receiverAccount.userId },
         { kycTier: 1 }
       ).session(session).lean();
 
-      console.log("This is the receiverUser", receiverUser)
-
-
       const senderTier = senderUser?.kycTier ?? KycTier.TIER_1;
       const receiverTier = receiverUser?.kycTier ?? KycTier.TIER_1;
-      console.log(senderTier)
-      console.log(receiverTier)
 
-
-      const ennf = await enforceTransactionLimits({
+      await enforceTransactionLimits({
         userId: senderAccount.userId.toString(),
         userPublicId: dto.senderId,
         kycTier: senderTier,
@@ -106,16 +97,12 @@ class TransferService {
         session,
       });
 
-      console.log(ennf)
-
-      const rev = await enforceReceiverBalanceCap({
+      await enforceReceiverBalanceCap({
         receiverWallet,
         receiverKycTier: receiverTier,
         amount: dto.amount,
         currency: dto.currency,
       });
-
-      console.log(rev)
 
       /** -------------------------
        * BALANCE SNAPSHOT
@@ -131,8 +118,6 @@ class TransferService {
         dto.currency,
         'P2P_TRANSFER'
       );
-
-      console.log(fee, totalDeducted)
 
       const senderWalletLocked = await lockWalletFunds(senderWallet._id, totalDeducted, session);
 

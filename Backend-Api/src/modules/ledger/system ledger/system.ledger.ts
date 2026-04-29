@@ -8,7 +8,7 @@ import TransactionBuilder from "../ledger.transaction.builder";
 import { lookUpLedgerAccount, resolveAccountByAccountNumber, resolveWallet } from "@/modules/helpers/resolvers";
 import { markCompleted, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
 import { Wallet, WalletType } from "@/modules/wallet/wallet.model";
-import { LedgerOwnerType } from "../ledgerAccount.model";
+import { LedgerOwnerType } from "../ledger.account.model";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 
 
@@ -130,7 +130,7 @@ class SystemLedger {
             action: AuditAction.TRANSACTION_COMPLETED,
             status: AuditStatus.PENDING,
             payload: {
-              sender:  {
+              sender: {
                 walletId: sysBalAfter?.walletId,
                 email: "system@zely.app",
                 name: "ADMIN_SYSTEM_USER",
@@ -150,7 +150,7 @@ class SystemLedger {
                 accountNumber: account.accountNumber,
                 accountType: account.type
               },
-              
+
               amount: user.amount,
               currency: "NGN",
               transactionRef,

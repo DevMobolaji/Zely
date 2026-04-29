@@ -18,7 +18,7 @@
 // }
 
 
-export type ProcessorType = "transfer" | "projection" | "auth";
+export type ProcessorType = "transfer" | "projection" | "auth" | "kyc";
 
 export interface RetryEnvelopeMeta {
   retryCount: number;

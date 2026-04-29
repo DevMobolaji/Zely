@@ -1,7 +1,7 @@
 import { kafka } from "../config/kafka.config";
 import { completeIdempotency, initIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
-import { RetryEnvelope } from "./helpers/retry.envelope";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
 import { processAuthEvent } from "@/events/authProcessor.evt";
 import { processTransferEvents, publishConfirmedEvent } from "@/events/transferProcessor.evt";
 import { handleTransactionCompleted } from "@/events/projectionEvt";
@@ -11,20 +11,24 @@ import { TransferEventSchema } from "../schema/transfer.schema";
 import {
   AUTH_MAX_RETRIES,
   AUTH_RETRY_LEVELS,
+  KYC_MAX_RETRIES,
+  KYC_RETRY_LEVELS,
   TRANSFER_MAX_RETRIES,
   TRANSFER_RETRY_LEVELS,
-} from "./helpers/retry.policy";
+} from "../retry.helpers/retry.policy";
 import z from "zod";
 import { sendToDLQ } from "../producer/sendToDlq";
-import { sendToRetry } from "../producer/retryProducer";
+import { sendToRetry } from "../producer/retry.producer";
 import { withMongoTransaction } from "@/events/mongo.wrapper";
-import { ProcessorType } from "./helpers/retry.envelope";
+import { ProcessorType } from "../retry.helpers/retry.envelope";
 import { ClientSession } from "mongoose";
 import {
   kafkaMessagesProcessedTotal,
   kafkaMessagesFailedTotal,
   kafkaProcessingDuration,
 } from "@/infrastructure/resilience/metrics";
+import { kycEvent } from "@/events/kyc.events";
+import { KycEventSchema } from "../schema/kyc.schema";
 
 export const RetryEnvelopeSchema = z.object({
   meta: z.object({
@@ -33,9 +37,9 @@ export const RetryEnvelopeSchema = z.object({
     lastError: z.string().optional(),
     originalConsumerGroup: z.string().optional(),
     originalTopic: z.string(),
-    processor: z.enum(["transfer", "projection", "auth"]),
+    processor: z.enum(["transfer", "projection", "auth", "kyc"]),
   }),
-  event: z.union([AuthEventSchema, TransferEventSchema]),
+  event: z.union([AuthEventSchema, TransferEventSchema, KycEventSchema]),
 });
 
 /** -------------------------
@@ -80,6 +84,11 @@ const PROCESSOR_REGISTRY: Record<ProcessorType, ProcessorConfig> = {
     retryLevels: TRANSFER_RETRY_LEVELS,
     maxRetries: TRANSFER_MAX_RETRIES,
   },
+  kyc: {
+    processor: kycEvent,
+    retryLevels: KYC_RETRY_LEVELS,
+    maxRetries: KYC_MAX_RETRIES,
+  }
 };
 
 const RETRY_CONSUMER_GROUP = "retry-consumer";
@@ -88,6 +97,7 @@ const retryConsumer = kafka.consumer({ groupId: RETRY_CONSUMER_GROUP });
 const ALL_RETRY_TOPICS = [
   ...AUTH_RETRY_LEVELS.map((l) => l.topic),
   ...TRANSFER_RETRY_LEVELS.map((l) => l.topic),
+  ...KYC_RETRY_LEVELS.map((l) => l.topic),
 ];
 
 export async function runRetryConsumer() {
@@ -235,10 +245,10 @@ export async function runRetryConsumer() {
 
           await completeIdempotency(
             envelope.event.eventId,
-            originalConsumerGroup,
+            RETRY_CONSUMER_GROUP,
             IdmChks.version,
-            topic,
-            session// use current retry topic for idempotency record
+            session,
+            topic// use current retry topic for idempotency record
           );
 
         });
@@ -255,11 +265,10 @@ export async function runRetryConsumer() {
           retryCount: nextRetryCount,
         });
 
-        logger.info("Transaction re-committed successfully", {
-          eventId: envelope.event.eventId,
-        });
+        if (processorType === "transfer") {
+          await publishConfirmedEvent(envelope);
+        }
 
-        await publishConfirmedEvent(envelope);
       } catch (error: any) {
         logger.error("Retry processing failed", {
           eventId: envelope.event.eventId,

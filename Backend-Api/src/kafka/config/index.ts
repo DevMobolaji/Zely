@@ -1,9 +1,9 @@
 import { admin, producer } from "@/kafka/config/kafka.config"
 import { logger } from "@/shared/utils/logger";
 import { connectAdmin, createTopic, disconnectAdmin } from './kafka.config';
-import { TOPICS } from './topics';
+import { TOPICS } from './kafka.topics';
 
-import { AUTH_RETRY_LEVELS, TRANSFER_RETRY_LEVELS } from "../consumer/helpers/retry.policy";
+import { AUTH_RETRY_LEVELS, TRANSFER_RETRY_LEVELS } from "../retry.helpers/retry.policy";
 
 const PARTITIONS = 3;
 const REPLICATION_FACTOR = 1;
@@ -22,7 +22,7 @@ export async function setupKafkaTopics(): Promise<void> {
         ...AUTH_RETRY_LEVELS.map(l => l.topic),
         ...TRANSFER_RETRY_LEVELS.map(l => l.topic),
     ];
-    
+
     for (const topic of Object.values(retryTopics)) {
         await createTopic(topic, PARTITIONS, REPLICATION_FACTOR);
     }

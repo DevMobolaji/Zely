@@ -2,7 +2,7 @@
 import { kafka } from "../config/kafka.config";
 import { initFailedEvents } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
-import { TOPICS } from "../config/topics";
+import { TOPICS } from "../config/kafka.topics";
 import {
     kafkaMessagesProcessedTotal,
     kafkaMessagesFailedTotal,

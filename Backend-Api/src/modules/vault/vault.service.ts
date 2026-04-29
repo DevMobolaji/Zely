@@ -1,4 +1,4 @@
-import { LedgerAccount, LedgerAccountType, LedgerOwnerType } from "../ledger/ledgerAccount.model";
+import { LedgerAccount, LedgerAccountType, LedgerOwnerType } from "../ledger/ledger.account.model";
 import vaultModel from "./vault.model";
 import mongoose from "mongoose";
 import User from "../auth/authmodel";

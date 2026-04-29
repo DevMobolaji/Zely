@@ -1,4 +1,4 @@
-import { PermanentError } from "@/kafka/consumer/helpers/retry.error";
+import { PermanentError, TransientError } from "@/kafka/retry.helpers/retry.error";
 import { logger } from "@/shared/utils/logger";
 import mongoose from "mongoose";
 
@@ -23,7 +23,7 @@ export async function vaultEvents(
       case "VAULT_CREATED":
         logger.info(`Vault created: ${payload.vaultId}`);
         break;
-  
+
       case "VAULT_TRANSFER_COMPLETED":
         logger.info(`Vault transfer completed: ${payload.transactionRef}`);
         break;
@@ -31,7 +31,13 @@ export async function vaultEvents(
       default:
         break;
     }
-  } catch (error) {
-    
+  } catch (err: any) {
+    if (err instanceof PermanentError || err instanceof TransientError) {
+      throw err;
+    }
+
+    throw new TransientError(
+      `[v${version}] vault event failed: ${err.message}`
+    );
   }
 }
