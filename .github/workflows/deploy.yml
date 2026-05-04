@@ -18,12 +18,15 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
+          cache-dependency-path: zely-fintech-app/package-lock.json
 
       - name: Install dependencies
         run: npm ci
+        working-directory: zely-fintech-app
 
       - name: Build
         run: npm run build
+        working-directory: zely-fintech-app
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -34,6 +37,7 @@ jobs:
 
       - name: Sync to S3
         run: aws s3 sync dist/ s3://zely-frontend-app --delete
+        working-directory: zely-fintech-app
 
       - name: Invalidate CloudFront cache
         run: |
