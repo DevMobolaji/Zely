@@ -5,6 +5,8 @@ import User from "modules/auth/authmodel";
 import { extractRequestContext } from "./request.context";
 import { getLatestHashForDevice } from "@/infrastructure/helpers/session.helper";
 import Unauthorized from "../errors/unauthorized";
+import { UserRole } from "@/modules/auth/authinterface";
+import { StatusCodes } from "http-status-codes";
 
 export interface AccessPayload {
     userId: string;
@@ -60,3 +62,13 @@ export const requireAuth = async (
         return next(new UnauthenticatedError("Unauthorize"));
     }
 };
+
+
+export const isAdmin = async (req: Request, res: Response, next: NextFunction) => {
+    const role = req.user?.role;
+
+    if (role !== UserRole.ADMIN) {
+        return res.status(StatusCodes.FORBIDDEN).json({ error: "ADMIN_ONLY" });
+    }
+    next();
+}

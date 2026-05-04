@@ -29,7 +29,9 @@ export async function vaultEvents(
         break;
 
       default:
-        break;
+        throw new PermanentError(
+          `Unsupported vault event type: ${eventType}`
+        );
     }
   } catch (err: any) {
     if (err instanceof PermanentError || err instanceof TransientError) {

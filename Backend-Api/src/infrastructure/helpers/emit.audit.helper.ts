@@ -53,7 +53,7 @@ export const emitOutboxEvent = async ({ topic, eventId, eventType, action, statu
           aggregateId,
           aggregateType,
           version,
-          occurredAt: new Date()
+          timestamp: new Date()
         }
       ], options?.session ? { session: options.session } : undefined
     );

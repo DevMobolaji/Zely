@@ -49,14 +49,16 @@ export enum IDPrefixes {
 
     //WALLET
     WALLET = "WAL",
-    
+
     //LEDGER
     LEDGER = "LED",
 
     //LEDGER ACCOUNT
     LEDGER_ACCOUNT = "LAC",
     VAULT = "VAULT",
-    
+
+    RECONCILIATION = "RECON"
+
 }
 
 export type EntityId<T extends IDPrefixes> = `${T}_${string}`;
@@ -195,6 +197,9 @@ export const generateLedgerId = (): EntityId<IDPrefixes.LEDGER> =>
 
 export const generateVaultId = (): EntityId<IDPrefixes.VAULT> =>
     generateId(IDPrefixes.VAULT) as EntityId<IDPrefixes.VAULT>;
+
+export const generateReconcile = (): EntityId<IDPrefixes.RECONCILIATION> =>
+    generateId(IDPrefixes.RECONCILIATION) as EntityId<IDPrefixes.RECONCILIATION>;
 
 export const generateLedgerAccountId = (): EntityId<IDPrefixes.LEDGER_ACCOUNT> =>
     generateId(IDPrefixes.LEDGER_ACCOUNT) as EntityId<IDPrefixes.LEDGER_ACCOUNT>;

@@ -2,133 +2,8 @@ import mongoose from "mongoose";
 import { logger } from "@/shared/utils/logger";
 import { PermanentError, TransientError } from "@/kafka/retry.helpers/retry.error";
 import { RetryEnvelope } from "@/kafka/retry.helpers/retry.envelope";
-import { producer } from "@/kafka/config/kafka.config";
-import { TOPICS } from "@/kafka/config/kafka.topics";
-import { EmailOutboxModel } from "@/kafka/emails/email.Outbox";
+import { writeToEmailOutbox } from "@/kafka/emails/write.email";
 
-
-/** -------------------------
- * PUBLISH TO CONFIRMED TOPIC
- * Retries inline with exponential backoff.
- * Only routes to DLQ after exhausting all attempts.
- * ------------------------- */
-
-import { withKafkaBreaker } from '@/infrastructure/resilience/breakers/kafka.breaker';
-import { kafkaMessagesProcessedTotal } from '@/infrastructure/resilience/metrics';
-
-export async function publishConfirmedEvent(
-  envelope: RetryEnvelope,
-  maxAttempts = 3,
-  baseDelayMs = 300
-): Promise<void> {
-  const key = envelope.event.eventId || "unknown";
-  const value = JSON.stringify(envelope);
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      await withKafkaBreaker(async () => {
-        await producer.send({
-          topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
-          messages: [
-            {
-              key,
-              value,
-              headers: {
-                "x-source-topic": TOPICS.TRANSACTION_EVENTS,
-              },
-            },
-          ],
-        });
-      }, 'publishConfirmedEvent');
-
-      kafkaMessagesProcessedTotal.inc({
-        topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
-        consumer_group: 'transfer-producer',
-      });
-
-      logger.info("Event published to confirmed.transfer.events", {
-        eventId: envelope.event.eventId,
-      });
-      return;
-
-    } catch (err: any) {
-      const isLastAttempt = attempt === maxAttempts;
-
-      if (isLastAttempt) {
-        logger.error("Failed to publish confirmed event after all attempts", {
-          eventId: envelope.event.eventId,
-          error: err.message,
-        });
-        // Don't throw — outbox pattern guarantees eventual delivery
-        // Debezium will pick up the outbox record and route it when Kafka recovers
-        return;
-      }
-
-      const delay = baseDelayMs * 2 ** (attempt - 1);
-      logger.warn(`Publish attempt ${attempt} failed, retrying in ${delay}ms`, {
-        eventId: envelope.event.eventId,
-        error: err.message,
-      });
-      await new Promise((res) => setTimeout(res, delay));
-    }
-  }
-}
-/** -------------------------
- * WRITE TO EMAIL OUTBOX
- * Writes email intent to MongoDB inside the caller's session.
- * The poller picks it up and dispatches to BullMQ.
- * jobId unique constraint prevents duplicate outbox records on replay.
- * ------------------------- */
-
-async function writeToEmailOutbox(
-  {
-    jobName,
-    payload,
-    jobId,
-    eventId,
-    transactionRef,
-    aggregateType,
-    envelope,
-  }: {
-    jobName: string;
-    payload: Record<string, any>;
-    jobId: string;
-    eventId: string;
-    transactionRef?: string;
-    aggregateType: string;
-    envelope: RetryEnvelope;
-  },
-  session: mongoose.ClientSession
-): Promise<void> {
-  try {
-    await EmailOutboxModel.create(
-      [
-        {
-          jobName,
-          payload,
-          jobId,
-          eventId,
-          transactionRef,
-          aggregateType,
-          envelope,
-          status: "PENDING",
-        },
-      ],
-      { session }
-    );
-  } catch (err: any) {
-    // Duplicate jobId — outbox record already exists from a previous attempt
-    // This is safe to skip — the poller will dispatch it
-    if (err.code === 11000) {
-      logger.warn("Email outbox record already exists, skipping", {
-        jobId,
-        eventId,
-      });
-      return;
-    }
-    throw err;
-  }
-}
 
 /** -------------------------
  * PROCESS TRANSFER EVENTS
@@ -174,9 +49,9 @@ export async function processTransferEvents(
      * ------------------------- */
     switch (eventType) {
       case "TRANSACTION_COMPLETED": {
-        const jobId = `${transactionRef}:${eventType}`;
+        const jobId = `${transactionRef}_${eventType}`;
 
-        if (transferType === "INTERNAL_TRANSFER") {
+        if (transferType === "INTERNAL_SYSTEM_TRANSFER") {
           await writeToEmailOutbox(
             {
               jobName: "transferCompleted",
@@ -211,9 +86,7 @@ export async function processTransferEvents(
             session
           );
 
-          logger.info("Internal transfer email written to outbox", {
-            transactionRef,
-          });
+          logger.info("Internal transfer email written to outbox");
         } else if (transferType === "P2P_TRANSFER") {
           // Sender email
           await writeToEmailOutbox(
@@ -282,7 +155,7 @@ export async function processTransferEvents(
           throw new PermanentError(`Unsupported transferType: ${transferType}`);
         }
 
-        logger.info("Transfer event processing complete", { transactionRef });
+        logger.info("Transfer event processing complete");
         break;
       }
 

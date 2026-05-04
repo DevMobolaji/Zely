@@ -10,6 +10,7 @@
     "worker:poller": "ts-node -r tsconfig-paths/register src/workers/email.poller.ts",
     "worker:email": "ts-node -r tsconfig-paths/register src/workers/email.worker.ts",
     "worker:outbox": "ts-node -r tsconfig-paths/register src/workers/outbox.worker.ts",
+    "worker:reconcile": "ts-node -r tsconfig-paths/register src/workers/reconcile.worker.ts",
     "run-migrations": "ts-node -r tsconfig-paths/register src/db/runMigration.ts"
   },
   "keywords": [],

@@ -22,14 +22,24 @@ export function requireMinimumTier(minTier: KycTier) {
       const user = await User.findOne({ userId }, { kycTier: 1 }).lean();
       if (!user) return res.status(StatusCodes.UNAUTHORIZED).json({ error: "USER_NOT_FOUND" });
 
-      const userRank = TIER_RANK[user.kycTier ?? KycTier.TIER_1];
+      const currentTier = user.kycTier as KycTier | undefined;
+
+      const userRank = currentTier ? TIER_RANK[currentTier] : TIER_RANK[KycTier.TIER_1];
+
       const requiredRank = TIER_RANK[minTier];
+
+      if (!userRank) {
+        return res.status(StatusCodes.FORBIDDEN).json({
+          error: "INVALID_KYC_TIER",
+        });
+      }
+      //const requiredRank = TIER_RANK[minTier];
 
       if (userRank < requiredRank) {
         return res.status(StatusCodes.FORBIDDEN).json({
           error: "INSUFFICIENT_KYC_TIER",
           requiredTier: minTier,
-          currentTier: user.kycTier,
+          currentTier: user.kycTier ?? KycTier.TIER_1,
         });
       }
 

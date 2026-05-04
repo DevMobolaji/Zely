@@ -53,6 +53,9 @@ import { seedFeeConfig } from '@/infrastructure/seeder/fee.seeder';
 import ensureSystemLedger from '@/modules/ledger/system ledger/create.system.ledger';
 import { ensureTransactionLimits } from './seeder/transactionLimits.seeder';
 import { runKycConsumer } from '@/kafka/consumer/kyc.consumer';
+import { SKIP_PATHS } from './helpers/skip.rule.helper';
+import { reconciliationQueue } from '@/modules/reconciliation/reconciliation.scheduler';
+import { migrateSystemFeeToTreasury } from './migrations/2026-05-rename-system-fee';
 
 
 
@@ -109,6 +112,9 @@ class App {
             await ensureTransactionLimits();
             logger.info('✅ Transaction limits initialized');
 
+            // After mongoose.connect, before app.listen
+            await migrateSystemFeeToTreasury();
+
         } catch (error) {
             logger.error('❌ MongoDB connection failed:', error);
             throw new Error('MongoDB connection failed - cannot start application');
@@ -157,7 +163,7 @@ class App {
 
         try {
             createBullBoard({
-                queues: [new BullMQAdapter(emailQueue) /* Add other queues here */],
+                queues: [new BullMQAdapter(emailQueue), new BullMQAdapter(reconciliationQueue) /* Add other queues here */],
                 serverAdapter,
             });
             this.express.use('/admin/queues', serverAdapter.getRouter());
@@ -224,16 +230,25 @@ class App {
     // ================================================
 
     private initializeLoggingMiddleware(): void {
-        // Morgan HTTP logger
-        if (config.app.env === 'development') {
-            this.express.use(morgan('dev'));
+        const skipNoise = (req: Request, res: Response): boolean => {
+            if (SKIP_PATHS.has(req.path)) return true;
+            const ua = req.get("User-Agent") ?? "";
+            if (ua.startsWith("Prometheus/")) return true;
+            return false;
+        };
+
+        if (config.app.env === "development") {
+            this.express.use(morgan("dev", { skip: skipNoise }));
         } else {
-            this.express.use(morgan('combined', {
-                skip: (req, res) => res.statusCode < 400, // Only log errors in production
-                stream: {
-                    write: (message: string) => logger.info(message.trim())
-                }
-            }));
+            this.express.use(
+                morgan("combined", {
+                    // Production: skip non-errors AND skip noise on errors too
+                    skip: (req, res) => res.statusCode < 400 || skipNoise(req, res),
+                    stream: {
+                        write: (message: string) => logger.info(message.trim()),
+                    },
+                })
+            );
         }
     }
 

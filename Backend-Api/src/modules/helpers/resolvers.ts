@@ -215,7 +215,7 @@ export const lookUpLedgerAccount = async (
       ownerId: senderOwnerId,
       ownerType: senderOwnerType,
       currency,
-      type: LedgerAccountType.MAIN_CHECKINGS
+      type: LedgerAccountType.SYSTEM_TREASURY
     }).session(session),
 
     LedgerAccount.findOne({
@@ -224,6 +224,7 @@ export const lookUpLedgerAccount = async (
       currency,
       type: LedgerAccountType.MAIN_CHECKINGS
     }).session(session)
+
   ]);
 
   if (!senderLedger || !receiverLedger) {

@@ -6,13 +6,14 @@ import { RetryEnvelope } from "../retry.helpers/retry.envelope";
 import { validateWithSchema } from "../schema/zod.helper";
 import { TransferEventSchema } from "../schema/transfer.schema";
 import { retryOrDLQ } from "../retry.helpers/retry.handler";
-import { processTransferEvents, publishConfirmedEvent } from "@/events/transferProcessor.evt";
+import { processTransferEvents } from "@/events/transferProcessor.evt";
 import { withMongoTransaction } from "@/events/mongo.wrapper";
 import {
   kafkaMessagesProcessedTotal,
   kafkaMessagesFailedTotal,
   kafkaProcessingDuration,
 } from "@/infrastructure/resilience/metrics";
+import { publishConfirmedEvent } from "@/events/publishconfirm.event";
 
 let isConsumerReady = false;
 
@@ -176,9 +177,7 @@ export async function runTransferConsumer() {
           offset: (parseInt(message.offset) + 1).toString(),
         }]);
 
-        logger.info("Transaction committed successfully", {
-          eventId: envelope.event.eventId,
-        });
+        logger.info("Transaction committed successfully");
 
         await publishConfirmedEvent(envelope);
 
