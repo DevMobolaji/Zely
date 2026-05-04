@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,200..1000;1,6..12,200..1000&display=swap"
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100..800&display=swap"
     rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -21,7 +21,8 @@
             'xs': '375px',
           },
           fontFamily: {
-            sans: ['Nunito Sans', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+            sans: ['JetBrains Mono', 'monospace'],
           },
           colors: {
             primary: {
@@ -93,7 +94,7 @@
 </script>
   <style>
     body {
-      font-family: 'Nunito Sans', sans-serif;
+      font-family: 'JetBrains Mono', monospace;
       margin: 0;
       padding: 0;
       width: 100%;
@@ -149,8 +150,7 @@
 
 <body>
   <div id="root"></div>
-  <script src="index.tsx" type="module"></script>
-<script type="module" src="/index.tsx"></script>
+  <script type="module" src="/src/index.tsx"></script>
 </body>
 
 </html>

@@ -155,6 +155,20 @@ export const config = {
         },
     },
 
+
+    payment: {
+        provider: process.env.PAYMENT_PROVIDER ?? "MOCK",
+        paystack: {
+            secretKey: process.env.PAYSTACK_SECRET_KEY,
+            publicKey: process.env.PAYSTACK_PUBLIC_KEY,
+            webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET,
+            baseUrl: process.env.PAYSTACK_BASE_URL ?? "https://api.paystack.co",
+        },
+        callbackUrl: process.env.PAYMENT_CALLBACK_URL ?? "http://localhost:3000/payment/callback",
+        minAmount: parseInt(process.env.PAYMENT_MIN_AMOUNT_KOBO ?? "10000", 10),  // ₦100 default
+        maxAmount: parseInt(process.env.PAYMENT_MAX_AMOUNT_KOBO ?? "10000000000", 10),  // ₦100M default cap
+    },
+
     security: {
         sessionSecret: env.SESSION_SECRET,
         maxLoginAttempts: env.MAX_LOGIN_ATTEMPTS,
