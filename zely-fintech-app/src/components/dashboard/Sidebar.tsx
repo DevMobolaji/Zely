@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Home, List, Wallet, CreditCard, Settings, TrendingUp, LogOut, Activity, X, PiggyBank, ArrowLeftRight, Download, UserCircle, ShieldCheck, Users, History as HistoryIcon } from 'lucide-react';
+import { Home, List, Wallet, CreditCard, Settings, TrendingUp, LogOut, Activity, X, PiggyBank, ArrowLeftRight, Download, UserCircle, ShieldCheck, Users, History as HistoryIcon, Lightbulb } from 'lucide-react';
 import { authService } from '../../services/auth.services';
 import { useAuth } from '../../auth/AuthProvider';
 
@@ -40,6 +40,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, isSidebarOpen, setIsSideba
         { path: '/wallets', icon: Wallet, label: 'Wallets' },
         { path: '/savings', icon: PiggyBank, label: 'Savings' },
         { path: '/transfers', icon: ArrowLeftRight, label: 'Transfers' },
+        { path: '/utility-bills', icon: Lightbulb, label: 'Utility Bills' },
         { path: '/fund-wallet', icon: Download, label: 'Fund Wallet' },
         { path: '/transactions', icon: List, label: 'Transactions' },
         { path: '/kyc', icon: ShieldCheck, label: 'Verification' },
@@ -81,8 +82,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, isSidebarOpen, setIsSideba
                             key={item.path}
                             onClick={() => handleNav(item.path)}
                             style={index === 3 ? { height: '60px' } : undefined}
-                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${
-                                isActive(item.path)
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${isActive(item.path)
                                 ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-lg shadow-slate-200 dark:shadow-none'
                                 : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
                                 }`}

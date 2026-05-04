@@ -11,11 +11,11 @@ import StateRenderer from '../../components/common/StateRenderer';
 
 const DashboardScreen: React.FC = () => {
     const navigate = useNavigate();
-    
+
     // Use Custom Hook for Data Fetching
-    const { 
-        data: transactions, 
-        loading: loadingTransactions, 
+    const {
+        data: transactions,
+        loading: loadingTransactions,
         error: errorTransactions,
         execute: refreshTransactions
     } = useAsync<Transaction[]>(useCallback(() => transactionService.getRecent(10), [])); // Fetch more to get contacts
@@ -82,7 +82,7 @@ const DashboardScreen: React.FC = () => {
 
     return (
         <div className="w-full max-w-5xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            
+
             {/* Header / Greeting */}
             <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
                 <div>
@@ -109,13 +109,16 @@ const DashboardScreen: React.FC = () => {
                         ₦{totalBalance.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
                     </h2>
                 </div>
-                
-                <div className="flex items-center gap-3 w-full md:w-auto">
+
+                <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
                     <button onClick={() => navigate('/transfers')} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-white text-slate-900 rounded-xl font-bold hover:bg-slate-100 transition-colors shadow-sm">
                         <Send className="w-4 h-4" /> Transfer
                     </button>
+                    <button onClick={() => navigate('/utility-bills')} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-white text-slate-900 rounded-xl font-bold hover:bg-slate-100 transition-colors shadow-sm">
+                        <Receipt className="w-4 h-4" /> Pay Bills
+                    </button>
                     <button onClick={() => navigate('/savings')} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-slate-800 text-white border border-slate-700 rounded-xl font-bold hover:bg-slate-700 transition-colors shadow-sm">
-                        <Receipt className="w-4 h-4" /> Savings
+                        <Plus className="w-4 h-4" /> Savings
                     </button>
                 </div>
             </div>
@@ -123,13 +126,13 @@ const DashboardScreen: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 {/* Left Column: Quick Transfer & Cards */}
                 <div className="lg:col-span-2 space-y-8">
-                    
+
                     {/* Quick Transfer */}
                     {recentContacts.length > 0 && (
                         <div>
                             <h3 className="text-base font-bold text-slate-900 dark:text-white mb-4">Quick Transfer</h3>
                             <div className="flex gap-4 overflow-x-auto p-1 pb-4 no-scrollbar">
-                                <button 
+                                <button
                                     onClick={() => navigate('/transfers')}
                                     className="flex flex-col items-center gap-2 min-w-[80px] group"
                                 >
@@ -139,7 +142,7 @@ const DashboardScreen: React.FC = () => {
                                     <span className="text-xs font-bold text-slate-500 group-hover:text-primary transition-colors">New</span>
                                 </button>
                                 {recentContacts.map((contact, idx) => (
-                                    <button 
+                                    <button
                                         key={idx}
                                         onClick={() => handleQuickTransfer(contact.name)}
                                         className="flex flex-col items-center gap-2 min-w-[80px] group"
@@ -170,13 +173,13 @@ const DashboardScreen: React.FC = () => {
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {/* Main Checking Card */}
-                            <div 
+                            <div
                                 onClick={() => navigate(`/wallets/${accounts[0].id}`)}
                                 className="relative bg-slate-900 text-white rounded-[1.5rem] p-5 cursor-pointer transition-all hover:scale-[1.02] flex flex-col justify-between aspect-[1.586/1] shadow-xl hover:shadow-2xl overflow-hidden group"
                             >
                                 <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none group-hover:bg-primary/10 transition-colors"></div>
                                 <div className="absolute bottom-0 left-0 w-40 h-40 bg-purple-500/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2 pointer-events-none"></div>
-                                
+
                                 <div className="flex justify-between items-start relative z-10">
                                     <div>
                                         <span className="font-bold text-white text-sm tracking-wide">Main Checking</span>
@@ -197,7 +200,7 @@ const DashboardScreen: React.FC = () => {
                             </div>
 
                             {/* Savings Card */}
-                            <div 
+                            <div
                                 onClick={() => navigate(`/wallets/${accounts[1].id}`)}
                                 className="relative bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-[1.5rem] p-5 cursor-pointer transition-all hover:scale-[1.02] flex flex-col justify-between aspect-[1.586/1] shadow-xl hover:shadow-2xl overflow-hidden border border-slate-100 dark:border-slate-700/50 group"
                             >
@@ -234,28 +237,27 @@ const DashboardScreen: React.FC = () => {
                         <h3 className="text-base font-bold text-slate-900 dark:text-white">Recent Activity</h3>
                         <button onClick={() => navigate('/transactions')} className="text-xs font-bold text-slate-500 hover:text-primary transition-colors">View All</button>
                     </div>
-                    
+
                     <div className="bg-white dark:bg-slate-900 rounded-[1.5rem] border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm min-h-[400px]">
-                        <StateRenderer 
-                            loading={loadingTransactions} 
-                            error={errorTransactions} 
-                            data={transactions} 
+                        <StateRenderer
+                            loading={loadingTransactions}
+                            error={errorTransactions}
+                            data={transactions}
                             onRetry={refreshTransactions}
                             emptyMessage="No recent transactions found."
                         >
                             <div className="divide-y divide-slate-100 dark:divide-slate-800">
                                 {transactions?.slice(0, 6).map((tx) => (
-                                    <div 
-                                        key={tx.id} 
+                                    <div
+                                        key={tx.id}
                                         onClick={() => setSelectedTransaction(tx)}
                                         className="p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors group"
                                     >
                                         <div className="flex items-center gap-3">
-                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                                                tx.type === 'incoming' 
-                                                    ? 'bg-green-100 text-green-600 dark:bg-green-900/20 dark:text-green-400' 
-                                                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
-                                            }`}>
+                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${tx.type === 'incoming'
+                                                ? 'bg-green-100 text-green-600 dark:bg-green-900/20 dark:text-green-400'
+                                                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                                                }`}>
                                                 {tx.type === 'incoming' ? <ArrowDownLeft className="w-5 h-5" /> : <ArrowUpRight className="w-5 h-5" />}
                                             </div>
                                             <div>
@@ -264,14 +266,12 @@ const DashboardScreen: React.FC = () => {
                                             </div>
                                         </div>
                                         <div className="text-right">
-                                            <span className={`font-bold text-sm block ${
-                                                tx.type === 'incoming' ? 'text-green-600 dark:text-green-400' : 'text-slate-900 dark:text-white'
-                                            }`}>
+                                            <span className={`font-bold text-sm block ${tx.type === 'incoming' ? 'text-green-600 dark:text-green-400' : 'text-slate-900 dark:text-white'
+                                                }`}>
                                                 {tx.type === 'incoming' ? '+' : '-'}₦{Math.abs(tx.amount).toLocaleString('en-NG', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                             </span>
-                                            <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                                                tx.status === 'success' ? 'text-green-500' : tx.status === 'pending' ? 'text-yellow-500' : 'text-red-500'
-                                            }`}>{tx.status}</span>
+                                            <span className={`text-[10px] font-bold uppercase tracking-wider ${tx.status === 'success' ? 'text-green-500' : tx.status === 'pending' ? 'text-yellow-500' : 'text-red-500'
+                                                }`}>{tx.status}</span>
                                         </div>
                                     </div>
                                 ))}
@@ -281,13 +281,12 @@ const DashboardScreen: React.FC = () => {
                 </div>
             </div>
 
-            <TransactionDetailsModal 
-                transaction={selectedTransaction} 
-                onClose={() => setSelectedTransaction(null)} 
+            <TransactionDetailsModal
+                transaction={selectedTransaction}
+                onClose={() => setSelectedTransaction(null)}
             />
         </div>
     );
 };
 
 export default DashboardScreen;
-    

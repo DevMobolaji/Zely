@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { PiggyBank, Plus, Lock, Unlock, CalendarClock, MoreHorizontal, Target, X, Check, AlertCircle, ChevronDown, Wallet, Loader2, Trash2, ArrowDownLeft, CheckCircle2, PartyPopper, ArrowRight, Pencil, AlertTriangle } from 'lucide-react';
+import confetti from 'canvas-confetti';
 import { useToast } from '../../context/ToastContext';
 import { accountsData } from '../../utils/mockData';
 import { Account } from '../../utils/types';
@@ -63,7 +64,7 @@ const AccountSelect: React.FC<AccountSelectProps> = ({ label, accounts, selected
             >
                 {selectedAccount ? (
                     <div className="flex items-center gap-3">
-                         <div className="p-2 bg-slate-200 dark:bg-slate-700 rounded-lg">
+                        <div className="p-2 bg-slate-200 dark:bg-slate-700 rounded-lg">
                             <Wallet className="w-4 h-4 text-slate-600 dark:text-slate-300" />
                         </div>
                         <div>
@@ -110,7 +111,7 @@ const AccountSelect: React.FC<AccountSelectProps> = ({ label, accounts, selected
 
 const SavingsScreen: React.FC = () => {
     const { showToast } = useToast();
-    
+
     // State
     const [goals, setGoals] = useState<SavingsGoal[]>([
         { id: '1', title: 'New Car', targetAmount: 2500000, currentAmount: 1250000, locked: true, autoSave: true, deadline: '2024-12-31', category: 'car' },
@@ -118,7 +119,7 @@ const SavingsScreen: React.FC = () => {
         { id: '3', title: 'Vacation', targetAmount: 500000, currentAmount: 120000, locked: false, autoSave: true, deadline: '2024-08-15', category: 'vacation' },
         { id: '4', title: 'MacBook Pro', targetAmount: 2000000, currentAmount: 2000000, locked: false, autoSave: false, deadline: '2024-05-01', category: 'gadget' },
     ]);
-    
+
     const [accounts, setAccounts] = useState<Account[]>(accountsData);
 
     // API Call Preparation (Commented out for production use later)
@@ -209,10 +210,10 @@ const SavingsScreen: React.FC = () => {
 
     const confirmGoalCompletion = () => {
         if (!completedGoal) return;
-        
+
         // 1. Delete the goal
         setGoals(prev => prev.filter(g => g.id !== completedGoal.id));
-        
+
         // 2. Close modal
         setCompletedGoal(null);
 
@@ -245,14 +246,14 @@ const SavingsScreen: React.FC = () => {
             setGoals([...goals, newGoal]);
             setIsCreating(false);
             setIsCreateModalOpen(false);
-            
+
             // Reset Form
             setNewGoalTitle('');
             setNewGoalTarget('');
             setNewGoalDeadline('');
             setNewGoalAutoSave(false);
             setNewGoalLocked(false);
-            
+
             showToast('success', 'New savings goal created!');
         }, 1500);
     };
@@ -269,7 +270,7 @@ const SavingsScreen: React.FC = () => {
     const handleUpdateGoal = (e: React.FormEvent) => {
         e.preventDefault();
         if (!editingGoal) return;
-        
+
         setIsUpdating(true);
         setTimeout(() => {
             setGoals(prev => prev.map(g => {
@@ -294,7 +295,7 @@ const SavingsScreen: React.FC = () => {
     const handleTopUp = (e: React.FormEvent) => {
         e.preventDefault();
         if (!activeTopUpGoal) return;
-        
+
         const amount = Number(parseCurrency(topUpAmount));
         const sourceAccount = accounts.find(a => a.id === sourceAccountId);
 
@@ -315,7 +316,7 @@ const SavingsScreen: React.FC = () => {
             let goalReached = false;
 
             const currentGoal = goals.find(g => g.id === activeTopUpGoal.id);
-            if(currentGoal) {
+            if (currentGoal) {
                 const newAmount = currentGoal.currentAmount + amount;
                 if (newAmount >= currentGoal.targetAmount) {
                     goalReached = true;
@@ -328,9 +329,14 @@ const SavingsScreen: React.FC = () => {
             if (updatedGoal) {
                 const finalGoal = updatedGoal; // Capture for closure
                 setGoals(prev => prev.map(g => g.id === activeTopUpGoal.id ? finalGoal : g));
-                
+
                 if (goalReached) {
                     setCompletedGoal(finalGoal);
+                    confetti({
+                        particleCount: 150,
+                        spread: 70,
+                        origin: { y: 0.6 }
+                    });
                 } else {
                     showToast('success', `Successfully added ₦${amount.toLocaleString()} to ${activeTopUpGoal.title}`);
                 }
@@ -346,7 +352,7 @@ const SavingsScreen: React.FC = () => {
         <div className="w-full max-w-[1920px] mx-auto space-y-8 animate-in fade-in slide-in-from-right-4">
             <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-bold">Savings Goals</h2>
-                <button 
+                <button
                     onClick={() => setIsCreateModalOpen(true)}
                     className="bg-primary hover:bg-primary-light text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors shadow-lg shadow-primary/25"
                 >
@@ -366,14 +372,14 @@ const SavingsScreen: React.FC = () => {
                                     {isCompleted ? <CheckCircle2 className="w-6 h-6" /> : goal.locked ? <Lock className="w-6 h-6" /> : <PiggyBank className="w-6 h-6" />}
                                 </div>
                                 <div className="flex gap-2">
-                                    <button 
+                                    <button
                                         onClick={() => handleEditClick(goal)}
                                         className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-primary"
                                         title="Edit Goal"
                                     >
                                         <Pencil className="w-5 h-5" />
                                     </button>
-                                    <button 
+                                    <button
                                         onClick={() => handleDeleteClick(goal)}
                                         className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 rounded-full transition-colors text-slate-400"
                                         title="Delete Goal"
@@ -408,7 +414,7 @@ const SavingsScreen: React.FC = () => {
 
                             <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex gap-2">
                                 {isCompleted ? (
-                                    <button 
+                                    <button
                                         onClick={() => handleRedeemGoal(goal.id)}
                                         className="w-full py-3 text-sm font-bold bg-green-500 text-white hover:bg-green-600 rounded-xl transition-colors shadow-lg shadow-green-500/25 flex items-center justify-center gap-2"
                                     >
@@ -419,7 +425,7 @@ const SavingsScreen: React.FC = () => {
                                         <button onClick={() => toggleLock(goal.id)} className="flex-1 py-2 text-xs font-bold bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors text-slate-600 dark:text-slate-300">
                                             {goal.locked ? 'Unlock' : 'Lock'} Funds
                                         </button>
-                                        <button 
+                                        <button
                                             onClick={() => setActiveTopUpGoal(goal)}
                                             className="flex-1 py-2 text-xs font-bold bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors"
                                         >
@@ -444,7 +450,7 @@ const SavingsScreen: React.FC = () => {
                         <p className="text-slate-500 dark:text-slate-400 mb-6 font-medium">
                             Are you sure you want to delete <strong>{goalToDelete.title}</strong>?
                         </p>
-                        
+
                         {goalToDelete.currentAmount > 0 && (
                             <div className="bg-yellow-50 dark:bg-yellow-900/10 p-4 rounded-xl mb-6 border border-yellow-100 dark:border-yellow-900/20 text-left">
                                 <p className="text-sm font-bold text-yellow-700 dark:text-yellow-500 flex items-center gap-2">
@@ -457,13 +463,13 @@ const SavingsScreen: React.FC = () => {
                         )}
 
                         <div className="flex gap-3">
-                            <button 
+                            <button
                                 onClick={() => setGoalToDelete(null)}
                                 className="flex-1 py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
                             >
                                 Cancel
                             </button>
-                            <button 
+                            <button
                                 onClick={executeDeleteGoal}
                                 className="flex-1 py-3.5 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-all shadow-lg shadow-red-500/25"
                             >
@@ -486,14 +492,14 @@ const SavingsScreen: React.FC = () => {
                         <p className="text-slate-500 dark:text-slate-400 mb-6 font-medium">
                             You've hit your target for <strong>{completedGoal.title}</strong>!
                         </p>
-                        
+
                         <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl mb-6 flex items-center justify-between border border-slate-100 dark:border-slate-800">
                             <div className="text-left">
                                 <span className="text-xs text-slate-400 uppercase font-bold">Total Saved</span>
                                 <p className="text-xl font-black text-slate-900 dark:text-white">₦{completedGoal.currentAmount.toLocaleString()}</p>
                             </div>
                             <ArrowRight className="text-slate-300" />
-                             <div className="text-right">
+                            <div className="text-right">
                                 <span className="text-xs text-slate-400 uppercase font-bold">Transfer To</span>
                                 <p className="text-sm font-bold text-slate-900 dark:text-white flex items-center justify-end gap-1"><Wallet className="w-3 h-3" /> Main Checking</p>
                             </div>
@@ -503,7 +509,7 @@ const SavingsScreen: React.FC = () => {
                             Proceeding will move funds to your main wallet and remove this savings goal.
                         </p>
 
-                        <button 
+                        <button
                             onClick={confirmGoalCompletion}
                             className="w-full py-3.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold rounded-xl hover:opacity-90 transition-all shadow-lg hover:shadow-xl transform active:scale-[0.98]"
                         >
@@ -521,11 +527,11 @@ const SavingsScreen: React.FC = () => {
                             <h3 className="text-xl font-bold">Create New Goal</h3>
                             <button onClick={() => setIsCreateModalOpen(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"><X className="w-5 h-5" /></button>
                         </div>
-                        
+
                         <form onSubmit={handleCreateGoal} className="space-y-4">
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Goal Title</label>
-                                <input 
+                                <input
                                     type="text"
                                     value={newGoalTitle}
                                     onChange={(e) => setNewGoalTitle(e.target.value)}
@@ -538,7 +544,7 @@ const SavingsScreen: React.FC = () => {
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Target Amount</label>
                                 <div className="relative">
                                     <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-slate-400">₦</span>
-                                    <input 
+                                    <input
                                         type="text"
                                         value={newGoalTarget}
                                         onChange={(e) => setNewGoalTarget(formatCurrency(parseCurrency(e.target.value)))}
@@ -602,7 +608,7 @@ const SavingsScreen: React.FC = () => {
                                 </div>
                             )}
 
-                            <button 
+                            <button
                                 type="submit"
                                 disabled={isCreating}
                                 className="w-full py-3.5 bg-primary text-white font-bold rounded-xl hover:bg-primary-light transition-all flex items-center justify-center gap-2 mt-4"
@@ -622,11 +628,11 @@ const SavingsScreen: React.FC = () => {
                             <h3 className="text-xl font-bold">Edit Savings Goal</h3>
                             <button onClick={() => setIsEditModalOpen(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"><X className="w-5 h-5" /></button>
                         </div>
-                        
+
                         <form onSubmit={handleUpdateGoal} className="space-y-4">
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Goal Title</label>
-                                <input 
+                                <input
                                     type="text"
                                     value={editTitle}
                                     onChange={(e) => setEditTitle(e.target.value)}
@@ -638,7 +644,7 @@ const SavingsScreen: React.FC = () => {
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Target Amount</label>
                                 <div className="relative">
                                     <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-slate-400">₦</span>
-                                    <input 
+                                    <input
                                         type="text"
                                         value={editTarget}
                                         onChange={(e) => setEditTarget(formatCurrency(parseCurrency(e.target.value)))}
@@ -665,7 +671,7 @@ const SavingsScreen: React.FC = () => {
                                 </div>
                             </div>
 
-                            <button 
+                            <button
                                 type="submit"
                                 disabled={isUpdating}
                                 className="w-full py-3.5 bg-primary text-white font-bold rounded-xl hover:bg-primary-light transition-all flex items-center justify-center gap-2 mt-4"
@@ -691,7 +697,7 @@ const SavingsScreen: React.FC = () => {
 
                         <form onSubmit={handleTopUp} className="space-y-4">
                             <div>
-                                <AccountSelect 
+                                <AccountSelect
                                     label="From Account"
                                     accounts={accounts.filter(a => a.type === 'current')}
                                     selectedId={sourceAccountId}
@@ -703,7 +709,7 @@ const SavingsScreen: React.FC = () => {
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Amount to Add</label>
                                 <div className="relative">
                                     <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-slate-400">₦</span>
-                                    <input 
+                                    <input
                                         type="text"
                                         value={topUpAmount}
                                         onChange={(e) => setTopUpAmount(formatCurrency(parseCurrency(e.target.value)))}
@@ -718,7 +724,7 @@ const SavingsScreen: React.FC = () => {
                                 </div>
                             </div>
 
-                            <button 
+                            <button
                                 type="submit"
                                 disabled={isProcessingTopUp || !topUpAmount}
                                 className="w-full py-3.5 bg-primary text-white font-bold rounded-xl hover:bg-primary-light transition-all flex items-center justify-center gap-2 mt-4 disabled:opacity-50 disabled:cursor-not-allowed"

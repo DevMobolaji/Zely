@@ -24,6 +24,7 @@ import DashboardLayout from './layouts/DashboardLayout';
 import RequireAuth from './auth/RequireAuth';
 import { ToastProvider } from './context/ToastContext';
 import { AuthProvider } from './auth/AuthProvider';
+import UtilityBillsScreen from './pages/dashboard/UtilityBillsScreen';
 
 const App: React.FC = () => {
   return (
@@ -39,30 +40,31 @@ const App: React.FC = () => {
               <Route path="/reset-password" element={<ResetPasswordScreen />} />
               <Route path="/verify" element={<TwoFactorScreen />} />
               <Route path="/unauthorized" element={<UnauthorizedScreen />} />
-              
+
               {/* Protected Onboarding Flow */}
               <Route element={<RequireAuth />}>
                 <Route path="/onboarding/provisioning" element={<ProvisioningScreen />} />
               </Route>
-              
+
               {/* Protected User Routes (Wrapped in DashboardLayout) */}
               <Route element={<RequireAuth />}>
                 <Route element={<DashboardLayout />}>
-                    <Route path="/dashboard" element={<DashboardScreen />} />
-                    <Route path="/wallets" element={<WalletsScreen />} />
-                    <Route path="/wallets/:walletId" element={<WalletsScreen />} />
-                    <Route path="/fund-wallet" element={<TransfersScreen />} />
-                    <Route path="/transfers" element={<TransfersScreen />} />
-                    <Route path="/transactions" element={<TransactionsScreen />} />
-                    <Route path="/savings" element={<SavingsScreen />} />
-                    <Route path="/profile" element={<ProfileScreen />} />
-                    <Route path="/settings" element={<SettingsScreen />} />
-                    <Route path="/kyc" element={<KYCStatusScreen />} />
-                    <Route path="/kyc/upgrade/tier-2" element={<KYCTier2Form />} />
-                    <Route path="/kyc/upgrade/tier-3" element={<KYCTier3Form />} />
+                  <Route path="/dashboard" element={<DashboardScreen />} />
+                  <Route path="/wallets" element={<WalletsScreen />} />
+                  <Route path="/wallets/:walletId" element={<WalletsScreen />} />
+                  <Route path="/fund-wallet" element={<TransfersScreen />} />
+                  <Route path="/transfers" element={<TransfersScreen />} />
+                  <Route path="/transactions" element={<TransactionsScreen />} />
+                  <Route path="/savings" element={<SavingsScreen />} />
+                  <Route path="/utility-bills" element={<UtilityBillsScreen />} />
+                  <Route path="/profile" element={<ProfileScreen />} />
+                  <Route path="/settings" element={<SettingsScreen />} />
+                  <Route path="/kyc" element={<KYCStatusScreen />} />
+                  <Route path="/kyc/upgrade/tier-2" element={<KYCTier2Form />} />
+                  <Route path="/kyc/upgrade/tier-3" element={<KYCTier3Form />} />
                 </Route>
               </Route>
-              
+
               {/* Protected Admin Routes */}
               <Route element={<RequireAuth allowedRoles={['admin']} />}>
                 <Route element={<DashboardLayout />}>
@@ -76,7 +78,7 @@ const App: React.FC = () => {
                   <Route path="/admin/reconciliation/:runId" element={<AdminReconciliationDetailScreen />} />
                 </Route>
               </Route>
-              
+
               {/* Fallback */}
               <Route path="*" element={<Navigate to="/login" replace />} />
             </Routes>
