@@ -5,10 +5,12 @@ import mongoose, { Schema, Document, Types } from "mongoose";
 export enum LedgerAccountType {
   MAIN_CHECKINGS = "MAIN_CHECKINGS",
   SAVINGS = "SAVINGS",
-
+  ESCROW = "ESCROW",                     // ← add
+  SETTLEMENT = "SETTLEMENT",             // ← add
   SYSTEM_TREASURY = "SYSTEM_TREASURY",
   SYSTEM_REVENUE = "SYSTEM_REVENUE",
   VAULT = "VAULT",
+  EXTERNAL_FUNDING = "EXTERNAL_FUNDING",
 }
 
 export enum LedgerOwnerType {
@@ -45,7 +47,7 @@ const LedgerAccountSchema = new Schema(
       type: String,
       index: true,
       require: true
-    }, 
+    },
 
     ownerType: {
       type: String,
@@ -79,21 +81,23 @@ LedgerAccountSchema.pre("validate", async function () {
     [LedgerOwnerType.WALLET]: [
       LedgerAccountType.MAIN_CHECKINGS,
       LedgerAccountType.SAVINGS,
+      LedgerAccountType.ESCROW,
+      LedgerAccountType.SETTLEMENT,
     ],
-
     [LedgerOwnerType.VAULT]: [
       LedgerAccountType.VAULT,
     ],
-
     [LedgerOwnerType.SYSTEM]: [
       LedgerAccountType.SYSTEM_TREASURY,
       LedgerAccountType.SYSTEM_REVENUE,
+      LedgerAccountType.EXTERNAL_FUNDING,
     ],
-
     [LedgerOwnerType.USER]: [
       LedgerAccountType.MAIN_CHECKINGS,
       LedgerAccountType.SAVINGS,
-    ]
+      LedgerAccountType.ESCROW,
+      LedgerAccountType.SETTLEMENT,
+    ],
   };
 
   const allowedTypes = allowedTypesByOwner[this.ownerType];

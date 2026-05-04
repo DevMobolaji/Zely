@@ -11,12 +11,12 @@ const SKIP_PATHS = new Set<string>([
 ]);
 
 const shouldSkip = (req: Request): boolean => {
-  // req.path is the path without query string — what we want for matching
   if (SKIP_PATHS.has(req.path)) return true;
 
-  // Catch Prometheus hitting any path (custom exporters, etc.)
   const ua = req.get("User-Agent") ?? "";
   if (ua.startsWith("Prometheus/")) return true;
+
+  if (req.path.startsWith("/admin/queues")) return true;
 
   return false;
 };

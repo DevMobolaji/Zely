@@ -7,7 +7,7 @@ export interface IEmailOutbox extends Document {
   eventId: string;
   transactionRef?: string;
   aggregateType: string;
-  status: "PENDING" | "PROCESSING" | "SENT" | "FAILED";
+  status: "PENDING" | "PROCESSING" | "ENQUEUED" | "SENT" | "FAILED";
   attempts: number;
   claimedAt?: Date;
   sentAt?: Date;
@@ -70,7 +70,7 @@ const EmailOutboxSchema = new Schema<IEmailOutbox>(
      * ------------------------- */
     status: {
       type: String,
-      enum: ["PENDING", "PROCESSING", "SENT", "FAILED"],
+      enum: ["PENDING", "PROCESSING", "ENQUEUED", "SENT", "FAILED"],
       default: "PENDING",
       index: true,
     },

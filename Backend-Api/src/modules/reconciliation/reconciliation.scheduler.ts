@@ -3,36 +3,35 @@ import { Queue, Worker } from "bullmq";
 import { config } from "@/config/index";
 import { logger } from "@/shared/utils/logger";
 import ReconciliationService from "./reconciliation.service";
+import { conn } from "@/workers/bullMq.config"
 
 const QUEUE_NAME = "reconciliation-queue";
 const JOB_NAME = "hourly-reconciliation";
 
-const connection = {
-  host: config.redis.host,
-  port: config.redis.port,
-  password: config.redis.password,
-};
+const connection = conn;
 
 export const reconciliationQueue = new Queue(QUEUE_NAME, { connection });
 
-// ─── Schedule the recurring job ───────────────────────────────────────────
 export async function scheduleReconciliation() {
-  // Remove any existing repeatable jobs to avoid duplicates on restart
-  const repeatables = await reconciliationQueue.getRepeatableJobs();
-  for (const job of repeatables) {
-    if (job.name === JOB_NAME) {
-      await reconciliationQueue.removeRepeatableByKey(job.key);
+  // Remove any existing schedulers to avoid duplicates on restart
+  const schedulers = await reconciliationQueue.getJobSchedulers();
+  for (const scheduler of schedulers) {
+    if (scheduler.name === JOB_NAME) {
+      await reconciliationQueue.removeJobScheduler(scheduler.key);
     }
   }
 
-  // Schedule new job — runs every hour
-  await reconciliationQueue.add(
+  // Schedule new recurring job — runs every hour
+  await reconciliationQueue.upsertJobScheduler(
     JOB_NAME,
-    {},
+    { pattern: "0 * * * *" }, // top of every hour
     {
-      repeat: { pattern: "0 * * * *" }, // top of every hour
-      removeOnComplete: { count: 24 },  // keep last 24 successful runs
-      removeOnFail: { count: 50 },
+      name: JOB_NAME,
+      data: {},
+      opts: {
+        removeOnComplete: { count: 24 },
+        removeOnFail: { count: 50 },
+      },
     }
   );
 

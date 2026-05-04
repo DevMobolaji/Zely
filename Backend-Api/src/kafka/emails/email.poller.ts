@@ -7,7 +7,24 @@ const workerRegistry = new Registry();
 
 const MAX_ATTEMPTS = 5;
 const POLL_INTERVAL_MS = 5_000;
-const STUCK_PROCESSING_THRESHOLD_MS = 2 * 60 * 1000;
+
+// Short — poller claimed it but hasn't enqueued yet
+// If stuck here, something is wrong with Redis connection
+const STUCK_PROCESSING_THRESHOLD_MS = 2 * 60 * 1000; // 2 min
+
+// Longer — it's in Redis, give the worker time to pick it up
+// Accounts for worker restarts, cold starts, concurrency limits
+const STUCK_ENQUEUED_THRESHOLD_MS = 10 * 60 * 1000; // 10 min
+
+// Exponential backoff delays per attempt (ms)
+// attempt 1 → 30s, attempt 2 → 60s, attempt 3 → 120s...
+const RETRY_BACKOFF_MS = [
+  30_000,   // 30 seconds
+  60_000,   // 1 minute
+  120_000,  // 2 minutes
+  300_000,  // 5 minutes
+];
+
 
 // ─── Email Metrics ────────────────────────────────────────────────────────────
 export const emailOutboxPendingCount = new Gauge({
@@ -47,22 +64,33 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function pollOnce(): Promise<void> {
-  // ✅ Update pending count metric on every poll cycle
   const pendingCount = await EmailOutboxModel.countDocuments({
-    status: { $in: ["PENDING", "PROCESSING"] },
+    status: { $in: ["PENDING", "PROCESSING", "ENQUEUED"] },
   });
-  //console.log(`Email outbox pending/processing count: ${pendingCount}`);
   emailOutboxPendingCount.set(pendingCount);
 
   while (true) {
     const job = await EmailOutboxModel.findOneAndUpdate(
       {
         $or: [
-          { status: "PENDING" },
+          {
+            status: "PENDING",
+            $or: [
+              { nextRetryAt: { $exists: false } },
+              { nextRetryAt: { $lte: new Date() } }, // backoff window passed
+            ]
+          },
           {
             status: "PROCESSING",
             claimedAt: {
               $lt: new Date(Date.now() - STUCK_PROCESSING_THRESHOLD_MS),
+            },
+          },
+          {
+            // Redis had the job but crashed before worker ran
+            status: "ENQUEUED",
+            enqueuedAt: {
+              $lt: new Date(Date.now() - STUCK_ENQUEUED_THRESHOLD_MS),
             },
           },
         ],
@@ -74,10 +102,7 @@ async function pollOnce(): Promise<void> {
           claimedAt: new Date(),
         },
       },
-      {
-        new: true,
-        sort: { createdAt: 1 },
-      }
+      { new: true, sort: { createdAt: 1 } }
     );
 
     if (!job) break;
@@ -87,12 +112,13 @@ async function pollOnce(): Promise<void> {
         jobId: job.jobId,
       });
 
+      // ENQUEUED = "handed to BullMQ", not "email sent"
       await EmailOutboxModel.updateOne(
         { _id: job._id },
         {
           $set: {
-            status: "SENT",
-            sentAt: new Date(),
+            status: "ENQUEUED",
+            enqueuedAt: new Date(),
           },
         }
       );
@@ -107,6 +133,7 @@ async function pollOnce(): Promise<void> {
     } catch (err: any) {
       const nextAttempts = job.attempts + 1;
       const exhausted = nextAttempts >= MAX_ATTEMPTS;
+      const backoffMs = RETRY_BACKOFF_MS[job.attempts] ?? 300_000;
 
       await EmailOutboxModel.updateOne(
         { _id: job._id },
@@ -115,6 +142,7 @@ async function pollOnce(): Promise<void> {
             status: exhausted ? "FAILED" : "PENDING",
             lastError: err.message,
             claimedAt: undefined,
+            nextRetryAt: exhausted ? undefined : new Date(Date.now() + backoffMs),
           },
           $inc: { attempts: 1 },
         }
@@ -143,12 +171,13 @@ async function pollOnce(): Promise<void> {
 async function startEmailOutboxPoller(): Promise<void> {
   logger.info("Email outbox poller started");
 
+  // ✅ Register interval ONCE outside the loop
+  setInterval(pushMetrics, 15_000);
+
   while (true) {
     try {
       await pollOnce();
-
       await pushMetrics();
-      setInterval(pushMetrics, 15_000);
     } catch (err: any) {
       logger.error("Email outbox poller iteration failed", {
         error: err.message,

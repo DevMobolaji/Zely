@@ -23,11 +23,9 @@ import mongoose from "mongoose";
 import { hashedPassword, verifyPassword } from "@/config/password";
 import { emitOutboxEvent, getLockTime } from "@/infrastructure/helpers/emit.audit.helper";
 import Unauthorized from "@/shared/errors/unauthorized";
-import redis from "@/infrastructure/cache/redis.cli";
-import { emailQueue } from "@/infrastructure/queues/email.queue";
 import { accountStatus } from "./authinterface";
 
-import OTPManager, { OTPConfigs, OTPPurpose } from "@/modules/helpers/otp.manager"
+import OTPManager, { OTPPurpose } from "@/modules/helpers/otp.manager"
 import { invalidateAllUsrSess, isPasswordInHistory, storeResetMetadata } from "../helpers/auth.helpers";
 import { markOldTokenForDeletionAfter } from "@/infrastructure/helpers/markOld";
 import { NotFoundError } from "@/shared/errors/notFoundError";

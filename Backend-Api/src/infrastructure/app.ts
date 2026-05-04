@@ -54,6 +54,8 @@ import ensureSystemLedger from '@/modules/ledger/system ledger/create.system.led
 import { ensureTransactionLimits } from './seeder/transactionLimits.seeder';
 import { runKycConsumer } from '@/kafka/consumer/kyc.consumer';
 import { SKIP_PATHS } from './helpers/skip.rule.helper';
+import { reconciliationQueue } from '@/modules/reconciliation/reconciliation.scheduler';
+import { migrateSystemFeeToTreasury } from './migrations/2026-05-rename-system-fee';
 
 
 
@@ -110,6 +112,9 @@ class App {
             await ensureTransactionLimits();
             logger.info('✅ Transaction limits initialized');
 
+            // After mongoose.connect, before app.listen
+            await migrateSystemFeeToTreasury();
+
         } catch (error) {
             logger.error('❌ MongoDB connection failed:', error);
             throw new Error('MongoDB connection failed - cannot start application');
@@ -158,7 +163,7 @@ class App {
 
         try {
             createBullBoard({
-                queues: [new BullMQAdapter(emailQueue) /* Add other queues here */],
+                queues: [new BullMQAdapter(emailQueue), new BullMQAdapter(reconciliationQueue) /* Add other queues here */],
                 serverAdapter,
             });
             this.express.use('/admin/queues', serverAdapter.getRouter());

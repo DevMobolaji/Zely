@@ -1,5 +1,12 @@
+import { Worker, Queue } from "bullmq";
+import { EmailService } from "../infrastructure/helpers/email.service.helper";
+import { EMAIL_QUEUE } from "../infrastructure/queues/email.queue";
+import { conn } from "./bullMq.config";
 
+console.log("🔥 EMAIL WORKER FILE LOADED");
 import { Registry, Counter, Histogram, Gauge, Pushgateway } from "prom-client";
+
+
 const workerRegistry = new Registry();
 
 // ─── Worker-local metrics ─────────────────────────────────────────────────────
@@ -26,13 +33,6 @@ const bullmqQueueDepth = new Gauge({
   registers: [workerRegistry],
 });
 
-// ─── All other imports AFTER registry + metrics are set up ────────────────────
-import { Worker, Queue } from "bullmq";
-import { EmailService } from "../infrastructure/helpers/email.service.helper";
-import { EMAIL_QUEUE } from "../infrastructure/queues/email.queue";
-import { conn } from "./bullMq.config";
-
-console.log("🔥 EMAIL WORKER FILE LOADED");
 
 // ─── Pushgateway ──────────────────────────────────────────────────────────────
 const gateway = new Pushgateway(process.env.PUSHGATEWAY_URL || 'http://localhost:9091', [], workerRegistry);
@@ -45,7 +45,8 @@ async function pushMetrics(): Promise<void> {
   }
 }
 
-// ─── Bootstrap ────────────────────────────────────────────────────────────────
+// ─── Bootstrap
+//────────────────────────────────────────────────────────────────
 async function bootstrap(): Promise<void> {
   const connection = conn;
 
@@ -152,7 +153,7 @@ async function bootstrap(): Promise<void> {
       concurrency: 10,
       autorun: true,
       limiter: { max: 10, duration: 1000 },
-      removeOnComplete: { count: 100 },
+      removeOnComplete: { count: 1000 },
       removeOnFail: { count: 500 },
     }
   );

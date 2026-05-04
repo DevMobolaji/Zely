@@ -1,5 +1,6 @@
 import { generateWalletId } from "@/shared/utils/id.generator";
 import mongoose, { Schema, Document, Types } from "mongoose";
+import { LedgerAccountType } from "../ledger/ledger.account.model";
 
 export enum WalletStatus {
   ACTIVE = "ACTIVE",
@@ -14,14 +15,6 @@ export enum FreezeReason {
   FROZEN = "FROZEN",
 }
 
-export enum WalletType {
-  MAIN_CHECKINGS = 'MAIN_CHECKINGS',
-  SAVINGS = 'SAVINGS',
-  ESCROW = 'ESCROW',
-  SYSTEM_FEE = 'SYSTEM_FEE',
-  SETTLEMENT = 'SETTLEMENT'
-}
-
 export interface IUser {
   _id: Types.ObjectId;
   email: string;
@@ -33,10 +26,10 @@ export interface WalletDocument extends Document {
   userId: IUser; //Types.ObjectId;
   userPublicId: string;
   ledgerAccountId: Types.ObjectId; // Ledger source of truth
-  type: WalletType;
+  type: LedgerAccountType;
   currency: string;
   walletId: string;
-  availableBalance: number; // cached from ledger
+  availableBalance: number; // cachedWalLedgerAccountTypeletType from ledger
   lockedBalance: number;
   status: WalletStatus;
   freezeReason: string | null;
@@ -45,6 +38,21 @@ export interface WalletDocument extends Document {
   locked: boolean;
   lockUntil?: Date;
   createdAt: Date;
+
+  // Audit trail for the current unfreeze (latest only)
+  unfrozenBy?: Types.ObjectId;
+  unfrozenAt?: Date;
+  unfreezeReason?: string;
+
+  // Full history of freeze/unfreeze cycles
+  freezeHistory: Array<{
+    frozenAt: Date;
+    freezeReason: string;
+    frozenBy?: Types.ObjectId | null;  // null = system-initiated (e.g., reconciliation)
+    unfrozenAt?: Date;
+    unfrozenBy?: Types.ObjectId;
+    unfreezeReason?: string;
+  }>;
 }
 
 const WalletSchema = new Schema(
@@ -67,10 +75,10 @@ const WalletSchema = new Schema(
 
     type: {
       type: String,
-      enum: Object.values(WalletType),
+      enum: Object.values(LedgerAccountType),
       required: true,
       index: true,
-      default: WalletType.MAIN_CHECKINGS
+      default: LedgerAccountType.MAIN_CHECKINGS
     },
 
     currency: {
@@ -113,6 +121,28 @@ const WalletSchema = new Schema(
 
     freezeUntil: { type: Date, default: null },
 
+    unfrozenBy: {
+      type: Types.ObjectId,
+      ref: "User",
+      default: null
+    },
+    unfrozenAt: { type: Date, default: null },
+    unfreezeReason: { type: String, default: null },
+
+    freezeHistory: {
+      type: [
+        {
+          frozenAt: { type: Date, required: true },
+          freezeReason: { type: String, required: true },
+          frozenBy: { type: Types.ObjectId, ref: "User", default: null },
+          unfrozenAt: { type: Date, default: null },
+          unfrozenBy: { type: Types.ObjectId, ref: "User", default: null },
+          unfreezeReason: { type: String, default: null },
+        }
+      ],
+      default: [],
+    },
+
     version: {
       type: Number,
       default: 0,
@@ -132,6 +162,9 @@ const WalletSchema = new Schema(
     versionKey: "version",
   }
 );
+
+// At the bottom of the file, for any code still importing WalletType
+export { LedgerAccountType as WalletType } from "../ledger/ledger.account.model";
 
 // Enforce 1 wallet per user per currency
 WalletSchema.index({ userPublicId: 1, currency: 1, type: 1 }, { unique: true });
