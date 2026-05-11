@@ -9,8 +9,11 @@ import KycController from './modules/kyc/kyc.controller';
 import ReconciliationController from './modules/reconciliation/reconciliation.controller';
 import FundingController from './modules/fee/funding/funding.controller';
 import WalletAdminController from './modules/wallet/wallet.contoller';
+import WebhookController from './modules/payments/webhook.controller';
+import PaymentController from './modules/payments/payment.controller';
 
-const app = new App([new AuthController(), new TransferController(), new FundController(), new vaultController(), new KycController(), new ReconciliationController(), new FundingController(), new WalletAdminController(),
+const app = new App([new AuthController(), new TransferController(), new FundController(), new vaultController(), new KycController(), new ReconciliationController(), new FundingController(), new WalletAdminController(), new PaymentController(),
+new WebhookController(),
 ], Number(config.app.port))
 
 

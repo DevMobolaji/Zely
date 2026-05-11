@@ -218,7 +218,13 @@ class App {
     }
 
     private initializeParsingMiddleware(): void {
-        this.express.use(express.json({ limit: '10mb', strict: true, }));
+        this.express.use(express.json({
+            limit: '10mb',
+            strict: true,
+            verify: (req, _res, buf) => {
+                (req as any).rawBody = buf.toString('utf-8');
+            }
+        }));
         this.express.use(express.urlencoded({ extended: true, limit: '10mb', }));
         this.express.use(cookieParser());
         this.express.use(compression());
@@ -230,26 +236,26 @@ class App {
     // ================================================
 
     private initializeLoggingMiddleware(): void {
-        const skipNoise = (req: Request, res: Response): boolean => {
-            if (SKIP_PATHS.has(req.path)) return true;
-            const ua = req.get("User-Agent") ?? "";
-            if (ua.startsWith("Prometheus/")) return true;
-            return false;
-        };
+        // const skipNoise = (req: Request, res: Response): boolean => {
+        //     if (SKIP_PATHS.has(req.path)) return true;
+        //     const ua = req.get("User-Agent") ?? "";
+        //     if (ua.startsWith("Prometheus/")) return true;
+        //     return false;
+        // };
 
-        if (config.app.env === "development") {
-            this.express.use(morgan("dev", { skip: skipNoise }));
-        } else {
-            this.express.use(
-                morgan("combined", {
-                    // Production: skip non-errors AND skip noise on errors too
-                    skip: (req, res) => res.statusCode < 400 || skipNoise(req, res),
-                    stream: {
-                        write: (message: string) => logger.info(message.trim()),
-                    },
-                })
-            );
-        }
+        // if (config.app.env === "development") {
+        //     this.express.use(morgan("dev", { skip: skipNoise }));
+        // } else {
+        //     this.express.use(
+        //         morgan("combined", {
+        //             // Production: skip non-errors AND skip noise on errors too
+        //             skip: (req, res) => res.statusCode < 400 || skipNoise(req, res),
+        //             stream: {
+        //                 write: (message: string) => logger.info(message.trim()),
+        //             },
+        //         })
+        //     );
+        // }
     }
 
     /**
@@ -288,7 +294,7 @@ class App {
 
         // API routes
         controllers.forEach((controller) => {
-            this.express.use(`/api/${config.app.apiVersion}`, controller.route);
+            this.express.use(`/api/${config.app.apiVersion}/`, controller.route);
         });
     }
 

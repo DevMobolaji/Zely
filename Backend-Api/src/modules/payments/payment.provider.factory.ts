@@ -2,8 +2,8 @@
 import { config } from "@/config/index";
 import { logger } from "@/shared/utils/logger";
 import { PaymentProvider } from "./payment.provider.interface";
-import { MockProvider } from "./mock.provider";
-// import { PaystackProvider } from "./paystack.provider";  // ← uncomment when we build it
+import { MockProvider } from "./payment.provider.mock";
+//import { PaystackProvider } from "./paystack.provider";  // ← uncomment when we build it
 
 let cachedProvider: PaymentProvider | null = null;
 
@@ -22,7 +22,7 @@ export function getActivePaymentProvider(): PaymentProvider {
       break;
   }
 
-  logger.info(`✅ Payment provider initialized: ${cachedProvider.providerName}`);
+  logger.info(`✅ Payment provider initialized: ${cachedProvider?.providerName}`);
   return cachedProvider;
 }
 
