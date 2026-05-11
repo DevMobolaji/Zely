@@ -43,8 +43,8 @@ class PaymentController implements Controller {
 
   private initializePayment = asyncWrapper(async (req: IAuthRequest, res: Response) => {
     const ctx = getRequestContext(req);
-    const userSub = (req as any).user?.sub;
-    const userId = (req as any).user?.userId;
+    const userSub = req.user?.sub;
+    const userId = req.user?.userId;
 
     const result = await this.paymentService.initializePayment({
       userSub,
@@ -57,7 +57,7 @@ class PaymentController implements Controller {
   });
 
   private getPaymentByReference = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const userPublicId = (req as any).user?.userPublicId;
+    const userPublicId = req.user?.userPublicId;
     const payment = await this.paymentService.getInitializationByReference(req.params.reference);
 
     // Authorization: user can only see their own payments
@@ -69,13 +69,39 @@ class PaymentController implements Controller {
   });
 
   private listMyPayments = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const userPublicId = (req as any).user?.userPublicId;
+    const userPublicId = req.user?.userPublicId || req.user?.userId;
     const { status, limit, skip } = req.query;
 
-    const payments = await this.paymentService.listUserInitializations(userPublicId, {
+    // Validate and parse limit
+    let parsedLimit: number | undefined = undefined;
+    if (limit !== undefined) {
+      const limitNum = parseInt(limit as string, 10);
+      if (!Number.isInteger(limitNum) || limitNum < 0) {
+        return res.status(StatusCodes.BAD_REQUEST).json({
+          error: "INVALID_LIMIT_PARAMETER",
+          message: "limit must be a non-negative integer"
+        });
+      }
+      parsedLimit = limitNum;
+    }
+
+    // Validate and parse skip
+    let parsedSkip: number | undefined = undefined;
+    if (skip !== undefined) {
+      const skipNum = parseInt(skip as string, 10);
+      if (!Number.isInteger(skipNum) || skipNum < 0) {
+        return res.status(StatusCodes.BAD_REQUEST).json({
+          error: "INVALID_SKIP_PARAMETER",
+          message: "skip must be a non-negative integer"
+        });
+      }
+      parsedSkip = skipNum;
+    }
+
+    const payments = await this.paymentService.listUserInitializations(userPublicId!, {
       status: status as PaymentInitializationStatus | undefined,
-      limit: limit ? parseInt(limit as string, 10) : undefined,
-      skip: skip ? parseInt(skip as string, 10) : undefined,
+      limit: parsedLimit,
+      skip: parsedSkip,
     });
 
     return res.status(StatusCodes.OK).json({ ok: true, data: payments });

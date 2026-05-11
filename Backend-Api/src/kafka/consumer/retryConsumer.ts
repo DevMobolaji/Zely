@@ -3,7 +3,7 @@ import { completeIdempotency, initIdempotency } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "../retry.helpers/retry.envelope";
 import { processAuthEvent } from "@/events/authProcessor.evt";
-import { processTransferEvents, publishConfirmedEvent } from "@/events/transferProcessor.evt";
+import { processTransferEvents } from "@/events/transferProcessor.evt";
 import { handleTransactionCompleted } from "@/events/projectionEvt";
 import { validateWithSchema } from "../schema/zod.helper";
 import { AuthEventSchema } from "../schema/user.schema";
@@ -265,9 +265,6 @@ export async function runRetryConsumer() {
           retryCount: nextRetryCount,
         });
 
-        if (processorType === "transfer") {
-          await publishConfirmedEvent(envelope);
-        }
 
       } catch (error: any) {
         logger.error("Retry processing failed", {

@@ -10,6 +10,7 @@ import { Wallet } from "../wallet/wallet.model";
 import { LedgerAccountType } from "@/modules/ledger/ledger.account.model";
 import BadRequestError from "@/shared/errors/badRequest";
 import { NotFoundError } from "@/shared/errors/notFoundError";
+import InvalidWebhookSignatureError from "@/shared/errors/invalidWebhookSignature";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 import { logger } from "@/shared/utils/logger";
 import { config } from "@/config/index";
@@ -58,7 +59,7 @@ class PaymentService {
       context,
     } = params;
 
-    console.log(userSub, userPublicId);
+    logger.debug("Payment initialization request", { userSub, userPublicId });
 
     // ─── 1. Basic validation ──────────────────────────────────────────────
     if (!Number.isInteger(amount) || amount <= 0) {
@@ -76,6 +77,10 @@ class PaymentService {
 
     // ─── 2. Idempotency check ─────────────────────────────────────────────
     // Same user + same key = return existing initialization
+    if (!mongoose.isValidObjectId(userSub)) {
+      throw new BadRequestError("INVALID_USER_ID_FORMAT");
+    }
+
     const existing = await PaymentInitialization.findOne({
       initiatedByUserId: mongoose.Types.ObjectId.createFromHexString(userSub),
       clientIdempotencyKey,
@@ -177,16 +182,43 @@ class PaymentService {
         error: err.message,
       });
 
+      const failureTimestamp = new Date();
+
       await PaymentInitialization.updateOne(
         { _id: initialization._id },
         {
           $set: {
             status: PaymentInitializationStatus.FAILED,
             failureReason: `PROVIDER_INIT_FAILED: ${err.message}`,
-            completedAt: new Date(),
+            completedAt: failureTimestamp,
           },
         }
       );
+
+      // Emit failure event for audit trail
+      await emitOutboxEvent({
+        topic: "payment.events",
+        eventId: generateEventId(),
+        eventType: AuditAction.PAYMENT_FAILED,
+        action: AuditAction.PAYMENT_FAILED,
+        status: AuditStatus.FAILED,
+        payload: {
+          reference: initialization.reference,
+          providerName: this.provider.providerName,
+          amount,
+          currency,
+          purpose,
+          targetWalletId,
+          userPublicId,
+          failureReason: `PROVIDER_INIT_FAILED: ${err.message}`,
+          status: PaymentInitializationStatus.FAILED,
+          completedAt: failureTimestamp,
+        },
+        aggregateType: "PAYMENT_INITIATION",
+        aggregateId: initialization.reference,
+        version: 1,
+        context,
+      });
 
       throw new BadRequestError(`PAYMENT_PROVIDER_UNAVAILABLE: ${err.message}`);
     }
@@ -255,7 +287,7 @@ class PaymentService {
     const isValidSignature = this.provider.verifyWebhookSignature(rawBody, signature);
     if (!isValidSignature) {
       logger.warn("Webhook signature verification failed");
-      throw new BadRequestError("INVALID_WEBHOOK_SIGNATURE");
+      throw new InvalidWebhookSignatureError();
     }
 
     // ─── 2. Parse the payload ─────────────────────────────────────────────
@@ -366,7 +398,7 @@ class PaymentService {
         amount: initialization.amount,
         currency: initialization.currency,
         source: FundingSource.PAYSTACK_WEBHOOK,
-        providerReference: initialization.reference,
+        providerReference: initialization.providerReference || parsedEvent.providerReference,
         initiatedByUserId: initialization.initiatedByUserId.toString(),
         context,
         metadata: {

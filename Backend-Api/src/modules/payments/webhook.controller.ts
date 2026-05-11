@@ -5,6 +5,7 @@ import asyncWrapper from "@/shared/middleware/async.wrapper";
 import { getRequestContext } from "@/shared/middleware/request.context";
 import Controller from "@/config/interfaces/controller.interfaces";
 import PaymentService from "./payment.service";
+import InvalidWebhookSignatureError from "@/shared/errors/invalidWebhookSignature";
 import { logger } from "@/shared/utils/logger";
 
 class WebhookController implements Controller {
@@ -30,20 +31,12 @@ class WebhookController implements Controller {
   private handlePaymentWebhook = asyncWrapper(async (req: Request, res: Response) => {
     const ctx = getRequestContext(req as any);
 
-
     // Body is a Buffer (from express.raw)
     const rawBody = (req as any).rawBody || "";
 
-    // 🔍 DEBUG
-    console.log("DEBUG webhook:", {
+    logger.debug("Webhook received", {
       hasRawBody: !!rawBody,
       rawBodyLength: rawBody.length,
-      rawBodyPreview: rawBody.substring(0, 100),
-      bodyKeys: Object.keys(req.body || {}),
-      headers: {
-        signature: req.headers["x-paystack-signature"],
-        contentType: req.headers["content-type"]
-      }
     });
 
     // Signature comes from a provider-specific header
@@ -72,7 +65,7 @@ class WebhookController implements Controller {
     } catch (err: any) {
       // Signature verification failed or internal processing error.
       // Different error types get different status codes:
-      if (err.message === "INVALID_WEBHOOK_SIGNATURE") {
+      if (err instanceof InvalidWebhookSignatureError) {
         logger.warn("Webhook rejected: invalid signature");
         return res.status(StatusCodes.UNAUTHORIZED).json({ error: "INVALID_SIGNATURE" });
       }

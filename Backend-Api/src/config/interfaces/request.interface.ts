@@ -15,15 +15,19 @@ export interface IRequestContext {
 }
 
 
+export interface JwtUser {
+    sub?: string;           // user's MongoDB _id
+    userId: string;        // user's public ID
+    userPublicId?: string;  // user's public ID (alias)
+    email: string;
+    role: string;
+    [key: string]: any;
+}
+
 export interface IAuthRequest extends Request {
     idempotencyKey?: string;
     deviceId?: string;
-    user?: {
-        userId: string;
-        email: string;
-        role: string;
-        [key: string]: any;
-    };
+    user?: JwtUser;
     requestId?: string;
     context?: IRequestContext;
 }
