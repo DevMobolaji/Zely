@@ -95,7 +95,6 @@ class AuthController implements Controller {
         if (!token) return res.status(StatusCodes.BAD_REQUEST).json({ message: "Refresh token is required" })
 
         const tk = await this.userService.refreshToken(token, getRequestContext(req));
-        console.log(getRequestContext(req))
 
         setRefreshCookie(res, tk.refreshToken, getRefreshCookieLifetimeMs());
 

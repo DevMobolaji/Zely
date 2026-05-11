@@ -6,7 +6,9 @@
       "ES2020"
     ],
     "allowJs": true,
+    "rootDir": "./src",
     "outDir": "dist",
+    "ignoreDeprecations": "5.0",
     "baseUrl": "./src",
     "paths": {
       "@/shared/*": [
@@ -47,7 +49,8 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
   },
   "include": [
     "src",
