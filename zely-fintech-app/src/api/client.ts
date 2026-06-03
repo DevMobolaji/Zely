@@ -9,7 +9,7 @@ import {
 
 // Defined as requested
 export const axiosPrivate = axios.create({
-  baseURL: "http://localhost:3000/api/v1",
+  baseURL: import.meta.env.VITE_API_URL || "http://localhost:3000/api/v1",
   headers: { "Content-Type": "application/json" },
   withCredentials: true,
 });
