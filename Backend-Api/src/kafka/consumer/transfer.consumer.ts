@@ -1,19 +1,23 @@
-import { admin, connectAdmin, kafka } from "../config/kafka.config";
-import { logger } from "@/shared/utils/logger";
-import { completeIdempotency, initIdempotency } from "@/events/idempotency";
-import { TOPICS } from "../config/kafka.topics";
-import { RetryEnvelope } from "../retry.helpers/retry.envelope";
-import { validateWithSchema } from "../schema/zod.helper";
-import { TransferEventSchema } from "../schema/transfer.schema";
-import { retryOrDLQ } from "../retry.helpers/retry.handler";
-import { processTransferEvents } from "@/events/transferProcessor.evt";
-import { withMongoTransaction } from "@/events/mongo.wrapper";
 import {
-  kafkaMessagesProcessedTotal,
+  completeIdempotency,
+  failIdempotency,
+  initIdempotency,
+} from "@/events/idempotency";
+import { withMongoTransaction } from "@/events/mongo.wrapper";
+import { onTransferSuccess } from "@/events/publishconfirm.event";
+import { processTransferEvents } from "@/events/transferProcessor.evt";
+import {
   kafkaMessagesFailedTotal,
+  kafkaMessagesProcessedTotal,
   kafkaProcessingDuration,
 } from "@/infrastructure/resilience/metrics";
-import { publishConfirmedEvent } from "@/events/publishconfirm.event";
+import { logger } from "@/shared/utils/logger";
+import { admin, connectAdmin, kafka } from "../config/kafka.config";
+import { TOPICS } from "../config/kafka.topics";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
+import { retryOrDLQ } from "../retry.helpers/retry.handler";
+import { TransferEventSchema } from "../schema/transfer.schema";
+import { validateWithSchema } from "../schema/zod.helper";
 
 let isConsumerReady = false;
 
@@ -38,11 +42,15 @@ export async function runTransferConsumer() {
         topic: TOPICS.TRANSACTION_EVENTS,
       });
 
-      const hasNoCommits = committed.every((p: { offset: string }) => p.offset === '-1');
+      const hasNoCommits = committed.every(
+        (p: { offset: string }) => p.offset === "-1",
+      );
 
       if (hasNoCommits) {
-        logger.info('Fresh consumer group — seeking all partitions to latest');
-        const topicOffsets = await admin.fetchTopicOffsets(TOPICS.TRANSACTION_EVENTS);
+        logger.info("Fresh consumer group — seeking all partitions to latest");
+        const topicOffsets = await admin.fetchTopicOffsets(
+          TOPICS.TRANSACTION_EVENTS,
+        );
 
         for (const { partition, high } of topicOffsets) {
           transferConsumer.seek({
@@ -53,13 +61,13 @@ export async function runTransferConsumer() {
           logger.info(`Seeked partition ${partition} to offset ${high}`);
         }
       } else {
-        logger.info('Existing consumer group — using committed offsets');
+        logger.info("Existing consumer group — using committed offsets");
       }
 
       isConsumerReady = true;
-      logger.info('✅ Transfer consumer ready — partitions assigned');
+      logger.info("✅ Transfer consumer ready — partitions assigned");
     } catch (err: any) {
-      logger.error('Error during consumer group join', { error: err.message });
+      logger.error("Error during consumer group join", { error: err.message });
       isConsumerReady = true;
     }
   });
@@ -88,14 +96,16 @@ export async function runTransferConsumer() {
       let envelope: RetryEnvelope;
       try {
         const raw = JSON.parse(message.value.toString());
-        const parsedPayload = typeof raw.payload === 'string'
-          ? JSON.parse(raw.payload)
-          : raw.payload;
+        const parsedPayload =
+          typeof raw.payload === "string"
+            ? JSON.parse(raw.payload)
+            : raw.payload;
 
         envelope = {
           meta: {
             retryCount: raw.retryCount ?? parsedPayload.meta?.retryCount ?? 0,
-            createdAt: parsedPayload.meta?.createdAt ?? new Date().toISOString(),
+            createdAt:
+              parsedPayload.meta?.createdAt ?? new Date().toISOString(),
             originalConsumerGroup: TRANSFER_CONSUMER_GROUP,
             originalTopic: topic,
             lastError: raw.lastError ?? parsedPayload.meta?.lastError,
@@ -108,16 +118,26 @@ export async function runTransferConsumer() {
           },
         };
       } catch (e) {
-        logger.error("Failed to parse Kafka message", { topic, partition, offset: message.offset });
+        logger.error("Failed to parse Kafka message", {
+          topic,
+          partition,
+          offset: message.offset,
+        });
         timer(); // end timer on parse failure
-        await transferConsumer.commitOffsets([{
-          topic, partition,
-          offset: (parseInt(message.offset) + 1).toString(),
-        }]);
+        await transferConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
         return;
       }
 
-      const validatedEvent = validateWithSchema(TransferEventSchema, envelope.event) as {
+      const validatedEvent = validateWithSchema(
+        TransferEventSchema,
+        envelope.event,
+      ) as {
         eventId: string;
         eventType: string;
         version: 1;
@@ -136,7 +156,8 @@ export async function runTransferConsumer() {
       const IdmChks = await initIdempotency(
         envelope.event.eventId,
         topic,
-        TRANSFER_CONSUMER_GROUP
+        TRANSFER_CONSUMER_GROUP,
+        envelope.meta.retryCount,
       );
 
       if (IdmChks.decision === "SKIP") {
@@ -145,24 +166,34 @@ export async function runTransferConsumer() {
           consumer_group: TRANSFER_CONSUMER_GROUP,
         });
         timer();
-        await transferConsumer.commitOffsets([{
-          topic, partition,
-          offset: (parseInt(message.offset) + 1).toString(),
-        }]);
+        await transferConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
         return;
       }
 
       try {
-        await withMongoTransaction(async (session) => {
-          await processTransferEvents(topic, validatedEnvelope, session);
+        const result = await withMongoTransaction(async (session) => {
+          const result = await processTransferEvents(
+            topic,
+            validatedEnvelope,
+            session,
+          );
 
           await completeIdempotency(
             envelope.event.eventId,
             TRANSFER_CONSUMER_GROUP,
             IdmChks.version,
             session,
-          )
+            topic,
+            envelope.meta.retryCount, // 🔥 ADD THIS
+          );
 
+          return result;
         });
 
         // ✅ Success metrics
@@ -172,15 +203,17 @@ export async function runTransferConsumer() {
         });
         timer();
 
-        await transferConsumer.commitOffsets([{
-          topic, partition,
-          offset: (parseInt(message.offset) + 1).toString(),
-        }]);
+        await transferConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
 
         logger.info("Transaction committed successfully");
 
-        await publishConfirmedEvent(envelope);
-
+        await onTransferSuccess(validatedEnvelope);
       } catch (error: any) {
         // ✅ Failure metrics
         kafkaMessagesFailedTotal.inc({
@@ -194,13 +227,23 @@ export async function runTransferConsumer() {
           eventId: envelope.event?.eventId,
           error: error.message,
         });
+        await failIdempotency(
+          envelope.event.eventId,
+          TRANSFER_CONSUMER_GROUP,
+          topic,
+          envelope.meta.retryCount, // always 0 on the main topic
+          IdmChks.version,
+        );
 
         await retryOrDLQ({ topic, message: envelope, error });
 
-        await transferConsumer.commitOffsets([{
-          topic, partition,
-          offset: (parseInt(message.offset) + 1).toString(),
-        }]);
+        await transferConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
 
         logger.info("Offset committed after failure", {
           eventId: envelope.event?.eventId,
@@ -214,7 +257,7 @@ export async function runTransferConsumer() {
 export async function stopTransferConsumer() {
   await Promise.race([
     transferConsumer.disconnect(),
-    new Promise<void>((resolve) => setTimeout(resolve, 3000))
+    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
   ]);
   logger.info("✅ Transfer consumer disconnected");
 }

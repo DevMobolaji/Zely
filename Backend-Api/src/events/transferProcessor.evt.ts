@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
 import { logger } from "@/shared/utils/logger";
-import { PermanentError, TransientError } from "@/kafka/retry.helpers/retry.error";
+import {
+  PermanentError,
+  TransientError,
+} from "@/kafka/retry.helpers/retry.error";
 import { RetryEnvelope } from "@/kafka/retry.helpers/retry.envelope";
 import { writeToEmailOutbox } from "@/kafka/emails/write.email";
-
 
 /** -------------------------
  * PROCESS TRANSFER EVENTS
@@ -11,7 +13,7 @@ import { writeToEmailOutbox } from "@/kafka/emails/write.email";
 export async function processTransferEvents(
   topic: string,
   envelope: RetryEnvelope,
-  session: mongoose.ClientSession
+  session: mongoose.ClientSession,
 ) {
   const { payload, version, eventType, eventId } = envelope.event as any;
   const {
@@ -26,8 +28,8 @@ export async function processTransferEvents(
 
   try {
     /** -------------------------
-   * GUARDS
-   * ------------------------- */
+     * GUARDS
+     * ------------------------- */
     if (version !== 1) {
       throw new PermanentError(`Unsupported event version: ${version}`);
     }
@@ -40,9 +42,9 @@ export async function processTransferEvents(
       throw new PermanentError(`Missing required fields for ${eventType}`);
     }
 
-    if (amount === 5) {
-      throw new TransientError("Simulated transient error for testing retries");
-    }
+    // if (amount === 1000) {
+    //   throw new TransientError("Simulated transient error for testing retries");
+    // }
 
     /** -------------------------
      * EVENT ROUTING
@@ -83,7 +85,7 @@ export async function processTransferEvents(
               aggregateType: "TRANSFER",
               envelope,
             },
-            session
+            session,
           );
 
           logger.info("Internal transfer email written to outbox");
@@ -110,13 +112,13 @@ export async function processTransferEvents(
                 senderEmail: sender.email,
                 senderName: sender.name,
               },
-              jobId: `${jobId}:sender`,
+              jobId: `${jobId}_sender`,
               eventId,
               transactionRef,
               aggregateType: "TRANSFER",
               envelope,
             },
-            session
+            session,
           );
 
           // Receiver email
@@ -141,16 +143,18 @@ export async function processTransferEvents(
                 senderEmail: sender.email,
                 senderName: sender.name,
               },
-              jobId: `${jobId}:receiver`,
+              jobId: `${jobId}_receiver`,
               eventId,
               transactionRef,
               aggregateType: "TRANSFER",
               envelope,
             },
-            session
+            session,
           );
 
           logger.info("P2P transfer emails written to outbox");
+        } else if (transferType === "INTERNAL_TRANSFER") {
+          logger.info("No email for internal system transfer yet");
         } else {
           throw new PermanentError(`Unsupported transferType: ${transferType}`);
         }
@@ -174,7 +178,7 @@ export async function processTransferEvents(
             aggregateType: "TRANSFER",
             envelope,
           },
-          session
+          session,
         );
 
         logger.warn("Transfer failed email written to outbox", {
@@ -195,8 +199,7 @@ export async function processTransferEvents(
     }
 
     throw new TransientError(
-      `[v${version}] transfer event failed: ${err.message}`
+      `[v${version}] transfer event failed: ${err.message}`,
     );
   }
-
 }

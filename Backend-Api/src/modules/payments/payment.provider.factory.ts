@@ -3,6 +3,7 @@ import { config } from "@/config/index";
 import { logger } from "@/shared/utils/logger";
 import { PaymentProvider } from "./payment.provider.interface";
 import { MockProvider } from "./payment.provider.mock";
+import { PaystackProvider } from "@/modules/payments/payment.paystack.provider";
 //import { PaystackProvider } from "./paystack.provider";  // ← uncomment when we build it
 
 let cachedProvider: PaymentProvider | null = null;
@@ -13,16 +14,18 @@ export function getActivePaymentProvider(): PaymentProvider {
   const providerName = (config.payment?.provider ?? "MOCK").toUpperCase();
 
   switch (providerName) {
-    // case "PAYSTACK":
-    //   cachedProvider = new PaystackProvider();
-    //   break;
+    case "PAYSTACK":
+      cachedProvider = new PaystackProvider();
+      break;
     case "MOCK":
     default:
       cachedProvider = new MockProvider();
       break;
   }
 
-  logger.info(`✅ Payment provider initialized: ${cachedProvider?.providerName}`);
+  logger.info(
+    `✅ Payment provider initialized: ${cachedProvider?.providerName}`,
+  );
   return cachedProvider;
 }
 

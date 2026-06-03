@@ -15,24 +15,30 @@ import { IRequestContext } from "@/config/interfaces/request.interface";
 import { logger } from "@/shared/utils/logger";
 import { config } from "@/config/index";
 
-
 import UserModel from "../auth/authmodel";
 import FundingService, { FundingSource } from "../fee/funding/funding.service";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import { generateEventId } from "@/shared/utils/id.generator";
-import { KycTier, TransactionLimitConfig } from "../transactionLimit/transaction.limit.model";
-import { ParsedWebhookEvent, PaymentProvider } from "./payment.provider.interface";
+import {
+  KycTier,
+  TransactionLimitConfig,
+} from "../transactionLimit/transaction.limit.model";
+import {
+  ParsedWebhookEvent,
+  PaymentProvider,
+} from "./payment.provider.interface";
 import { getActivePaymentProvider } from "./payment.provider.factory";
+import { ConflictError } from "@/shared/errors/conflictError";
 
 interface InitializePaymentParams {
-  userId: string;                    // user's _id from JWT
-  userSub: string;              // user's public ID from JWT
-  amount: number;                    // minor units (kobo)
+  userId: string;
+  userSub: string;
+  amount: number;
   currency: string;
   purpose: PaymentPurpose;
   targetWalletId: string;
-  clientIdempotencyKey: string;      // from request body
+  clientIdempotencyKey: string;
   context: IRequestContext;
 }
 
@@ -66,16 +72,20 @@ class PaymentService {
       throw new BadRequestError("AMOUNT_MUST_BE_POSITIVE_INTEGER_KOBO");
     }
     if (amount < config.payment.minAmount) {
-      throw new BadRequestError(`AMOUNT_BELOW_MINIMUM_${config.payment.minAmount}`);
+      throw new BadRequestError(
+        `AMOUNT_BELOW_MINIMUM_${config.payment.minAmount}`,
+      );
     }
     if (amount > config.payment.maxAmount) {
-      throw new BadRequestError(`AMOUNT_ABOVE_MAXIMUM_${config.payment.maxAmount}`);
+      throw new BadRequestError(
+        `AMOUNT_ABOVE_MAXIMUM_${config.payment.maxAmount}`,
+      );
     }
     if (!clientIdempotencyKey || clientIdempotencyKey.length < 10) {
       throw new BadRequestError("CLIENT_IDEMPOTENCY_KEY_REQUIRED");
     }
 
-    // ─── 2. Idempotency check ─────────────────────────────────────────────
+    // ─── 2. Idempotency check ────────
     // Same user + same key = return existing initialization
     if (!mongoose.isValidObjectId(userSub)) {
       throw new BadRequestError("INVALID_USER_ID_FORMAT");
@@ -100,17 +110,41 @@ class PaymentService {
       };
     }
 
-    // ===========3. Look up user ==================
+    // ===========3. Look up pending transactions ==================
+
+    const pendingForWallet = await PaymentInitialization.findOne({
+      initiatedByUserId: mongoose.Types.ObjectId.createFromHexString(userSub),
+      targetWalletId,
+      status: PaymentInitializationStatus.PENDING,
+    });
+
+    if (pendingForWallet) {
+      logger.warn("Blocked duplicate PENDING initialization for wallet", {
+        existingReference: pendingForWallet.reference,
+        targetWalletId,
+        userPublicId,
+      });
+      throw new ConflictError(
+        `PENDING_INITIALIZATION_EXISTS_${pendingForWallet.reference}`,
+      );
+    }
+
+    // ===========4. Look up user ==================
     const user = await UserModel.findById(userSub).lean();
 
     if (!user) throw new NotFoundError("USER_NOT_FOUND");
 
     // ─── 4. Look up target wallet ─────────────────────────────────────────
-    const targetWallet = await Wallet.findOne({ walletId: targetWalletId }).lean();
+    const targetWallet = await Wallet.findOne({
+      walletId: targetWalletId,
+    }).lean();
+
     if (!targetWallet) throw new NotFoundError("TARGET_WALLET_NOT_FOUND");
 
     if (!FUNDABLE_WALLET_TYPES.includes(targetWallet.type)) {
-      throw new BadRequestError(`WALLET_TYPE_NOT_FUNDABLE_${targetWallet.type}`);
+      throw new BadRequestError(
+        `WALLET_TYPE_NOT_FUNDABLE_${targetWallet.type}`,
+      );
     }
     if (targetWallet.currency !== currency) {
       throw new BadRequestError("CURRENCY_MISMATCH");
@@ -135,12 +169,47 @@ class PaymentService {
         isActive: true,
       }).lean();
 
-      if (tierConfig && tierConfig.maxWalletBalance > 0) {
-        const projectedBalance = targetWallet.availableBalance + amount;
-        if (projectedBalance > tierConfig.maxWalletBalance) {
-          throw new BadRequestError(
-            `FUNDING_WOULD_EXCEED_TIER_WALLET_CAP_${tierConfig.maxWalletBalance}`
-          );
+      if (tierConfig) {
+        // ─── Wallet balance cap check ───────────────────────────────────────
+        if (tierConfig.maxWalletBalance > 0) {
+          const projectedBalance = targetWallet.availableBalance + amount;
+          if (projectedBalance > tierConfig.maxWalletBalance) {
+            throw new BadRequestError(
+              `FUNDING_WOULD_EXCEED_TIER_WALLET_CAP_${tierConfig.maxWalletBalance}`,
+            );
+          }
+        }
+
+        // ─── Daily funding limit check ──────────────────────────────────────
+        if (tierConfig.maxPerDay > 0) {
+          const startOfDay = new Date();
+          startOfDay.setUTCHours(0, 0, 0, 0);
+
+          const dailyTotal = await PaymentInitialization.aggregate([
+            {
+              $match: {
+                initiatedByUserId:
+                  mongoose.Types.ObjectId.createFromHexString(userSub),
+                status: PaymentInitializationStatus.SUCCESS,
+                currency,
+                completedAt: { $gte: startOfDay },
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: "$amount" },
+              },
+            },
+          ]);
+
+          const totalFundedToday = dailyTotal[0]?.total ?? 0;
+
+          if (totalFundedToday + amount > tierConfig.maxPerDay) {
+            throw new BadRequestError(
+              `DAILY_FUNDING_LIMIT_EXCEEDED_${tierConfig.maxPerDay}`,
+            );
+          }
         }
       }
     }
@@ -160,7 +229,7 @@ class PaymentService {
       initiatedAt: new Date(),
     });
 
-    // ─── 7. Call provider to initialize ──────────────────────────────────
+    // ─── 7. Call provider to initialize ──────
     let providerResult;
     try {
       providerResult = await this.provider.initializeTransaction({
@@ -192,7 +261,7 @@ class PaymentService {
             failureReason: `PROVIDER_INIT_FAILED: ${err.message}`,
             completedAt: failureTimestamp,
           },
-        }
+        },
       );
 
       // Emit failure event for audit trail
@@ -232,7 +301,7 @@ class PaymentService {
           providerAuthorizationUrl: providerResult.authorizationUrl,
           providerInitResponse: providerResult.rawResponse,
         },
-      }
+      },
     );
 
     // ─── 9. Emit outbox event ─────────────────────────────────────────────
@@ -275,7 +344,7 @@ class PaymentService {
     };
   }
 
-  // ─── Process incoming webhook ──────────────────────────────────────────────
+  // ─── Process incoming webhook ────────────
   public async processWebhook(params: {
     rawBody: string;
     signature: string;
@@ -284,10 +353,13 @@ class PaymentService {
     const { rawBody, signature, context } = params;
 
     // ─── 1. Verify signature ──
-    const isValidSignature = this.provider.verifyWebhookSignature(rawBody, signature);
+    const isValidSignature = this.provider.verifyWebhookSignature(
+      rawBody,
+      signature,
+    );
     if (!isValidSignature) {
       logger.warn("Webhook signature verification failed");
-      throw new InvalidWebhookSignatureError();
+      throw new InvalidWebhookSignatureError("Invalid webhook signature");
     }
 
     // ─── 2. Parse the payload ─────────────────────────────────────────────
@@ -346,7 +418,7 @@ class PaymentService {
       await this.markInitializationFailed(
         initialization,
         `AMOUNT_MISMATCH_EXPECTED_${initialization.amount}_GOT_${parsedEvent.amount}`,
-        parsedEvent.rawPayload
+        parsedEvent.rawPayload,
       );
 
       return { acknowledged: true, reason: "AMOUNT_MISMATCH" };
@@ -355,14 +427,78 @@ class PaymentService {
     // ─── 6. Branch by event type ──────────────────────────────────────────
     switch (parsedEvent.type) {
       case "PAYMENT_SUCCESS":
-        await this.handleSuccessfulPayment(initialization, parsedEvent, context);
+        try {
+          await this.handleSuccessfulPayment(
+            initialization,
+            parsedEvent,
+            context,
+          );
+        } catch (err: any) {
+          const isWalletFrozen = err.message?.includes(
+            "TARGET_WALLET_NOT_ACTIVE",
+          );
+
+          if (isWalletFrozen) {
+            logger.error(
+              "Webhook: wallet frozen at credit time — marking DISPUTED",
+              {
+                reference: initialization.reference,
+                walletId: initialization.targetWalletId,
+                error: err.message,
+              },
+            );
+
+            await PaymentInitialization.updateOne(
+              {
+                _id: initialization._id,
+                status: PaymentInitializationStatus.PENDING,
+              },
+              {
+                $set: {
+                  status: PaymentInitializationStatus.DISPUTED,
+                  completedAt: new Date(),
+                  failureReason: `WALLET_FROZEN_AT_CREDIT_TIME: ${err.message}`,
+                  providerWebhookPayload: parsedEvent.rawPayload,
+                },
+              },
+            );
+
+            await emitOutboxEvent({
+              topic: "payment.events",
+              eventId: generateEventId(),
+              eventType: AuditAction.PAYMENT_DISPUTED,
+              action: AuditAction.PAYMENT_DISPUTED,
+              status: AuditStatus.FAILED,
+              payload: {
+                reference: initialization.reference,
+                providerReference: parsedEvent.providerReference,
+                amount: initialization.amount,
+                currency: initialization.currency,
+                targetWalletId: initialization.targetWalletId,
+                userPublicId: initialization.initiatedByUserPublicId,
+                reason: "WALLET_FROZEN_AT_CREDIT_TIME",
+                requiresManualResolution: true,
+              },
+              aggregateType: "PAYMENT_DISPUTED",
+              aggregateId: initialization.reference,
+              version: 1,
+              context,
+            });
+
+            // Return 200 — we handled it, don't let Paystack retry
+            return { acknowledged: true, reason: "DISPUTED_WALLET_FROZEN" };
+          }
+
+          // Any other error — rethrow so Paystack retries
+          throw err;
+        }
         return { acknowledged: true };
 
       case "PAYMENT_FAILED":
         await this.markInitializationFailed(
           initialization,
           `PROVIDER_REPORTED_FAILURE`,
-          parsedEvent.rawPayload
+          parsedEvent.rawPayload,
         );
         return { acknowledged: true };
 
@@ -389,7 +525,7 @@ class PaymentService {
   private async handleSuccessfulPayment(
     initialization: PaymentInitializationDocument,
     parsedEvent: ParsedWebhookEvent,
-    context: IRequestContext
+    context: IRequestContext,
   ): Promise<void> {
     try {
       // Credit the wallet via FundingService — already idempotent
@@ -398,7 +534,8 @@ class PaymentService {
         amount: initialization.amount,
         currency: initialization.currency,
         source: FundingSource.PAYSTACK_WEBHOOK,
-        providerReference: initialization.providerReference || parsedEvent.providerReference,
+        providerReference:
+          initialization.providerReference || parsedEvent.providerReference,
         initiatedByUserId: initialization.initiatedByUserId.toString(),
         context,
         metadata: {
@@ -422,7 +559,7 @@ class PaymentService {
             completedAt: new Date(),
             providerWebhookPayload: parsedEvent.rawPayload,
           },
-        }
+        },
       );
 
       // Emit success event for downstream consumers (email confirmation, etc.)
@@ -473,7 +610,7 @@ class PaymentService {
   private async markInitializationFailed(
     initialization: PaymentInitializationDocument,
     reason: string,
-    webhookPayload?: any
+    webhookPayload?: any,
   ): Promise<void> {
     await PaymentInitialization.updateOne(
       {
@@ -487,7 +624,7 @@ class PaymentService {
           completedAt: new Date(),
           providerWebhookPayload: webhookPayload,
         },
-      }
+      },
     );
 
     logger.warn("Payment initialization marked FAILED", {
@@ -505,7 +642,11 @@ class PaymentService {
 
   public async listUserInitializations(
     userPublicId: string,
-    filters: { status?: PaymentInitializationStatus; limit?: number; skip?: number } = {}
+    filters: {
+      status?: PaymentInitializationStatus;
+      limit?: number;
+      skip?: number;
+    } = {},
   ) {
     const query: any = { initiatedByUserPublicId: userPublicId };
     if (filters.status) query.status = filters.status;

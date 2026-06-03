@@ -17,7 +17,8 @@ export enum LedgerEntryType {
   DEBIT = "DEBIT",
   CREDIT = "CREDIT",
   FEE = "FEE",
-  REVERSAL = "REVERSAL"
+  REVERSAL = "REVERSAL",
+  EXTERNAL_DEPOSIT = "EXTERNAL_DEPOSIT",
 }
 
 export interface LedgerEntryDocument extends Document {
@@ -32,10 +33,14 @@ export interface LedgerEntryDocument extends Document {
   createdAt: Date;
 }
 
-
 export const LedgerEntrySchema = new Schema(
   {
-    transactionId: { type: Types.ObjectId, ref: "LedgerTransaction", required: true, index: true },
+    transactionId: {
+      type: Types.ObjectId,
+      ref: "LedgerTransaction",
+      required: true,
+      index: true,
+    },
 
     transactionRef: {
       type: String,
@@ -48,7 +53,7 @@ export const LedgerEntrySchema = new Schema(
       type: Types.ObjectId,
       ref: "LedgerAccount",
       required: true,
-      immutable: true
+      immutable: true,
     },
 
     type: {
@@ -70,33 +75,36 @@ export const LedgerEntrySchema = new Schema(
       type: Number,
       required: true,
       min: 0.01,
-      immutable: true
+      immutable: true,
     },
 
     currency: {
       type: String,
       required: true,
       uppercase: true,
-      immutable: true
+      immutable: true,
     },
     referenceId: {
       type: String,
       required: true,
       index: true,
-      immutable: true
+      immutable: true,
     },
     referenceType: {
       type: String,
       enum: Object.values(LedgerEntryType),
       required: true,
-      immutable: true
+      immutable: true,
     },
   },
-  { timestamps: { createdAt: true, updatedAt: false, immutable: true } }
+  { timestamps: { createdAt: true, updatedAt: false, immutable: true } },
 );
 
-LedgerEntrySchema.index({ transactionRef: 1, ledgerAccountId: 1 }, { unique: true })
+LedgerEntrySchema.index(
+  { transactionRef: 1, ledgerAccountId: 1 },
+  { unique: true },
+);
 export const LedgerEntry = mongoose.model<LedgerEntryDocument>(
   "LedgerEntry",
-  LedgerEntrySchema
+  LedgerEntrySchema,
 );

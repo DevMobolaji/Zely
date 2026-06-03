@@ -1,11 +1,11 @@
-import { config } from '@/config/index';
-import { Resend } from 'resend';
-import { logger } from '@/shared/utils/logger';
-import BadRequestError from '@/shared/errors/badRequest';
-import redis from '../cache/redis.cli';
-import { withResendBreaker } from '@/infrastructure/resilience/breakers/resend.breaker';
-import { emailSendDuration, emailSendTotal } from '@/kafka/emails/email.poller';
-// import { emailSendTotal, emailSendDuration } from 
+import { config } from "@/config/index";
+import { Resend } from "resend";
+import { logger } from "@/shared/utils/logger";
+import BadRequestError from "@/shared/errors/badRequest";
+import redis from "../cache/redis.cli";
+import { withResendBreaker } from "@/infrastructure/resilience/breakers/resend.breaker";
+import { emailSendDuration, emailSendTotal } from "@/kafka/emails/email.poller";
+// import { emailSendTotal, emailSendDuration } from
 
 const resend = new Resend(config?.email?.apiKey);
 
@@ -61,49 +61,65 @@ export interface InternalTransferNotificationParams extends BaseTransferParams {
 
 // ─── Email Service ────────────────────────────────────────────────────────────
 export class EmailService {
-
   // ─── Core send method — ALL emails go through here ────────────────────────
   // Circuit breaker + metrics are wired here once, applies to every email type
   static async sendEmail(
     to: string,
     subject: string,
     html: string,
-    jobName: string = 'generic'
+    jobName: string = "generic",
+    options?: { idempotencyKey?: string },
   ): Promise<any> {
-    const platformName = config?.app?.name || 'Zely';
+    const platformName = config?.app?.name || "Zely";
     const timer = emailSendDuration.startTimer({ job_name: jobName });
 
     // ✅ In dev, redirect all emails to test recipient
-    const recipient = config.app.env === 'development' && config?.email?.testRecipient
-      ? config.email.testRecipient
-      : to;
+    const recipient =
+      config.app.env === "development" && config?.email?.testRecipient
+        ? config.email.testRecipient
+        : to;
 
     return withResendBreaker(async () => {
-      const { data, error } = await resend.emails.send({
-        from: `${platformName} <onboarding@resend.dev>`,
-        to: recipient,
-        subject: config.app.env === 'development'
-          ? `[DEV - to: ${to}] ${subject}`
-          : subject,
-        html,
-      });
+      const { data, error } = await resend.emails.send(
+        {
+          from: `${platformName} <onboarding@resend.dev>`,
+          to: recipient,
+          subject:
+            config.app.env === "development"
+              ? `[DEV - to: ${to}] ${subject}`
+              : subject,
+          html,
+        },
+        options?.idempotencyKey
+          ? { idempotencyKey: options.idempotencyKey }
+          : undefined,
+      );
 
       if (error) {
-        emailSendTotal.inc({ status: 'failure', job_name: jobName });
+        emailSendTotal.inc({ status: "failure", job_name: jobName });
         timer();
-        logger.error('Email send failed', { to, subject, jobName, error });
+        logger.error("Email send failed", { to, subject, jobName, error });
         throw new Error(`Email sending failed: ${error.message}`);
       }
 
-      emailSendTotal.inc({ status: 'success', job_name: jobName });
+      emailSendTotal.inc({ status: "success", job_name: jobName });
       timer();
-      logger.info('Email sent successfully', { to, jobName, messageId: data?.id });
+      logger.info("Email sent successfully", {
+        to,
+        jobName,
+        messageId: data?.id,
+      });
       return data;
     }, `sendEmail:${jobName}:${to}`);
   }
 
   // ─── Verification email ───────────────────────────────────────────────────
-  static async sendVerificationEmail(email: string, name: string, otp: string) {
+  static async sendVerificationEmail(
+    email: string,
+    name: string,
+    otp: string,
+    options?: { idempotencyKey?: string },
+  ) {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>Welcome to ${config?.app?.name}, ${name}!</h2>
@@ -119,7 +135,13 @@ export class EmailService {
       </div>
     `;
 
-    return this.sendEmail(email, 'Verify Your Email Address', html, 'verification');
+    return this.sendEmail(
+      email,
+      "Verify Your Email Address",
+      html,
+      "verification",
+      options,
+    );
   }
 
   // ─── Password reset email ─────────────────────────────────────────────────
@@ -127,7 +149,8 @@ export class EmailService {
     email: string,
     name: string,
     otp: string,
-    expiryMinutes: number
+    expiryMinutes: number,
+    options?: { idempotencyKey?: string },
   ) {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -144,11 +167,21 @@ export class EmailService {
       </div>
     `;
 
-    return this.sendEmail(email, 'Reset Your Password', html, 'password_reset');
+    return this.sendEmail(
+      email,
+      "Reset Your Password",
+      html,
+      "password_reset",
+      options,
+    );
   }
 
   // ─── Password reset success email ─────────────────────────────────────────
-  static async sendPasswordResetSuccessEmail(email: string, name: string) {
+  static async sendPasswordResetSuccessEmail(
+    email: string,
+    name: string,
+    options?: { idempotencyKey?: string },
+  ) {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>Password Successfully Reset</h2>
@@ -167,11 +200,21 @@ export class EmailService {
       </div>
     `;
 
-    return this.sendEmail(email, 'Password Reset Successful', html, 'password_reset_success');
+    return this.sendEmail(
+      email,
+      "Password Reset Successful",
+      html,
+      "password_reset_success",
+      options,
+    );
   }
 
   // ─── Welcome email ────────────────────────────────────────────────────────
-  static async sendWelcomeEmail(email: string, name: string) {
+  static async sendWelcomeEmail(
+    email: string,
+    name: string,
+    options?: { idempotencyKey?: string },
+  ) {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>Welcome aboard, ${name}! 🎉</h2>
@@ -186,11 +229,20 @@ export class EmailService {
       </div>
     `;
 
-    return this.sendEmail(email, `Welcome to ${config?.app?.name}!`, html, 'welcome');
+    return this.sendEmail(
+      email,
+      `Welcome to ${config?.app?.name}!`,
+      html,
+      "welcome",
+      options,
+    );
   }
 
   // ─── Debit notification ───────────────────────────────────────────────────
-  static async sendDebitNotification(params: any) {
+  static async sendDebitNotification(
+    params: any,
+    options?: { idempotencyKey?: string },
+  ) {
     const {
       recipientEmail,
       recipientName,
@@ -207,8 +259,8 @@ export class EmailService {
       transactionLink,
     } = params;
 
-    const platformName = config?.app?.name || 'Zely';
-    const supportEmail = 'support@zely.com';
+    const platformName = config?.app?.name || "Zely";
+    const supportEmail = "support@zely.com";
     const currentYear = new Date().getFullYear();
     const subject = `Debit Alert · ${currencySymbol}${amount.toLocaleString()}`;
 
@@ -272,11 +324,20 @@ export class EmailService {
       </html>
     `;
 
-    return this.sendEmail(recipientEmail, subject, html, 'debit_notification');
+    return this.sendEmail(
+      recipientEmail,
+      subject,
+      html,
+      "debit_notification",
+      options,
+    );
   }
 
   // ─── Credit notification ──────────────────────────────────────────────────
-  static async sendCreditNotification(params: any) {
+  static async sendCreditNotification(
+    params: any,
+    options?: { idempotencyKey?: string },
+  ) {
     const {
       recipientEmail,
       recipientName,
@@ -293,8 +354,8 @@ export class EmailService {
       transactionLink,
     } = params;
 
-    const platformName = config?.app?.name || 'Zely';
-    const supportEmail = 'support@zely.com';
+    const platformName = config?.app?.name || "Zely";
+    const supportEmail = "support@zely.com";
     const currentYear = new Date().getFullYear();
     const subject = `Credit Alert · ${currencySymbol}${amount.toLocaleString()}`;
 
@@ -358,11 +419,20 @@ export class EmailService {
       </html>
     `;
 
-    return this.sendEmail(recipientEmail, subject, html, 'credit_notification');
+    return this.sendEmail(
+      recipientEmail,
+      subject,
+      html,
+      "credit_notification",
+      options,
+    );
   }
 
   // ─── Transfer notification (legacy — kept for backwards compatibility) ─────
-  static async sendTransferNotification(params: SendCreditNotificationParams) {
+  static async sendTransferNotification(
+    params: SendCreditNotificationParams,
+    options?: { idempotencyKey?: string },
+  ) {
     const {
       recipientEmail,
       recipientName,
@@ -380,9 +450,9 @@ export class EmailService {
       transactionLink,
     } = params;
 
-    const platformName = config?.app?.name || 'Zely';
-    const supportEmail = 'support@zely.com';
-    const companyAddress = '123 Business Street, Lagos, Nigeria';
+    const platformName = config?.app?.name || "Zely";
+    const supportEmail = "support@zely.com";
+    const companyAddress = "123 Business Street, Lagos, Nigeria";
     const currentYear = new Date().getFullYear();
 
     const html = `
@@ -428,7 +498,9 @@ export class EmailService {
       </td>
       </tr>
 
-      ${senderMessage ? `
+      ${
+        senderMessage
+          ? `
       <tr>
       <td style="padding: 0 40px 30px;">
       <div style="background-color: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 6px; padding: 16px 20px;">
@@ -436,7 +508,9 @@ export class EmailService {
       <p style="margin: 0; font-size: 14px; color: #78350f; font-style: italic;">"${senderMessage}"</p>
       </div>
       </td>
-      </tr>` : ''}
+      </tr>`
+          : ""
+      }
 
       <tr>
       <td style="padding: 0 40px 30px;">
@@ -473,12 +547,16 @@ export class EmailService {
       recipientEmail,
       `You've received ${currencySymbol}${amount.toLocaleString()} from ${senderName}`,
       html,
-      'transfer_notification'
+      "transfer_notification",
+      options,
     );
   }
 
   // ─── Internal transfer notification ──────────────────────────────────────
-  static async sendInternalTransferNotifications(internalTransferParams: any) {
+  static async sendInternalTransferNotifications(
+    internalTransferParams: any,
+    options?: { idempotencyKey?: string },
+  ) {
     const {
       recipientEmail,
       transferType,
@@ -499,33 +577,37 @@ export class EmailService {
       transactionLink,
     } = internalTransferParams;
 
-    const platformName = config?.app?.name || 'Zely';
-    const supportEmail = 'support@zely.com';
-    const companyAddress = '123 Business Street, Lagos, Nigeria';
+    const platformName = config?.app?.name || "Zely";
+    const supportEmail = "support@zely.com";
+    const companyAddress = "123 Business Street, Lagos, Nigeria";
     const currentYear = new Date().getFullYear();
 
-    const isInternal = transferType === 'INTERNAL_TRANSFER';
-    const isDebit = type === 'DEBIT';
-    const isCredit = type === 'CREDIT';
+    const isInternal = transferType === "INTERNAL_TRANSFER";
+    const isDebit = type === "DEBIT";
+    const isCredit = type === "CREDIT";
 
     const title = isInternal
-      ? 'Internal Transfer Completed'
+      ? "Internal Transfer Completed"
       : isDebit
-        ? 'Debit Successful'
-        : 'Credit Successful';
+        ? "Debit Successful"
+        : "Credit Successful";
 
     const subtitle = isInternal
-      ? 'Your transfer between your accounts was successful'
+      ? "Your transfer between your accounts was successful"
       : isDebit
-        ? 'Your account has been debited successfully'
-        : 'Your account has been credited successfully';
+        ? "Your account has been debited successfully"
+        : "Your account has been credited successfully";
 
-    const primaryColor = isDebit ? '#b91c1c' : isCredit ? '#047857' : '#1d4ed8';
+    const primaryColor = isDebit ? "#b91c1c" : isCredit ? "#047857" : "#1d4ed8";
 
     const subject = `${title} · ${currencySymbol}${amount.toLocaleString()}`;
 
-    const fromAccountLabel = fromAccountType ? `${fromAccountType} ••••${fromAccountLast4}` : '';
-    const toAccountLabel = toAccountType ? `${toAccountType} ••••${toAccountLast4}` : '';
+    const fromAccountLabel = fromAccountType
+      ? `${fromAccountType} ••••${fromAccountLast4}`
+      : "";
+    const toAccountLabel = toAccountType
+      ? `${toAccountType} ••••${toAccountLast4}`
+      : "";
 
     const html = `
       <!DOCTYPE html>
@@ -562,8 +644,8 @@ export class EmailService {
       <tr>
       <td style="padding:0 32px 24px;">
       <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f9fafb;border-radius:8px;">
-      ${fromAccountLabel ? `<tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;">From</td><td align="right" style="padding:12px 16px;font-size:13px;font-weight:600;color:#111827;">${fromAccountLabel}</td></tr>` : ''}
-      ${toAccountLabel ? `<tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;">To</td><td align="right" style="padding:12px 16px;font-size:13px;font-weight:600;color:#111827;">${toAccountLabel}</td></tr>` : ''}
+      ${fromAccountLabel ? `<tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;">From</td><td align="right" style="padding:12px 16px;font-size:13px;font-weight:600;color:#111827;">${fromAccountLabel}</td></tr>` : ""}
+      ${toAccountLabel ? `<tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;">To</td><td align="right" style="padding:12px 16px;font-size:13px;font-weight:600;color:#111827;">${toAccountLabel}</td></tr>` : ""}
       <tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;">Date</td><td align="right" style="padding:12px 16px;font-size:13px;color:#111827;">${transactionDate}</td></tr>
       <tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;">Transaction ID</td><td align="right" style="padding:12px 16px;font-family:monospace;font-size:12px;color:#111827;">${transactionId}</td></tr>
       <tr><td style="padding:12px 16px;font-size:13px;color:#6b7280;">Reference</td><td align="right" style="padding:12px 16px;font-family:monospace;font-size:12px;color:#111827;">${referenceId}</td></tr>
@@ -571,7 +653,9 @@ export class EmailService {
       </td>
       </tr>
 
-      ${isInternal ? `
+      ${
+        isInternal
+          ? `
       <tr>
       <td style="padding:0 32px 24px;">
       <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
@@ -585,7 +669,9 @@ export class EmailService {
       </tr>
       </table>
       </td>
-      </tr>` : ''}
+      </tr>`
+          : ""
+      }
 
       <tr>
       <td align="center" style="padding:8px 32px 36px;">
@@ -608,7 +694,13 @@ export class EmailService {
       </html>
     `;
 
-    return this.sendEmail(recipientEmail, subject, html, 'internal_transfer');
+    return this.sendEmail(
+      recipientEmail,
+      subject,
+      html,
+      "internal_transfer",
+      options,
+    );
   }
 }
 
@@ -625,6 +717,8 @@ export async function checkOtpRateLimit(email: string) {
   }
 
   if (attempts > ATTEMPT_LIMIT) {
-    throw new BadRequestError('Too many verification attempts. Please try again later.');
+    throw new BadRequestError(
+      "Too many verification attempts. Please try again later.",
+    );
   }
 }

@@ -2,19 +2,17 @@ import { OTPModel, OTPPurpose, IOTP } from "./otp.model";
 import { hashOtp, verifyOtp } from "@/config/hashToken";
 import { randomInt } from "crypto";
 
-export { OTPPurpose }
-
+export { OTPPurpose };
 
 export interface OTPConfig {
   length?: number;
   expiryMinutes?: number;
   maxAttempts?: number;
-  type?: 'numeric' | 'alphanumeric';
+  type?: "numeric" | "alphanumeric";
   // Rate limiting (per identifier + purpose)
-  throttleSeconds?: number;        // min seconds between creations
-  maxPerHour?: number;             // max creations in a rolling 1hr window
+  throttleSeconds?: number; // min seconds between creations
+  maxPerHour?: number; // max creations in a rolling 1hr window
 }
-
 
 export interface OTPVerifyResult {
   success: boolean;
@@ -24,14 +22,18 @@ export interface OTPVerifyResult {
 }
 
 export class OTPManager {
-
-  private generateCode(length: number = 6, type: 'numeric' | 'alphanumeric' = 'numeric'): string {
-    if (type === 'alphanumeric') {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-      return Array.from({ length }, () => chars[randomInt(chars.length)]).join('');
+  private generateCode(
+    length: number = 6,
+    type: "numeric" | "alphanumeric" = "numeric",
+  ): string {
+    if (type === "alphanumeric") {
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+      return Array.from({ length }, () => chars[randomInt(chars.length)]).join(
+        "",
+      );
     }
     const max = Math.pow(10, length);
-    return randomInt(max).toString().padStart(length, '0');
+    return randomInt(max).toString().padStart(length, "0");
   }
 
   private normalize(identifier: string): string {
@@ -47,20 +49,36 @@ export class OTPManager {
     purpose: OTPPurpose,
     config: OTPConfig = {},
     metadata?: Record<string, any>,
+    options?: { bypassThrottle?: boolean },
   ): Promise<{ code: string; expiresAt: Date; expiryMinutes: number }> {
     const {
       length = 6,
       expiryMinutes = 10,
       maxAttempts = 5,
-      type = 'numeric',
+      type = "numeric",
       throttleSeconds = 60,
       maxPerHour = 5,
     } = config;
 
     const normalized = this.normalize(identifier);
 
+    // only enforce rate limit for user-initiated requests
+    if (!options?.bypassThrottle) {
+      await this.enforceRateLimit(
+        normalized,
+        purpose,
+        throttleSeconds,
+        maxPerHour,
+      );
+    }
+
     // --- Rate limit check (cooldown + hourly ceiling) ---
-    await this.enforceRateLimit(normalized, purpose, throttleSeconds, maxPerHour);
+    await this.enforceRateLimit(
+      normalized,
+      purpose,
+      throttleSeconds,
+      maxPerHour,
+    );
 
     // --- Generate fresh code ---
     const code = this.generateCode(length, type);
@@ -112,8 +130,8 @@ export class OTPManager {
     if (!otp) {
       return {
         success: false,
-        message: 'Invalid or expired verification code',
-        error: 'OTP_NOT_FOUND',
+        message: "Invalid or expired verification code",
+        error: "OTP_NOT_FOUND",
       };
     }
 
@@ -121,8 +139,8 @@ export class OTPManager {
     if (new Date() > otp.expiresAt) {
       return {
         success: false,
-        message: 'Verification code has expired',
-        error: 'OTP_EXPIRED',
+        message: "Verification code has expired",
+        error: "OTP_EXPIRED",
       };
     }
 
@@ -130,8 +148,9 @@ export class OTPManager {
     if (otp.attempts >= otp.maxAttempts) {
       return {
         success: false,
-        message: 'Maximum verification attempts exceeded. Please request a new code.',
-        error: 'MAX_ATTEMPTS_EXCEEDED',
+        message:
+          "Maximum verification attempts exceeded. Please request a new code.",
+        error: "MAX_ATTEMPTS_EXCEEDED",
       };
     }
 
@@ -145,24 +164,23 @@ export class OTPManager {
         { new: true },
       );
 
-      const attemptsLeft = updated
-        ? updated.maxAttempts - updated.attempts
-        : 0;
+      const attemptsLeft = updated ? updated.maxAttempts - updated.attempts : 0;
 
       if (attemptsLeft <= 0) {
         return {
           success: false,
-          message: 'Maximum verification attempts exceeded. Please request a new code.',
+          message:
+            "Maximum verification attempts exceeded. Please request a new code.",
           attemptsLeft: 0,
-          error: 'MAX_ATTEMPTS_EXCEEDED',
+          error: "MAX_ATTEMPTS_EXCEEDED",
         };
       }
 
       return {
         success: false,
-        message: `Invalid verification code. ${attemptsLeft} attempt${attemptsLeft > 1 ? 's' : ''} remaining`,
+        message: `Invalid verification code. ${attemptsLeft} attempt${attemptsLeft > 1 ? "s" : ""} remaining`,
         attemptsLeft,
-        error: 'INVALID_CODE',
+        error: "INVALID_CODE",
       };
     }
 
@@ -177,14 +195,14 @@ export class OTPManager {
       // Someone else already consumed this OTP between our find and update
       return {
         success: false,
-        message: 'Verification code has already been used',
-        error: 'OTP_ALREADY_CONSUMED',
+        message: "Verification code has already been used",
+        error: "OTP_ALREADY_CONSUMED",
       };
     }
 
     return {
       success: true,
-      message: 'Verification successful',
+      message: "Verification successful",
     };
   }
 
@@ -212,7 +230,7 @@ export class OTPManager {
       if (elapsedSeconds < throttleSeconds) {
         const waitSeconds = Math.ceil(throttleSeconds - elapsedSeconds);
         throw new OTPThrottleError(
-          `Please wait ${waitSeconds} second${waitSeconds > 1 ? 's' : ''} before requesting another code`,
+          `Please wait ${waitSeconds} second${waitSeconds > 1 ? "s" : ""} before requesting another code`,
           waitSeconds,
         );
       }
@@ -271,9 +289,12 @@ export class OTPManager {
 }
 
 export class OTPThrottleError extends Error {
-  constructor(message: string, public waitSeconds?: number) {
+  constructor(
+    message: string,
+    public waitSeconds?: number,
+  ) {
     super(message);
-    this.name = 'OTPThrottleError';
+    this.name = "OTPThrottleError";
   }
 }
 
@@ -282,7 +303,7 @@ export const OTPConfigs = {
     length: 6,
     expiryMinutes: 10,
     maxAttempts: 5,
-    type: 'numeric' as const,
+    type: "numeric" as const,
     throttleSeconds: 60,
     maxPerHour: 5,
   },
@@ -290,7 +311,7 @@ export const OTPConfigs = {
     length: 6,
     expiryMinutes: 15,
     maxAttempts: 5,
-    type: 'numeric' as const,
+    type: "numeric" as const,
     throttleSeconds: 60,
     maxPerHour: 5,
   },
@@ -298,7 +319,7 @@ export const OTPConfigs = {
     length: 6,
     expiryMinutes: 5,
     maxAttempts: 3,
-    type: 'numeric' as const,
+    type: "numeric" as const,
     throttleSeconds: 30,
     maxPerHour: 10,
   },
@@ -306,7 +327,7 @@ export const OTPConfigs = {
     length: 6,
     expiryMinutes: 10,
     maxAttempts: 5,
-    type: 'numeric' as const,
+    type: "numeric" as const,
     throttleSeconds: 60,
     maxPerHour: 5,
   },
@@ -314,9 +335,9 @@ export const OTPConfigs = {
     length: 6,
     expiryMinutes: 5,
     maxAttempts: 3,
-    type: 'numeric' as const,
+    type: "numeric" as const,
     throttleSeconds: 30,
-    maxPerHour: 20,  // higher for transactions, users may do several
+    maxPerHour: 20, // higher for transactions, users may do several
   },
 };
 

@@ -1,14 +1,24 @@
-import { LedgerAccount, LedgerAccountType, LedgerOwnerType } from "@/modules/ledger/ledger.account.model";
+import {
+  LedgerAccount,
+  LedgerAccountType,
+  LedgerOwnerType,
+} from "@/modules/ledger/ledger.account.model";
 import mongoose from "mongoose";
-import { generateLedgerAccountId, generateWalletId } from "@/shared/utils/id.generator";
+import {
+  generateLedgerAccountId,
+  generateWalletId,
+} from "@/shared/utils/id.generator";
 import { ensureSystemUser } from "@/infrastructure/helpers/systemUser.helper";
 import { Wallet } from "@/modules/wallet/wallet.model";
 import { config } from "@/config/index";
 import { logger } from "@/shared/utils/logger";
-import { LedgerEntry, LedgerEntryNature, LedgerEntryType } from "../ledger.entry.model";
+import {
+  LedgerEntry,
+  LedgerEntryNature,
+  LedgerEntryType,
+} from "../ledger.entry.model";
 import TransactionBuilder from "../ledger.transaction.builder";
 import { LedgerTransactionModel } from "../ledger.transaction.model";
-
 
 const WALLET_BACKED_TYPES = [
   LedgerAccountType.SYSTEM_TREASURY,
@@ -31,11 +41,11 @@ export default async function ensureSystemLedger(currency: string) {
   // ─── 1. Create ledger accounts ───────────────────────────────────────────
   for (const type of ALL_SYSTEM_LEDGER_TYPES) {
     const account = await LedgerAccount.findOneAndUpdate(
-      { userPublicId: 'SYSTEM_USER', type, currency },
+      { userPublicId: "SYSTEM_USER", type, currency },
       {
         $setOnInsert: {
           userId: systemUserId,
-          userPublicId: 'SYSTEM_USER',
+          userPublicId: "SYSTEM_USER",
           ownerId: systemUserId,
           ownerType: LedgerOwnerType.SYSTEM,
           type,
@@ -43,7 +53,7 @@ export default async function ensureSystemLedger(currency: string) {
           ledgerAccountId: generateLedgerAccountId(),
         },
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
     accounts[type] = account;
   }
@@ -54,29 +64,29 @@ export default async function ensureSystemLedger(currency: string) {
 
     await Wallet.findOneAndUpdate(
       {
-        userPublicId: 'SYSTEM_USER',
+        userPublicId: "SYSTEM_USER",
         type,
         currency,
       },
       {
         $setOnInsert: {
-          userPublicId: 'SYSTEM_USER',
+          userPublicId: "SYSTEM_USER",
           type,
           currency,
-          availableBalance: 0,           // ← always 0 — funds come via top-up
+          availableBalance: 0, // ← always 0 — funds come via top-up
           walletId: generateWalletId(),
           ledgerAccountId: ledgerAccount._id,
-          status: 'ACTIVE',
+          status: "ACTIVE",
           lockedBalance: 0,
           locked: false,
-        }
+        },
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
   }
 
   // ─── 3. Auto-fund treasury in dev (uses proper top-up flow) ──────────────
-  if (config.app.env !== 'production') {
+  if (config.app.env !== "production") {
     await autofundTreasuryForDev(currency, accounts);
   }
 
@@ -85,7 +95,7 @@ export default async function ensureSystemLedger(currency: string) {
 
 async function autofundTreasuryForDev(
   currency: string,
-  accounts: Record<string, any>
+  accounts: Record<string, any>,
 ) {
   const SEED_AMOUNT = 1_000_000;
   const seedRef = `SYSTEM_DEV_SEED_${currency}`;
@@ -96,7 +106,7 @@ async function autofundTreasuryForDev(
   }).lean();
 
   if (existing) {
-    logger.info(`✅ Treasury already dev-seeded for ${currency}`);
+    //logger.info(`✅ Treasury already dev-seeded for ${currency}`);
     return;
   }
 
@@ -104,7 +114,7 @@ async function autofundTreasuryForDev(
   const externalLedger = accounts[LedgerAccountType.EXTERNAL_FUNDING];
 
   const treasuryWallet = await Wallet.findOne({
-    userPublicId: 'SYSTEM_USER',
+    userPublicId: "SYSTEM_USER",
     type: LedgerAccountType.SYSTEM_TREASURY,
     currency,
   });
@@ -117,7 +127,7 @@ async function autofundTreasuryForDev(
   session.startTransaction();
 
   try {
-    const builder = new TransactionBuilder('DEPOSIT');
+    const builder = new TransactionBuilder("DEPOSIT");
 
     builder.addDebit({
       transactionRef: seedRef,
@@ -126,7 +136,7 @@ async function autofundTreasuryForDev(
       currency,
       referenceId: seedRef,
       referenceType: LedgerEntryType.DEPOSIT,
-      nature: "DEBIT"
+      nature: "DEBIT",
     });
 
     builder.addCredit({
@@ -136,7 +146,7 @@ async function autofundTreasuryForDev(
       currency,
       referenceId: seedRef,
       referenceType: LedgerEntryType.DEPOSIT,
-      nature: "CREDIT"
+      nature: "CREDIT",
     });
 
     await builder.commit(session);
@@ -145,16 +155,16 @@ async function autofundTreasuryForDev(
     await Wallet.updateOne(
       { _id: treasuryWallet._id },
       { $inc: { availableBalance: SEED_AMOUNT } },
-      { session }
+      { session },
     );
 
     await session.commitTransaction();
 
-    logger.info(`✅ Treasury dev-seeded with proper double-entry`, {
-      currency,
-      amount: SEED_AMOUNT,
-      ref: seedRef,
-    });
+    // logger.info(`✅ Treasury dev-seeded with proper double-entry`, {
+    //   currency,
+    //   amount: SEED_AMOUNT,
+    //   ref: seedRef,
+    // });
   } catch (err: any) {
     if (session.inTransaction()) await session.abortTransaction();
     logger.error("❌ Treasury dev-seeding failed", { error: err.message });

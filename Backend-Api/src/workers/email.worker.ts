@@ -5,7 +5,9 @@ import { conn } from "./bullMq.config";
 
 console.log("🔥 EMAIL WORKER FILE LOADED");
 import { Registry, Counter, Histogram, Gauge, Pushgateway } from "prom-client";
-
+import { EmailOutboxModel } from "@/kafka/emails/email.Outbox";
+import { logger } from "@/shared/utils/logger";
+import mongoose from "mongoose";
 
 const workerRegistry = new Registry();
 
@@ -33,9 +35,12 @@ const bullmqQueueDepth = new Gauge({
   registers: [workerRegistry],
 });
 
-
 // ─── Pushgateway ──────────────────────────────────────────────────────────────
-const gateway = new Pushgateway(process.env.PUSHGATEWAY_URL || 'http://localhost:9091', [], workerRegistry);
+const gateway = new Pushgateway(
+  process.env.PUSHGATEWAY_URL || "http://pushgateway:9091",
+  [],
+  workerRegistry,
+);
 
 async function pushMetrics(): Promise<void> {
   try {
@@ -61,43 +66,98 @@ async function bootstrap(): Promise<void> {
       console.log("🟢 Processing job", job.id, "| type:", job.data?.type);
 
       const {
-        email, name, otp, type, amount, currency, currencySymbol,
-        previousBalance, currentBalance, transactionId, referenceId,
-        referenceType, transactionRef, expiryMinutes, transferType,
-        fromAccountType, fromAccountLast4, toAccountType, toAccountLast4,
-        senderEmail, senderName, recipientEmail, recipientName,
-        toPreviousBalance, toCurrentBalance,
+        email,
+        name,
+        otp,
+        type,
+        amount,
+        currency,
+        currencySymbol,
+        previousBalance,
+        currentBalance,
+        transactionId,
+        referenceId,
+        referenceType,
+        transactionRef,
+        expiryMinutes,
+        transferType,
+        fromAccountType,
+        fromAccountLast4,
+        toAccountType,
+        toAccountLast4,
+        senderEmail,
+        senderName,
+        recipientEmail,
+        recipientName,
+        toPreviousBalance,
+        toCurrentBalance,
       } = job.data;
 
       const transactionDate = new Date().toLocaleString("en-US", {
-        year: "numeric", month: "long", day: "numeric",
-        hour: "2-digit", minute: "2-digit", timeZoneName: "short",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
       });
 
       const transactionLink = `${process.env.APP_URL}/transactions/${transactionRef}`;
 
       const debitParams = {
-        recipientEmail, recipientName, amount, currencySymbol,
-        transactionLink, previousBalance, type, newBalance: currentBalance,
-        transactionId, referenceId, referenceType, transferType,
-        toAccountType, toAccountLast4, transactionDate,
+        recipientEmail,
+        recipientName,
+        amount,
+        currencySymbol,
+        transactionLink,
+        previousBalance,
+        type,
+        newBalance: currentBalance,
+        transactionId,
+        referenceId,
+        referenceType,
+        transferType,
+        toAccountType,
+        toAccountLast4,
+        transactionDate,
       };
 
       const creditParams = {
-        recipientEmail, recipientName, amount, currencySymbol,
-        senderEmail, senderName, transactionLink, previousBalance,
-        newBalance: currentBalance, transactionId, referenceId,
-        referenceType, type, transactionDate,
+        recipientEmail,
+        recipientName,
+        amount,
+        currencySymbol,
+        senderEmail,
+        senderName,
+        transactionLink,
+        previousBalance,
+        newBalance: currentBalance,
+        transactionId,
+        referenceId,
+        referenceType,
+        type,
+        transactionDate,
       };
 
       const internalTransferParams = {
-        recipientEmail: email, recipientName: name, amount,
-        currencySymbol: currency, fromAccountType, toAccountType,
-        fromAccountLast4, toAccountLast4, toPreviousBalance,
-        toNewBalance: toCurrentBalance, fromPreviousBalance: previousBalance,
-        fromNewBalance: currentBalance, transactionId, referenceId,
-        transactionDate: new Date().toISOString(), type,
-        transactionLink, transferType,
+        recipientEmail: email,
+        recipientName: name,
+        amount,
+        currencySymbol: currency,
+        fromAccountType,
+        toAccountType,
+        fromAccountLast4,
+        toAccountLast4,
+        toPreviousBalance,
+        toNewBalance: toCurrentBalance,
+        fromPreviousBalance: previousBalance,
+        fromNewBalance: currentBalance,
+        transactionId,
+        referenceId,
+        transactionDate: new Date().toISOString(),
+        type,
+        transactionLink,
+        transferType,
       };
 
       if (type === "TRANSFER" && (!email || !name)) {
@@ -108,36 +168,87 @@ async function bootstrap(): Promise<void> {
         switch (type) {
           case "VERIFICATION":
           case "EMAIL_VERIFICATION":
-            if (!otp) throw new Error("OTP is required for verification emails");
-            await EmailService.sendVerificationEmail(email, name, otp);
+            if (!otp)
+              throw new Error("OTP is required for verification emails");
+            await EmailService.sendVerificationEmail(email, name, otp, {
+              idempotencyKey: job.id,
+            });
             break;
 
           case "WELCOME":
-            await EmailService.sendWelcomeEmail(email, name);
+            await EmailService.sendWelcomeEmail(
+              email,
+              name,
+              { idempotencyKey: job.id }, // This prevent the email from sending twice if the job is retried, since the email service will check if an email with the same idempotencyKey was already sent
+            );
             break;
 
           case "PASSWORD_RESET_REQUEST":
-            await EmailService.sendPasswordResetEmail(email, name, otp, expiryMinutes);
+            await EmailService.sendPasswordResetEmail(
+              email,
+              name,
+              otp,
+              expiryMinutes,
+              { idempotencyKey: job.id },
+            );
             break;
 
           case "PASSWORD_RESET_SUCCESS":
-            await EmailService.sendPasswordResetSuccessEmail(email, name);
+            await EmailService.sendPasswordResetSuccessEmail(email, name, {
+              idempotencyKey: job.id,
+            });
             break;
 
           case "INTERNAL_TRANSFER":
-            await EmailService.sendInternalTransferNotifications(internalTransferParams);
+          case "INTERNAL_TRANSFER":
+            await EmailService.sendInternalTransferNotifications(
+              internalTransferParams,
+              {
+                idempotencyKey: job.id,
+              },
+            );
             break;
 
           case "DEBIT":
-            await EmailService.sendDebitNotification(debitParams);
+            await EmailService.sendDebitNotification(debitParams, {
+              idempotencyKey: job.id,
+            });
             break;
 
           case "CREDIT":
-            await EmailService.sendCreditNotification(creditParams);
+            await EmailService.sendCreditNotification(creditParams, {
+              idempotencyKey: job.id,
+            });
             break;
 
           default:
             throw new Error(`Unknown email type: ${type}`);
+        }
+        const outboxId = job.data._id;
+
+        if (!outboxId) {
+          logger.error(
+            "Missing _outboxId in job payload — cannot mark DELIVERED",
+            {
+              jobId: job.id,
+            },
+          );
+          // Don't throw — email was sent. Decide: swallow or alert.
+        } else {
+          const normalizedOutboxId =
+            mongoose.Types.ObjectId.createFromHexString(outboxId);
+
+          const result = await EmailOutboxModel.updateOne(
+            { _id: normalizedOutboxId },
+            { $set: { status: "DELIVERED", deliveredAt: new Date() } },
+          );
+
+          if (result.matchedCount === 0) {
+            logger.error("Outbox document not found for delivered job", {
+              jobId: job.id,
+              outboxId,
+            });
+          }
         }
 
         bullmqJobTotal.inc({ queue: EMAIL_QUEUE, status: "success" });
@@ -155,7 +266,7 @@ async function bootstrap(): Promise<void> {
       limiter: { max: 10, duration: 1000 },
       removeOnComplete: { count: 1000 },
       removeOnFail: { count: 500 },
-    }
+    },
   );
 
   // ─── Queue depth polling ────────────────────────────────────────────────

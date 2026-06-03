@@ -1,6 +1,6 @@
 // src/db/seeders/fee.config.seeder.ts
 import { FeeConfig } from "@/modules/fee/fee.model";
-import { logger } from '@/shared/utils/logger';
+import { logger } from "@/shared/utils/logger";
 
 const DEFAULT_NGN_P2P_TIERS = [
   { min: 1, max: 1_000, fee: 10 },
@@ -12,21 +12,21 @@ const DEFAULT_NGN_P2P_TIERS = [
 
 export async function seedFeeConfig(): Promise<void> {
   const existing = await FeeConfig.findOne({
-    currency: 'NGN',
-    transferType: 'P2P_TRANSFER',
+    currency: "NGN",
+    transferType: "P2P_TRANSFER",
   });
 
   if (existing) {
-    logger.info('Fee config already exists — skipping seed');
+    //logger.info('Fee config already exists — skipping seed');
     return;
   }
 
   await FeeConfig.create({
-    currency: 'NGN',
-    transferType: 'P2P_TRANSFER',
+    currency: "NGN",
+    transferType: "P2P_TRANSFER",
     tiers: DEFAULT_NGN_P2P_TIERS,
     isActive: true,
   });
 
-  logger.info('✅ Default fee config seeded');
+  logger.info("✅ Default fee config seeded");
 }

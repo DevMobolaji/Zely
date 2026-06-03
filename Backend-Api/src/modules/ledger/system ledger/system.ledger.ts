@@ -1,17 +1,33 @@
 import BadRequestError from "@/shared/errors/badRequest";
 import mongoose, { Types } from "mongoose";
-import { generateReferenceId, generateTransactionId } from "@/shared/utils/id.generator";
+import {
+  generateReferenceId,
+  generateTransactionId,
+} from "@/shared/utils/id.generator";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import ensureSystemLedger from "./create.system.ledger";
 import TransactionBuilder from "../ledger.transaction.builder";
-import { ensureWalletsAreActive, lookUpLedgerAccount, resolveAccountByAccountNumber, resolveWallet } from "@/modules/helpers/resolvers";
-import { markCompleted, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
-import { IUser, Wallet, WalletDocument, WalletType } from "@/modules/wallet/wallet.model";
+import {
+  ensureWalletsAreActive,
+  lookUpLedgerAccountForAdmin,
+  resolveAccountByAccountNumber,
+  resolveWallet,
+} from "@/modules/helpers/resolvers";
+import {
+  markCompleted,
+  extEnsureIdempotence,
+} from "@/modules/helpers/ext.idempotence";
+import {
+  IUser,
+  Wallet,
+  WalletDocument,
+  WalletType,
+} from "@/modules/wallet/wallet.model";
 import { LedgerAccountType, LedgerOwnerType } from "../ledger.account.model";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 
-interface IWalletPopulated extends Omit<WalletDocument, 'userId'> {
+interface IWalletPopulated extends Omit<WalletDocument, "userId"> {
   userId: IUser;
 }
 
@@ -24,8 +40,15 @@ export interface FundUsersRequest {
 }
 
 class SystemLedger {
-  async fundSystemLedger(users: FundUsersRequest["users"], context: IRequestContext) {
-    const fundedUsers: { accountNumber: string; amount: number; transactionRef: string }[] = [];
+  async fundSystemLedger(
+    users: FundUsersRequest["users"],
+    context: IRequestContext,
+  ) {
+    const fundedUsers: {
+      accountNumber: string;
+      amount: number;
+      transactionRef: string;
+    }[] = [];
 
     for (const user of users) {
       const session = await mongoose.startSession();
@@ -33,12 +56,16 @@ class SystemLedger {
 
       try {
         if (!session?.inTransaction()) {
-          throw new BadRequestError("Transfers must run inside a DB transaction");
+          throw new BadRequestError(
+            "Transfers must run inside a DB transaction",
+          );
         }
 
         // --- Idempotency check ---
         if (user.idempotencyKey) {
-          const { alreadyCompleted, response } = await extEnsureIdempotence(user.idempotencyKey);
+          const { alreadyCompleted, response } = await extEnsureIdempotence(
+            user.idempotencyKey,
+          );
 
           if (alreadyCompleted) {
             fundedUsers.push(response);
@@ -49,33 +76,36 @@ class SystemLedger {
 
         const ensureSystem = await ensureSystemLedger("NGN");
 
-
         const senderWallet = await Wallet.findOne({
           ledgerAccountId: ensureSystem.SYSTEM_TREASURY.id,
-          type: LedgerAccountType.SYSTEM_TREASURY
-        })
+          type: LedgerAccountType.SYSTEM_TREASURY,
+        });
 
         // --- Resolve user account and wallet ---
-        const account = await resolveAccountByAccountNumber(user.accountNumber, "MAIN_CHECKINGS", "NGN", session);
+        const account = await resolveAccountByAccountNumber(
+          user.accountNumber,
+          "MAIN_CHECKINGS",
+          "NGN",
+          session,
+        );
 
         const wallet = await resolveWallet(account, session);
 
-
         /** -------------------------
-          * ENSURE ACTIVE WALLETS
-        * ------------------------- */
+         * ENSURE ACTIVE WALLETS
+         * ------------------------- */
         await ensureWalletsAreActive(senderWallet?._id, wallet._id, session);
 
-
         // --- Resolve ledger accounts ---
-        const { receiverLedgerId, senderLedgerId } = await lookUpLedgerAccount(
-          ensureSystem.SYSTEM_TREASURY.ownerId,
-          LedgerOwnerType.SYSTEM,
-          account.userId,
-          LedgerOwnerType.USER,
-          "NGN",
-          session
-        );
+        const { receiverLedgerId, senderLedgerId } =
+          await lookUpLedgerAccountForAdmin(
+            ensureSystem.SYSTEM_TREASURY.ownerId,
+            LedgerOwnerType.SYSTEM,
+            account.userId,
+            LedgerOwnerType.USER,
+            "NGN",
+            session,
+          );
 
         if (!senderLedgerId || !receiverLedgerId) {
           throw new BadRequestError("Ledger resolution failed");
@@ -95,7 +125,7 @@ class SystemLedger {
           referenceId,
           nature: "DEBIT",
           transactionRef,
-          referenceType: "INTERNAL_TRANSFER"
+          referenceType: "INTERNAL_TRANSFER",
         });
 
         builder.addCredit({
@@ -105,42 +135,40 @@ class SystemLedger {
           referenceId,
           nature: "CREDIT",
           transactionRef,
-          referenceType: "INTERNAL_TRANSFER"
+          referenceType: "INTERNAL_TRANSFER",
         });
 
         // --- Commit ledger entries ---
         const txn = await builder.commit(session);
 
-        const userBalBefore = await Wallet.findById(wallet._id).session(session);
+        const userBalBefore = await Wallet.findById(wallet._id).session(
+          session,
+        );
         const sysBalBefore = await Wallet.findOne({
-          ledgerAccountId: senderLedgerId.toString()
-        }).session(session)
-
+          ledgerAccountId: senderLedgerId.toString(),
+        }).session(session);
 
         await Wallet.updateOne(
-          { userPublicId: 'SYSTEM_USER', type: WalletType.SYSTEM_TREASURY },
+          { userPublicId: "SYSTEM_USER", type: WalletType.SYSTEM_TREASURY },
           { $inc: { availableBalance: -user.amount } },
-          { session }
+          { session },
         );
 
         await Wallet.updateOne(
           { _id: wallet._id },
           { $inc: { availableBalance: user.amount } },
-          { session }
+          { session },
         );
 
         const UserBalAfter = await Wallet.findById(wallet._id).session(session);
         const sysBalAfter = await Wallet.findOne({
-          ledgerAccountId: senderLedgerId
-        }).session(session)
+          ledgerAccountId: senderLedgerId,
+        }).session(session);
 
         // --- Mark idempotency ---
-        await markCompleted(
-          user.idempotencyKey as string,
-          transactionRef,
-          { transactionRef: txn.transactionRef },
-        );
-
+        await markCompleted(user.idempotencyKey as string, transactionRef, {
+          transactionRef: txn.transactionRef,
+        });
 
         await emitOutboxEvent(
           {
@@ -177,29 +205,30 @@ class SystemLedger {
               currency: "NGN",
               referenceId,
               transactionRef,
-              transferType: "INTERNAL_SYSTEM_TRANSFER"
-
+              transferType: "INTERNAL_SYSTEM_TRANSFER",
             },
             aggregateType: "TRANSFER",
             aggregateId: txn.transactionRef,
             version: 1,
-            context
+            context,
           },
-          { session }
+          { session },
         );
-
 
         await session.commitTransaction();
 
         fundedUsers.push({
           accountNumber: user.accountNumber,
           amount: user.amount,
-          transactionRef: txn.transactionRef as string
+          transactionRef: txn.transactionRef as string,
         });
       } catch (error: any) {
         await session.abortTransaction();
 
-        console.error(`Failed funding user ${user.accountNumber}:`, error.message);
+        console.error(
+          `Failed funding user ${user.accountNumber}:`,
+          error.message,
+        );
         throw error;
       } finally {
         await session.endSession();

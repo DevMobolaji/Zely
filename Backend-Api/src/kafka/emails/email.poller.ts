@@ -19,37 +19,40 @@ const STUCK_ENQUEUED_THRESHOLD_MS = 10 * 60 * 1000; // 10 min
 // Exponential backoff delays per attempt (ms)
 // attempt 1 → 30s, attempt 2 → 60s, attempt 3 → 120s...
 const RETRY_BACKOFF_MS = [
-  30_000,   // 30 seconds
-  60_000,   // 1 minute
-  120_000,  // 2 minutes
-  300_000,  // 5 minutes
+  30_000, // 30 seconds
+  60_000, // 1 minute
+  120_000, // 2 minutes
+  300_000, // 5 minutes
 ];
-
 
 // ─── Email Metrics ────────────────────────────────────────────────────────────
 export const emailOutboxPendingCount = new Gauge({
-  name: 'email_outbox_pending_count',
-  help: 'Number of pending records in the email outbox',
+  name: "email_outbox_pending_count",
+  help: "Number of pending records in the email outbox",
   registers: [workerRegistry],
 });
 
 export const emailSendTotal = new Counter({
-  name: 'email_send_total',
-  help: 'Total email send attempts',
-  labelNames: ['status', 'job_name'], // success | failure
+  name: "email_send_total",
+  help: "Total email send attempts",
+  labelNames: ["status", "job_name"], // success | failure
   registers: [workerRegistry],
 });
 
 export const emailSendDuration = new Histogram({
-  name: 'email_send_duration_ms',
-  help: 'Duration of email send operations in milliseconds',
-  labelNames: ['job_name'],
+  name: "email_send_duration_ms",
+  help: "Duration of email send operations in milliseconds",
+  labelNames: ["job_name"],
   buckets: [100, 250, 500, 1000, 2000, 5000],
   registers: [workerRegistry],
 });
 
 // ─── Pushgateway ──────────────────────────────────────────────────────────────
-const gateway = new Pushgateway(process.env.PUSHGATEWAY_URL || 'http://localhost:9091', [], workerRegistry);
+const gateway = new Pushgateway(
+  process.env.PUSHGATEWAY_URL || "http://pushgateway:9091",
+  [],
+  workerRegistry,
+);
 
 async function pushMetrics(): Promise<void> {
   try {
@@ -78,7 +81,7 @@ async function pollOnce(): Promise<void> {
             $or: [
               { nextRetryAt: { $exists: false } },
               { nextRetryAt: { $lte: new Date() } }, // backoff window passed
-            ]
+            ],
           },
           {
             status: "PROCESSING",
@@ -102,15 +105,22 @@ async function pollOnce(): Promise<void> {
           claimedAt: new Date(),
         },
       },
-      { new: true, sort: { createdAt: 1 } }
+      { new: true, sort: { createdAt: 1 } },
     );
 
     if (!job) break;
 
     try {
-      await emailQueue.add(job.jobName, job.payload, {
-        jobId: job.jobId,
-      });
+      await emailQueue.add(
+        job.jobName,
+        {
+          ...job.payload,
+          _id: job._id.toString(),
+        },
+        {
+          jobId: job.jobId,
+        },
+      );
 
       // ENQUEUED = "handed to BullMQ", not "email sent"
       await EmailOutboxModel.updateOne(
@@ -120,7 +130,7 @@ async function pollOnce(): Promise<void> {
             status: "ENQUEUED",
             enqueuedAt: new Date(),
           },
-        }
+        },
       );
 
       logger.info("Email outbox job dispatched", {
@@ -129,7 +139,6 @@ async function pollOnce(): Promise<void> {
         eventId: job.eventId,
         transactionRef: job.transactionRef,
       });
-
     } catch (err: any) {
       const nextAttempts = job.attempts + 1;
       const exhausted = nextAttempts >= MAX_ATTEMPTS;
@@ -142,10 +151,12 @@ async function pollOnce(): Promise<void> {
             status: exhausted ? "FAILED" : "PENDING",
             lastError: err.message,
             claimedAt: undefined,
-            nextRetryAt: exhausted ? undefined : new Date(Date.now() + backoffMs),
+            nextRetryAt: exhausted
+              ? undefined
+              : new Date(Date.now() + backoffMs),
           },
           $inc: { attempts: 1 },
-        }
+        },
       );
 
       if (exhausted) {

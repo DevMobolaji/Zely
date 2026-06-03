@@ -1,12 +1,12 @@
 // src/modules/payments/webhook.controller.ts
-import { Request, Response, Router } from "express";
-import { StatusCodes } from "http-status-codes";
+import Controller from "@/config/interfaces/controller.interfaces";
+import InvalidWebhookSignatureError from "@/shared/errors/invalidWebhookSignature";
 import asyncWrapper from "@/shared/middleware/async.wrapper";
 import { getRequestContext } from "@/shared/middleware/request.context";
-import Controller from "@/config/interfaces/controller.interfaces";
-import PaymentService from "./payment.service";
-import InvalidWebhookSignatureError from "@/shared/errors/invalidWebhookSignature";
 import { logger } from "@/shared/utils/logger";
+import { Request, Response, Router } from "express";
+import { StatusCodes } from "http-status-codes";
+import PaymentService from "./payment.service";
 
 class WebhookController implements Controller {
   public path = "/webhooks";
@@ -22,62 +22,66 @@ class WebhookController implements Controller {
     // We need the raw body bytes for HMAC signature verification.
     // If we let express.json() parse first, the bytes would be re-serialized
     // and the signature would no longer match.
-    this.route.post(
-      `${this.path}/payments`,
-      this.handlePaymentWebhook
-    );
+    this.route.post(`${this.path}/payments`, this.handlePaymentWebhook);
   }
 
-  private handlePaymentWebhook = asyncWrapper(async (req: Request, res: Response) => {
-    const ctx = getRequestContext(req as any);
+  private handlePaymentWebhook = asyncWrapper(
+    async (req: Request, res: Response) => {
+      const ctx = getRequestContext(req as any);
 
-    // Body is a Buffer (from express.raw)
-    const rawBody = (req as any).rawBody || "";
+      // Body is a Buffer (from express.raw)
+      const rawBody = (req as any).rawBody || "";
 
-    logger.debug("Webhook received", {
-      hasRawBody: !!rawBody,
-      rawBodyLength: rawBody.length,
-    });
-
-    // Signature comes from a provider-specific header
-    // Paystack uses: x-paystack-signature
-    // Flutterwave uses: verif-hash
-    // We pick the right one based on provider configuration (later)
-    const signature = req.headers["x-paystack-signature"] as string
-      || req.headers["verif-hash"] as string
-      || "";
-
-    try {
-      const result = await this.paymentService.processWebhook({
-        rawBody,
-        signature,
-        context: ctx,
+      logger.debug("Webhook received", {
+        hasRawBody: !!rawBody,
+        rawBodyLength: rawBody.length,
       });
 
-      logger.info("Webhook processed", {
-        acknowledged: result.acknowledged,
-        reason: result.reason,
-      });
+      // Signature comes from a provider-specific header
+      // Paystack uses: x-paystack-signature
+      // Flutterwave uses: verif-hash
+      // We pick the right one based on provider configuration (later)
+      const signature =
+        (req.headers["x-paystack-signature"] as string) ||
+        (req.headers["verif-hash"] as string) ||
+        "";
 
-      // Always 200 OK on acknowledged webhooks — even ones we ignored.
-      // Returning 4xx/5xx would cause Paystack to retry indefinitely.
-      return res.status(StatusCodes.OK).json({ status: "acknowledged", reason: result.reason });
-    } catch (err: any) {
-      // Signature verification failed or internal processing error.
-      // Different error types get different status codes:
-      if (err instanceof InvalidWebhookSignatureError) {
-        logger.warn("Webhook rejected: invalid signature");
-        return res.status(StatusCodes.UNAUTHORIZED).json({ error: "INVALID_SIGNATURE" });
+      try {
+        const result = await this.paymentService.processWebhook({
+          rawBody,
+          signature,
+          context: ctx,
+        });
+
+        logger.info("Webhook processed", {
+          acknowledged: result.acknowledged,
+          reason: result.reason,
+        });
+
+        // Always 200 OK on acknowledged webhooks — even ones we ignored.
+        // Returning 4xx/5xx would cause Paystack to retry indefinitely.
+        return res
+          .status(StatusCodes.OK)
+          .json({ status: "acknowledged", reason: result.reason });
+      } catch (err: any) {
+        // Signature verification failed or internal processing error.
+        // Different error types get different status codes:
+        if (err instanceof InvalidWebhookSignatureError) {
+          logger.warn("Webhook rejected: invalid signature");
+          return res
+            .status(StatusCodes.UNAUTHORIZED)
+            .json({ error: "INVALID_SIGNATURE" });
+        }
+
+        // Other errors — return 500 so Paystack retries.
+        // Idempotency on our side prevents duplicate processing.
+        logger.error("Webhook processing failed, returning 500 for retry", {
+          error: err.message,
+        });
+        throw err;
       }
-
-      // Other errors — return 500 so Paystack retries.
-      // Idempotency on our side prevents duplicate processing.
-      logger.error("Webhook processing failed, returning 500 for retry", {
-        error: err.message,
-      });
-      throw err;
-    }
-  });
+    },
+  );
 }
 
 export default WebhookController;
