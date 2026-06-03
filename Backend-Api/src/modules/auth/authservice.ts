@@ -44,7 +44,7 @@ import { PasswordResetTokenModel } from "@/infrastructure/helpers/psdtoken.model
 import { logger } from "@/shared/utils/logger";
 import { config } from "@/config/index";
 
-class userService {
+class authService {
   private userModel = User;
   private otpManager = new OTPManager();
   private static readonly RESET_TOKEN_TTL_MS = 20 * 60 * 1000; // 20 min
@@ -621,7 +621,7 @@ class userService {
     const jti = crypto.randomUUID();
     const issuedAt = new Date();
     const expiresAt = new Date(
-      issuedAt.getTime() + userService.RESET_TOKEN_TTL_MS,
+      issuedAt.getTime() + authService.RESET_TOKEN_TTL_MS,
     );
 
     const resetToken = jwt.sign(
@@ -877,4 +877,4 @@ class userService {
   }
 }
 
-export default userService;
+export default authService;

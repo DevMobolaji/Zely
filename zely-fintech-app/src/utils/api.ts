@@ -1,7 +1,8 @@
 // In-memory storage for the access token (Security Best Practice: Short-lived)
 let _accessToken: string | null = null;
 
-export const API_URL = "http://localhost:3000/api/v1";
+export const API_URL =
+  import.meta.env.VITE_API_URL || "http://localhost:3000/api/v1";
 
 export const setAccessToken = (token: string | null) => {
   _accessToken = token;
