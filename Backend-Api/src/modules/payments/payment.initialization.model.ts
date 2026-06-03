@@ -1,14 +1,14 @@
 // src/modules/payments/payment.initialization.model.ts
-import mongoose, { Schema, Document, Types } from "mongoose";
 import { generateEventId } from "@/shared/utils/id.generator";
+import mongoose, { Document, Schema, Types } from "mongoose";
 import { LedgerAccountType } from "../ledger/ledger.account.model";
 
 export enum PaymentInitializationStatus {
   PENDING = "PENDING",
-  SUCCESS = "SUCCESS",        // webhook confirmed payment
-  FAILED = "FAILED",          // provider reported failure
-  ABANDONED = "ABANDONED",    // user never completed (timeout)
-  DISPUTED = "DISPUTED",      // chargeback (future use)
+  SUCCESS = "SUCCESS", // webhook confirmed payment
+  FAILED = "FAILED", // provider reported failure
+  ABANDONED = "ABANDONED", // user never completed (timeout)
+  DISPUTED = "DISPUTED", // chargeback (future use)
 }
 
 export enum PaymentPurpose {
@@ -17,7 +17,7 @@ export enum PaymentPurpose {
 }
 
 export interface PaymentInitializationDocument extends Document {
-  reference: string;                  // OUR unique reference (we generate this)
+  reference: string; // OUR unique reference (we generate this)
   purpose: PaymentPurpose;
 
   // Who initiated
@@ -25,17 +25,17 @@ export interface PaymentInitializationDocument extends Document {
   initiatedByUserPublicId: string;
 
   // What's being funded
-  targetWalletId: string;             // Zely wallet to credit
+  targetWalletId: string; // Zely wallet to credit
   targetWalletType: LedgerAccountType;
 
   // Money details
-  amount: number;                     // minor units (kobo)
+  amount: number; // minor units (kobo)
   currency: string;
 
   // Provider tracking
-  providerName: string;               // PAYSTACK, FLUTTERWAVE, MOCK
-  providerReference?: string;         // their reference (returned at initialization)
-  providerAuthorizationUrl?: string;  // URL we redirect user to
+  providerName: string; // PAYSTACK, FLUTTERWAVE, MOCK
+  providerReference?: string; // their reference (returned at initialization)
+  providerAuthorizationUrl?: string; // URL we redirect user to
 
   // Status
   status: PaymentInitializationStatus;
@@ -51,7 +51,10 @@ export interface PaymentInitializationDocument extends Document {
   failureReason?: string;
 
   // Idempotency
-  clientIdempotencyKey: string;       // user-provided, ensures duplicate clicks don't double-init
+  clientIdempotencyKey: string; // user-provided, ensures duplicate clicks don't double-init
+
+  retryAttempts?: number;
+  lastRetryAt?: Date;
 
   createdAt: Date;
   updatedAt: Date;
@@ -135,13 +138,20 @@ const PaymentInitializationSchema = new Schema<PaymentInitializationDocument>(
     providerInitResponse: { type: Schema.Types.Mixed },
     providerWebhookPayload: { type: Schema.Types.Mixed },
     failureReason: { type: String },
+    retryAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lastRetryAt: {
+      type: Date,
+    },
     clientIdempotencyKey: {
       type: String,
       required: true,
       immutable: true,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Critical indexes ────────────────────────────────────────────────────────
@@ -150,19 +160,33 @@ const PaymentInitializationSchema = new Schema<PaymentInitializationDocument>(
 // Prevents double-clicks from creating two payment attempts
 PaymentInitializationSchema.index(
   { initiatedByUserId: 1, clientIdempotencyKey: 1 },
-  { unique: true }
+  { unique: true },
 );
 
 // Lookup by provider reference when webhook arrives
 PaymentInitializationSchema.index(
   { providerName: 1, providerReference: 1 },
-  { unique: true, sparse: true }
+  { unique: true, sparse: true },
 );
 
 // Find stuck initializations (for the reaper job)
-PaymentInitializationSchema.index({ status: 1, initiatedAt: 1 });
-
-export const PaymentInitialization = mongoose.model<PaymentInitializationDocument>(
-  "PaymentInitialization",
-  PaymentInitializationSchema
+PaymentInitializationSchema.index(
+  { initiatedByUserId: 1, targetWalletId: 1, status: 1 },
+  {
+    partialFilterExpression: {
+      status: PaymentInitializationStatus.PENDING,
+    },
+    name: "idx_pending_per_user_wallet",
+  },
 );
+
+PaymentInitializationSchema.index(
+  { initiatedByUserId: 1, status: 1, currency: 1, completedAt: 1 },
+  { name: "idx_daily_funding_limit" },
+);
+
+export const PaymentInitialization =
+  mongoose.model<PaymentInitializationDocument>(
+    "PaymentInitialization",
+    PaymentInitializationSchema,
+  );

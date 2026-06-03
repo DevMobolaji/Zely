@@ -11,7 +11,8 @@
     "worker:email": "ts-node -r tsconfig-paths/register src/workers/email.worker.ts",
     "worker:outbox": "ts-node -r tsconfig-paths/register src/workers/outbox.worker.ts",
     "worker:reconcile": "ts-node -r tsconfig-paths/register src/workers/reconcile.worker.ts",
-    "run-migrations": "ts-node -r tsconfig-paths/register src/db/runMigration.ts"
+    "run-migrations": "ts-node -r tsconfig-paths/register src/db/runMigration.ts",
+    "worker:payment-reaper": "ts-node -r tsconfig-paths/register src/workers/payment.reaper.worker.ts"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,7 @@
     "@bull-board/api": "^6.16.2",
     "@bull-board/express": "^6.16.2",
     "argon2": "^0.44.0",
+    "axios": "^1.16.1",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.66.4",
     "chalk": "^5.6.2",

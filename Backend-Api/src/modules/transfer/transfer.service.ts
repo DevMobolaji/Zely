@@ -1,8 +1,26 @@
-import { deductWalletFunds, ensureWalletsAreActive, findVault, findWalletByType, lockVaultToPreventConcurrency, lockWalletFunds, lookUpAccounts, lookUpLedgerAccount, lookUpLedgerAccountForP2p, lookUpPrimaryWallets, LookUpVaultLedger, resolveAccountByUserId, unlockVault } from "../helpers/resolvers";
+import {
+  deductWalletFunds,
+  ensureWalletsAreActive,
+  findVault,
+  findWalletByType,
+  lockVaultToPreventConcurrency,
+  lockWalletFunds,
+  lookUpAccounts,
+  lookUpLedgerAccountforP2P,
+  lookUpLedgerAccountForInternalTrx,
+  lookUpPrimaryWallets,
+  LookUpVaultLedger,
+  resolveAccountByUserId,
+  unlockVault,
+} from "../helpers/resolvers";
 import BadRequestError from "@/shared/errors/badRequest";
 import TransferEngine from "./transfer.engine";
 import { IRequestContext } from "@/config/interfaces/request.interface";
-import { internalTransferRequest, TransferRequestInput, vaultTransferRequest } from "./transfer.interface";
+import {
+  internalTransferRequest,
+  TransferRequestInput,
+  vaultTransferRequest,
+} from "./transfer.interface";
 import mongoose from "mongoose";
 import { Wallet, WalletDocument, WalletType } from "../wallet/wallet.model";
 import vaultModel, { VaultDocument } from "../vault/vault.model";
@@ -13,17 +31,24 @@ import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import { logger } from "@/shared/utils/logger";
 import { extEnsureIdempotence } from "../helpers/ext.idempotence";
 import { calculateFeeBreakdown } from "../fee/transfer.fee.engine";
-import { enforceTransactionLimits, enforceReceiverBalanceCap, commitTransactionLimits, rollbackTransactionLimits } from "@/modules/transactionLimit/transactionLimit.service";
+import {
+  enforceTransactionLimits,
+  enforceReceiverBalanceCap,
+  commitTransactionLimits,
+  rollbackTransactionLimits,
+} from "@/modules/transactionLimit/transactionLimit.service";
 import { KycTier } from "../transactionLimit/transaction.limit.model";
 import UserModel from "../auth/authmodel";
 
 class TransferService {
   public async p2pTransfer(
     dto: TransferRequestInput,
-    context: IRequestContext) {
-
+    context: IRequestContext,
+  ) {
     // ✅ Idempotency check BEFORE any session/transaction
-    const { alreadyCompleted, response } = await extEnsureIdempotence(dto.idempotencyKey)
+    const { alreadyCompleted, response } = await extEnsureIdempotence(
+      dto.idempotencyKey,
+    );
 
     if (alreadyCompleted) return response;
 
@@ -34,14 +59,13 @@ class TransferService {
     let senderWallet: WalletDocument | null = null;
     let receiverWallet: WalletDocument | null = null;
 
-
     try {
       /** -------------------------
        * RESOLVE ACCOUNTS
        * ------------------------- */
       const { senderAccount, receiverAccount } = await lookUpAccounts(
         { senderId: dto.senderId, toAccountNumber: dto.toAccountNumber },
-        session
+        session,
       );
 
       if (!senderAccount || !receiverAccount) {
@@ -52,15 +76,27 @@ class TransferService {
         throw new BadRequestError("USE_INTERNAL_TRANSFER");
       }
 
-      if (!dto.toAccountNumber || typeof dto.amount !== "number" || dto.amount <= 0) {
+      if (
+        !dto.toAccountNumber ||
+        typeof dto.amount !== "number" ||
+        dto.amount <= 0
+      ) {
         throw new BadRequestError("INVALID_TRANSFER_REQUEST");
       }
 
       /** -------------------------
        * LOAD WALLETS
        * ------------------------- */
-      senderWallet = await lookUpPrimaryWallets(senderAccount.walletId, dto.currency, session);
-      receiverWallet = await lookUpPrimaryWallets(receiverAccount.walletId, dto.currency, session);
+      senderWallet = await lookUpPrimaryWallets(
+        senderAccount.walletId,
+        dto.currency,
+        session,
+      );
+      receiverWallet = await lookUpPrimaryWallets(
+        receiverAccount.walletId,
+        dto.currency,
+        session,
+      );
 
       if (!senderWallet || !receiverWallet) {
         throw new BadRequestError("WALLETS_NOT_FOUND");
@@ -69,20 +105,28 @@ class TransferService {
       /** -------------------------
        * ENSURE ACTIVE WALLETS
        * ------------------------- */
-      await ensureWalletsAreActive(senderWallet._id, receiverWallet._id, session);
+      await ensureWalletsAreActive(
+        senderWallet._id,
+        receiverWallet._id,
+        session,
+      );
 
       /** -------------------------
-      * TRANSACTION LIMITS
-      * ------------------------- */
+       * TRANSACTION LIMITS
+       * ------------------------- */
       const senderUser = await UserModel.findOne(
         { userId: dto.senderId },
-        { kycTier: 1 }
-      ).session(session).lean();
+        { kycTier: 1 },
+      )
+        .session(session)
+        .lean();
 
       const receiverUser = await UserModel.findOne(
         { _id: receiverAccount.userId },
-        { kycTier: 1 }
-      ).session(session).lean();
+        { kycTier: 1 },
+      )
+        .session(session)
+        .lean();
 
       const senderTier = senderUser?.kycTier ?? KycTier.TIER_1;
       const receiverTier = receiverUser?.kycTier ?? KycTier.TIER_1;
@@ -116,10 +160,14 @@ class TransferService {
       const { fee, totalDeducted } = await calculateFeeBreakdown(
         dto.amount,
         dto.currency,
-        'P2P_TRANSFER'
+        "P2P_TRANSFER",
       );
 
-      const senderWalletLocked = await lockWalletFunds(senderWallet._id, totalDeducted, session);
+      const senderWalletLocked = await lockWalletFunds(
+        senderWallet._id,
+        totalDeducted,
+        session,
+      );
 
       if (!senderWalletLocked) {
         throw new BadRequestError("SENDER_WALLET_LOCK_FAILED");
@@ -128,14 +176,15 @@ class TransferService {
       /** -------------------------
        * TRANSFER ENGINE
        * ------------------------- */
-      const { senderLedgerId, receiverLedgerId } = await lookUpLedgerAccount(
-        senderAccount.userId,
-        LedgerOwnerType.USER,
-        receiverAccount.userId,
-        LedgerOwnerType.USER,
-        dto.currency,
-        session
-      );
+      const { senderLedgerId, receiverLedgerId } =
+        await lookUpLedgerAccountforP2P(
+          senderAccount.userId,
+          LedgerOwnerType.USER,
+          receiverAccount.userId,
+          LedgerOwnerType.USER,
+          dto.currency,
+          session,
+        );
 
       const result = await new TransferEngine({
         transferType: "P2P_TRANSFER",
@@ -155,12 +204,16 @@ class TransferService {
       /** -------------------------
        * APPLY BALANCE MUTATION
        * ------------------------- */
-      const updatedSenderWallet = await deductWalletFunds(senderWallet._id, totalDeducted, session);
+      const updatedSenderWallet = await deductWalletFunds(
+        senderWallet._id,
+        totalDeducted,
+        session,
+      );
 
       const updatedReceiverWallet = await Wallet.findOneAndUpdate(
         { _id: receiverWallet._id },
         { $inc: { availableBalance: dto.amount } },
-        { session, new: true }
+        { session, new: true },
       );
 
       /** -------------------------
@@ -182,7 +235,7 @@ class TransferService {
               accountType: senderAccount.type,
               accountNumber: senderAccount.accountNumber,
               previousBalance: prevSenderBalance,
-              currentBalance: updatedSenderWallet?.availableBalance
+              currentBalance: updatedSenderWallet?.availableBalance,
             },
             receiver: {
               walletId: receiverWallet.walletId,
@@ -195,7 +248,7 @@ class TransferService {
               currentBalance: updatedReceiverWallet?.availableBalance,
             },
             amount: dto.amount,
-            fee: result.fee,           // ← add
+            fee: result.fee, // ← add
             totalDeducted: result.totalDeducted,
             currency: dto.currency,
             referenceId: result.referenceId,
@@ -207,7 +260,7 @@ class TransferService {
           version: 1,
           context,
         },
-        { session }
+        { session },
       );
 
       await session.commitTransaction();
@@ -220,7 +273,6 @@ class TransferService {
       });
 
       return result;
-
     } catch (e) {
       if (!committed) {
         try {
@@ -248,10 +300,12 @@ class TransferService {
 
   public async transferBetweenWallet(
     dto: internalTransferRequest,
-    context: IRequestContext
+    context: IRequestContext,
   ) {
     // ✅ Idempotency check BEFORE any session/transaction
-    const { alreadyCompleted, response } = await extEnsureIdempotence(dto.idempotencyKey)
+    const { alreadyCompleted, response } = await extEnsureIdempotence(
+      dto.idempotencyKey,
+    );
 
     if (alreadyCompleted) return response;
 
@@ -266,20 +320,20 @@ class TransferService {
     try {
       /** -------------------------
        * RESOLVE ACCOUNTS
-      * ------------------------- */
+       * ------------------------- */
 
       const checkingAccount = await resolveAccountByUserId(
         dto.senderId,
         dto.fromType,
         dto.currency,
-        session
+        session,
       );
 
       const savingsAccount = await resolveAccountByUserId(
         dto.senderId,
         dto.toType,
         dto.currency,
-        session
+        session,
       );
 
       if (!checkingAccount || !savingsAccount) {
@@ -291,33 +345,37 @@ class TransferService {
       }
 
       if (dto.fromType === dto.toType) {
-        throw new BadRequestError("INVALID ACCOUNT TYPES")
+        throw new BadRequestError("INVALID ACCOUNT TYPES");
       }
 
       /** -------------------------
        * WALLET LOAD
-      * ------------------------- */
+       * ------------------------- */
       senderWallet = await findWalletByType(
         checkingAccount.walletId,
         dto.fromType as WalletType,
         dto.currency,
-        session
+        session,
       );
 
       receiverWallet = await findWalletByType(
         savingsAccount.walletId,
         dto.toType as WalletType,
         dto.currency,
-        session
+        session,
       );
 
       const prevSenderBalance = senderWallet.availableBalance;
       const prevReceiverBalance = receiverWallet?.availableBalance;
 
       /** -------------------------
-     * LOCK SENDER WALLET
-    * ------------------------- */
-      senderWalletLocked = await lockWalletFunds(senderWallet._id, dto.amount, session);
+       * LOCK SENDER WALLET
+       * ------------------------- */
+      senderWalletLocked = await lockWalletFunds(
+        senderWallet._id,
+        dto.amount,
+        session,
+      );
       if (!senderWalletLocked) {
         throw new BadRequestError("SENDER_WALLET_LOCK_FAILED");
       }
@@ -325,43 +383,46 @@ class TransferService {
       /** -------------------------
        * LEDGER RESOLUTION
        * ------------------------- */
-      const { senderLedger, receiverLedger } =
-        await lookUpLedgerAccountForP2p(
+      const { senderLedgerId, receiverLedgerId } =
+        await lookUpLedgerAccountForInternalTrx(
           checkingAccount.ledgerAccountId,
           savingsAccount.ledgerAccountId,
+          checkingAccount.userId,
+          savingsAccount.userId,
           dto.fromType,
           dto.toType,
-          session
+          session,
         );
-
 
       /** -------------------------
        * TRANSFER ENGINE
-      * ------------------------- */
+       * ------------------------- */
 
-      const result = await new TransferEngine(
-        {
-          transferType: "INTERNAL_TRANSFER",
-          senderAccount: checkingAccount,
-          receiverAccount: savingsAccount,
-          senderWallet,
-          receiverWallet,
-          senderLedgerId: senderLedger._id,
-          receiverLedgerId: receiverLedger._id,
-          amount: dto.amount,
-          currency: dto.currency,
-          idempotencyKey: dto.idempotencyKey,
-        }
-      ).transferEngines(context, session);
+      const result = await new TransferEngine({
+        transferType: "INTERNAL_TRANSFER",
+        senderAccount: checkingAccount,
+        receiverAccount: savingsAccount,
+        senderWallet,
+        receiverWallet,
+        senderLedgerId,
+        receiverLedgerId,
+        amount: dto.amount,
+        currency: dto.currency,
+        idempotencyKey: dto.idempotencyKey,
+      }).transferEngines(context, session);
 
       /** -------------------------
-     * DEDUCT FUNDS
-    * ------------------------- */
-      const updatedSenderWallet = await deductWalletFunds(senderWallet._id, dto.amount, session);
+       * DEDUCT FUNDS
+       * ------------------------- */
+      const updatedSenderWallet = await deductWalletFunds(
+        senderWallet._id,
+        dto.amount,
+        session,
+      );
       const updatedReceiverWallet = await Wallet.findOneAndUpdate(
         { _id: receiverWallet._id },
         { $inc: { availableBalance: dto.amount } },
-        { session, new: true }
+        { session, new: true },
       );
 
       /** -------------------------
@@ -406,7 +467,7 @@ class TransferService {
           version: 1,
           context,
         },
-        { session }
+        { session },
       );
 
       await session.commitTransaction();
@@ -434,10 +495,12 @@ class TransferService {
 
   public async transferToVault(
     dto: vaultTransferRequest,
-    context: IRequestContext
+    context: IRequestContext,
   ) {
     // ✅ Idempotency check BEFORE any session/transaction
-    const { alreadyCompleted, response } = await extEnsureIdempotence(dto.idempotencyKey)
+    const { alreadyCompleted, response } = await extEnsureIdempotence(
+      dto.idempotencyKey,
+    );
 
     if (alreadyCompleted) return response;
 
@@ -457,7 +520,7 @@ class TransferService {
         dto.senderId,
         dto.fromType,
         dto.currency,
-        session
+        session,
       );
 
       if (!senderAccount) {
@@ -471,12 +534,7 @@ class TransferService {
       /** -------------------------
        * RESOLVE VAULT
        * ------------------------- */
-      vault = await findVault(
-        dto.vaultId,
-        dto.currency,
-        dto.senderId,
-        session
-      );
+      vault = await findVault(dto.vaultId, dto.currency, dto.senderId, session);
 
       if (vault.userPublicId !== context.userId) {
         throw new BadRequestError("UNAUTHORIZED_TO_TRANSFER_TO_VAULT");
@@ -493,7 +551,10 @@ class TransferService {
       /** -------------------------
        * LOCK VAULT FOR CONCURRENCY
        * ------------------------- */
-      const vaultLocked = await lockVaultToPreventConcurrency(vault._id, session);
+      const vaultLocked = await lockVaultToPreventConcurrency(
+        vault._id,
+        session,
+      );
 
       if (!vaultLocked) {
         throw new BadRequestError("VAULT_LOCK_FAILED");
@@ -506,10 +567,14 @@ class TransferService {
         senderAccount.walletId,
         dto.fromType as WalletType,
         dto.currency,
-        session
+        session,
       );
 
-      senderWalletLocked = await lockWalletFunds(senderWallet._id, dto.amount, session);
+      senderWalletLocked = await lockWalletFunds(
+        senderWallet._id,
+        dto.amount,
+        session,
+      );
 
       if (!senderWalletLocked) {
         throw new BadRequestError("SENDER_WALLET_LOCK_FAILED");
@@ -518,14 +583,13 @@ class TransferService {
       /** -------------------------
        * LEDGER RESOLUTION
        * ------------------------- */
-      const { senderLedgerId, receiverLedgerId } =
-        await LookUpVaultLedger(
-          senderAccount.ledgerAccountId,
-          vault.ledgerAccountId,
-          dto.fromType,
-          dto.toType,
-          session
-        );
+      const { senderLedgerId, receiverLedgerId } = await LookUpVaultLedger(
+        senderAccount.ledgerAccountId,
+        vault.ledgerAccountId,
+        dto.fromType,
+        dto.toType,
+        session,
+      );
 
       if (!senderLedgerId || !receiverLedgerId) {
         throw new NotFoundError("SENDER_LEDGER_NOT_FOUND");
@@ -543,66 +607,72 @@ class TransferService {
         receiverLedgerId: vault.ledgerAccountId,
         amount: dto.amount,
         currency: dto.currency,
-        idempotencyKey: dto.idempotencyKey
+        idempotencyKey: dto.idempotencyKey,
       }).transferEngines(context, session);
 
       /** -------------------------
        * APPLY BALANCES
        * ------------------------- */
-      const updatedSenderWallet = await deductWalletFunds(senderWallet._id, dto.amount, session);
+      const updatedSenderWallet = await deductWalletFunds(
+        senderWallet._id,
+        dto.amount,
+        session,
+      );
       const updatedVault = await vaultModel.findOneAndUpdate(
         { _id: vault._id },
         { $inc: { currentBalanceMinor: dto.amount } },
-        { session, new: true }
+        { session, new: true },
       );
 
       await unlockVault(vault._id, session);
 
       /** -------------------------
-     * OUTBOX / EVENT EMISSION
-     * ------------------------- */
-      await emitOutboxEvent({
-        topic: "vault.events",
-        eventId: result.transactionRef,
-        eventType: AuditAction.VAULT_TRANSFER_COMPLETED,
-        action: AuditAction.VAULT_TRANSFER_COMPLETED,
-        status: AuditStatus.PENDING,
-        payload: {
-          sender: {
-            walletId: senderWallet.walletId,
-            userId: senderWallet.userPublicId,
-            name: senderWallet.userId.name,
-            accountType: senderAccount.type,
-            accountNumber: senderAccount.accountNumber,
-            previousBalance: senderWallet.availableBalance,
-            currentBalance: updatedSenderWallet?.availableBalance,
+       * OUTBOX / EVENT EMISSION
+       * ------------------------- */
+      await emitOutboxEvent(
+        {
+          topic: "vault.events",
+          eventId: result.transactionRef,
+          eventType: AuditAction.VAULT_TRANSFER_COMPLETED,
+          action: AuditAction.VAULT_TRANSFER_COMPLETED,
+          status: AuditStatus.PENDING,
+          payload: {
+            sender: {
+              walletId: senderWallet.walletId,
+              userId: senderWallet.userPublicId,
+              name: senderWallet.userId.name,
+              accountType: senderAccount.type,
+              accountNumber: senderAccount.accountNumber,
+              previousBalance: senderWallet.availableBalance,
+              currentBalance: updatedSenderWallet?.availableBalance,
+            },
+            receiver: {
+              accountType: "VAULT",
+              walletId: vault.vaultId,
+              userId: vault.userPublicId,
+              vaultId: vault.vaultId,
+              previousBalance: vault.currentBalanceMinor,
+              currentBalance: updatedVault?.currentBalanceMinor,
+            },
+            amount: dto.amount,
+            currency: dto.currency,
+            referenceId: result.referenceId,
+            transactionRef: result.transactionRef,
+            transferType: "VAULT_TRANSFER",
           },
-          receiver: {
-            accountType: "VAULT",
-            walletId: vault.vaultId,
-            userId: vault.userPublicId,
-            vaultId: vault.vaultId,
-            previousBalance: vault.currentBalanceMinor,
-            currentBalance: updatedVault?.currentBalanceMinor,
-          },
-          amount: dto.amount,
-          currency: dto.currency,
-          referenceId: result.referenceId,
-          transactionRef: result.transactionRef,
-          transferType: "VAULT_TRANSFER",
+          aggregateType: "VAULT_TRANSFER",
+          aggregateId: result.transactionRef,
+          version: 1,
+          context,
         },
-        aggregateType: "VAULT_TRANSFER",
-        aggregateId: result.transactionRef,
-        version: 1,
-        context,
-      }, { session });
+        { session },
+      );
 
       /** -------------------------
        * COMMIT TRANSACTION
        * ------------------------- */
       await session.commitTransaction();
       return result;
-
     } catch (e) {
       if (!committed) {
         try {
@@ -622,9 +692,6 @@ class TransferService {
       session.endSession();
     }
   }
-
 }
 
 export default TransferService;
-
-

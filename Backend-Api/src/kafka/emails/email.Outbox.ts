@@ -7,7 +7,13 @@ export interface IEmailOutbox extends Document {
   eventId: string;
   transactionRef?: string;
   aggregateType: string;
-  status: "PENDING" | "PROCESSING" | "ENQUEUED" | "SENT" | "FAILED";
+  status:
+    | "PENDING"
+    | "PROCESSING"
+    | "ENQUEUED"
+    | "SENT"
+    | "FAILED"
+    | "DELIVERED";
   attempts: number;
   claimedAt?: Date;
   sentAt?: Date;
@@ -70,7 +76,14 @@ const EmailOutboxSchema = new Schema<IEmailOutbox>(
      * ------------------------- */
     status: {
       type: String,
-      enum: ["PENDING", "PROCESSING", "ENQUEUED", "SENT", "FAILED"],
+      enum: [
+        "PENDING",
+        "PROCESSING",
+        "ENQUEUED",
+        "SENT",
+        "FAILED",
+        "DELIVERED",
+      ],
       default: "PENDING",
       index: true,
     },
@@ -108,7 +121,7 @@ const EmailOutboxSchema = new Schema<IEmailOutbox>(
   {
     timestamps: true, // createdAt, updatedAt
     collection: "email_outbox",
-  }
+  },
 );
 
 /** -------------------------
@@ -126,5 +139,5 @@ EmailOutboxSchema.index({ transactionRef: 1, status: 1 });
 
 export const EmailOutboxModel = mongoose.model<IEmailOutbox>(
   "EmailOutbox",
-  EmailOutboxSchema
+  EmailOutboxSchema,
 );

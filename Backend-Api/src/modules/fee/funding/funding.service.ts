@@ -9,7 +9,11 @@ import { generateEventId } from "@/shared/utils/id.generator";
 import { logger } from "@/shared/utils/logger";
 import { LedgerEntryType } from "@/modules/ledger/ledger.entry.model";
 import { Wallet } from "@/modules/wallet/wallet.model";
-import { LedgerAccount, LedgerAccountType, LedgerOwnerType } from "@/modules/ledger/ledger.account.model";
+import {
+  LedgerAccount,
+  LedgerAccountType,
+  LedgerOwnerType,
+} from "@/modules/ledger/ledger.account.model";
 import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import { LedgerTransactionModel } from "@/modules/ledger/ledger.transaction.model";
 import TransactionBuilder from "@/modules/ledger/ledger.transaction.builder";
@@ -24,37 +28,43 @@ export enum FundingSource {
 // Only these wallet types can be funded from external sources
 const FUNDABLE_WALLET_TYPES = [
   LedgerAccountType.SYSTEM_TREASURY,
-  LedgerAccountType.MAIN_CHECKINGS,  // user wallets via Paystack later
+  LedgerAccountType.MAIN_CHECKINGS, // user wallets via Paystack later
 ];
 
 interface CreditFromExternalParams {
-  targetWalletId: string;          // wallet to credit
-  amount: number;                   // amount in minor units (kobo)
+  targetWalletId: string; // wallet to credit
+  amount: number; // amount in minor units (kobo)
   currency: string;
   source: FundingSource;
-  providerReference: string;        // Paystack ref / admin request ID — idempotency key
-  initiatedByUserId: string;        // who triggered (admin sub for manual, user sub for Paystack)
+  providerReference: string; // Paystack ref / admin request ID — idempotency key
+  initiatedByUserId: string; // who triggered (admin sub for manual, user sub for Paystack)
   context: IRequestContext;
-  metadata?: Record<string, any>;   // extra info — Paystack response, admin reason, etc.
+  metadata?: Record<string, any>; // extra info — Paystack response, admin reason, etc.
 }
 
 class FundingService {
   /**
    * Credits a wallet from an external source via proper double-entry ledger.
-   * 
+   *
    * Used by:
    * - Paystack webhook (user wallet funding)
    * - Admin manual top-up (treasury funding)
    * - Dev seeder (treasury bootstrap)
    * - Future: bank transfer webhook
-   * 
+   *
    * Idempotent on (source, providerReference) — same key returns the same result.
    */
 
   public async creditFromExternalSource(params: CreditFromExternalParams) {
     const {
-      targetWalletId, amount, currency, source,
-      providerReference, initiatedByUserId, context, metadata,
+      targetWalletId,
+      amount,
+      currency,
+      source,
+      providerReference,
+      initiatedByUserId,
+      context,
+      metadata,
     } = params;
 
     // 1. Validation
@@ -85,12 +95,17 @@ class FundingService {
     if (!targetWallet) throw new NotFoundError("TARGET_WALLET_NOT_FOUND");
 
     if (!FUNDABLE_WALLET_TYPES.includes(targetWallet.type)) {
-      throw new BadRequestError(`WALLET_TYPE_NOT_FUNDABLE_${targetWallet.type}`);
+      throw new BadRequestError(
+        `WALLET_TYPE_NOT_FUNDABLE_${targetWallet.type}`,
+      );
     }
-    if (targetWallet.currency !== currency) throw new BadRequestError("CURRENCY_MISMATCH");
+    if (targetWallet.currency !== currency)
+      throw new BadRequestError("CURRENCY_MISMATCH");
 
     if (targetWallet.status !== "ACTIVE") {
-      throw new BadRequestError(`TARGET_WALLET_NOT_ACTIVE_${targetWallet.status}`);
+      throw new BadRequestError(
+        `TARGET_WALLET_NOT_ACTIVE_${targetWallet.status}`,
+      );
     }
 
     // 4. Look up EXTERNAL_FUNDING ledger
@@ -111,7 +126,7 @@ class FundingService {
     try {
       const previousBalance = targetWallet.availableBalance;
 
-      const builder = new TransactionBuilder('DEPOSIT');
+      const builder = new TransactionBuilder("DEPOSIT");
 
       builder.addDebit({
         transactionRef: idempotencyRef,
@@ -119,8 +134,8 @@ class FundingService {
         amount,
         currency,
         referenceId: providerReference,
-        referenceType: LedgerEntryType.DEPOSIT,
-        nature: "DEBIT"
+        referenceType: LedgerEntryType.EXTERNAL_DEPOSIT,
+        nature: "DEBIT",
       });
 
       builder.addCredit({
@@ -129,8 +144,8 @@ class FundingService {
         amount,
         currency,
         referenceId: providerReference,
-        referenceType: LedgerEntryType.DEPOSIT,
-        nature: "CREDIT"
+        referenceType: LedgerEntryType.EXTERNAL_DEPOSIT,
+        nature: "CREDIT",
       });
 
       await builder.commit(session);
@@ -139,7 +154,7 @@ class FundingService {
       const updatedWallet = await Wallet.findOneAndUpdate(
         { _id: targetWallet._id, version: targetWallet.version },
         { $inc: { availableBalance: amount } },
-        { session, new: true }
+        { session, new: true },
       );
 
       if (!updatedWallet) {
@@ -173,14 +188,16 @@ class FundingService {
           version: 1,
           context,
         },
-        { session }
+        { session },
       );
 
       await session.commitTransaction();
 
       logger.info("✅ External funding credited", {
         ref: idempotencyRef,
-        source, amount, currency,
+        source,
+        amount,
+        currency,
         targetWalletType: targetWallet.type,
       });
 

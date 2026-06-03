@@ -7,7 +7,7 @@ services:
     container_name: zely-api
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "4000:4000"
     env_file:
       - .env.production
     environment:
@@ -21,17 +21,16 @@ services:
     networks:
       - zely_network
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
       interval: 30s
       timeout: 10s
       start_period: 40s
       retries: 3
 
-
   # ─── Kafka ──────────────────────────────────────────
   kafka:
     image: apache/kafka:latest
-    container_name: zely
+    container_name: zely-kafka
     hostname: kafka
     user: root
     ports:
@@ -222,11 +221,11 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-      - '--storage.tsdb.retention.time=15d'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--storage.tsdb.retention.time=15d"
     networks:
       - zely_network
 
@@ -251,7 +250,7 @@ services:
     networks:
       - zely_network
 
-# ─── Push Gateway ────────────────────────────────────────
+  # ─── Push Gateway ────────────────────────────────────────
   pushgateway:
     image: prom/pushgateway:latest
     container_name: zely-pushgateway
@@ -260,9 +259,8 @@ services:
       - "9091:9091"
     networks:
       zely_network:
-          aliases:
-            - pushgateway
-
+        aliases:
+          - pushgateway
 
     # ─── Email Worker ────────────────────────────────────
   zely-email-worker:
@@ -272,7 +270,7 @@ services:
     container_name: zely-email-worker
     restart: unless-stopped
     healthcheck:
-      disable: true 
+      disable: true
     env_file:
       - .env.production
     environment:
@@ -285,8 +283,7 @@ services:
     networks:
       - zely_network
 
-
-   # ─── Email Poller ────────────────────────────────────
+    # ─── Email Poller ────────────────────────────────────
   zely-email-poller:
     build:
       context: .
@@ -306,7 +303,6 @@ services:
       - kafka
     networks:
       - zely_network
-
 
   # ─── Outbox Worker ───────────────────────────────────
   zely-outbox-worker:

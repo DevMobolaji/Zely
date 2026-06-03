@@ -10,6 +10,10 @@ import { IAuthRequest } from "@/config/interfaces/request.interface";
 import PaymentService from "./payment.service";
 import paymentValidation from "./payment.validation";
 import { PaymentInitializationStatus } from "./payment.initialization.model";
+import {
+  paymentInitLimiters,
+  paymentReferenceLimiter,
+} from "@/infrastructure/helpers/ratelimiter";
 
 class PaymentController implements Controller {
   public path = "/payments";
@@ -24,88 +28,102 @@ class PaymentController implements Controller {
     this.route.post(
       `${this.path}/initialize`,
       requireAuth,
+      ...paymentInitLimiters, // ← add after auth, before validation
       validateRequest(paymentValidation.initialize, "body"),
-      this.initializePayment
+      this.initializePayment,
     );
 
     this.route.get(
       `${this.path}/:reference`,
       requireAuth,
-      this.getPaymentByReference
+      paymentReferenceLimiter, // ← add after auth, before validation
+      this.getPaymentByReference,
     );
 
     this.route.get(
       `${this.path}`,
       requireAuth,
-      this.listMyPayments
+      paymentReferenceLimiter,
+      this.listMyPayments,
     );
   }
 
-  private initializePayment = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const ctx = getRequestContext(req);
-    const userSub = req.user?.sub;
-    const userId = req.user?.userId;
+  private initializePayment = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const ctx = getRequestContext(req);
+      const userSub = req.user?.sub;
+      const userId = req.user?.userId;
 
-    const result = await this.paymentService.initializePayment({
-      userSub,
-      userId,
-      ...req.body,
-      context: ctx,
-    });
+      const result = await this.paymentService.initializePayment({
+        userSub,
+        userId,
+        ...req.body,
+        context: ctx,
+      });
 
-    return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  });
+      return res.status(StatusCodes.OK).json({ ok: true, data: result });
+    },
+  );
 
-  private getPaymentByReference = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const userPublicId = req.user?.userPublicId;
-    const payment = await this.paymentService.getInitializationByReference(req.params.reference);
+  private getPaymentByReference = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const userPublicId = req.user?.userPublicId;
+      const payment = await this.paymentService.getInitializationByReference(
+        req.params.reference,
+      );
 
-    // Authorization: user can only see their own payments
-    if (payment.initiatedByUserPublicId !== userPublicId) {
-      return res.status(StatusCodes.FORBIDDEN).json({ error: "FORBIDDEN" });
-    }
-
-    return res.status(StatusCodes.OK).json({ ok: true, data: payment });
-  });
-
-  private listMyPayments = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const userPublicId = req.user?.userPublicId || req.user?.userId;
-    const { status, limit, skip } = req.query;
-
-    // Validate and parse limit
-    let parsedLimit: number | undefined = undefined;
-    if (limit !== undefined) {
-      const limitNum = parseInt(limit as string, 10);
-      if (!Number.isInteger(limitNum) || limitNum < 0) {
-        return res.status(StatusCodes.BAD_REQUEST).json({
-          error: "INVALID_LIMIT_PARAMETER",
-          message: "limit must be a non-negative integer"
-        });
+      // Authorization: user can only see their own payments
+      if (payment.initiatedByUserPublicId !== userPublicId) {
+        return res.status(StatusCodes.FORBIDDEN).json({ error: "FORBIDDEN" });
       }
-      parsedLimit = limitNum;
-    }
 
-    // Validate and parse skip
-    let parsedSkip: number | undefined = undefined;
-    if (skip !== undefined) {
-      const skipNum = parseInt(skip as string, 10);
-      if (!Number.isInteger(skipNum) || skipNum < 0) {
-        return res.status(StatusCodes.BAD_REQUEST).json({
-          error: "INVALID_SKIP_PARAMETER",
-          message: "skip must be a non-negative integer"
-        });
+      return res.status(StatusCodes.OK).json({ ok: true, data: payment });
+    },
+  );
+
+  private listMyPayments = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const userPublicId = req.user?.userPublicId || req.user?.userId;
+      const { status, limit, skip } = req.query;
+
+      // Validate and parse limit
+      let parsedLimit: number | undefined = undefined;
+      if (limit !== undefined) {
+        const limitNum = parseInt(limit as string, 10);
+        if (!Number.isInteger(limitNum) || limitNum < 0) {
+          return res.status(StatusCodes.BAD_REQUEST).json({
+            error: "INVALID_LIMIT_PARAMETER",
+            message: "limit must be a non-negative integer",
+          });
+        }
+        parsedLimit = limitNum;
       }
-      parsedSkip = skipNum;
-    }
 
-    const payments = await this.paymentService.listUserInitializations(userPublicId!, {
-      status: status as PaymentInitializationStatus | undefined,
-      limit: parsedLimit,
-      skip: parsedSkip,
-    });
+      // Validate and parse skip
+      let parsedSkip: number | undefined = undefined;
+      if (skip !== undefined) {
+        const skipNum = parseInt(skip as string, 10);
+        if (!Number.isInteger(skipNum) || skipNum < 0) {
+          return res.status(StatusCodes.BAD_REQUEST).json({
+            error: "INVALID_SKIP_PARAMETER",
+            message: "skip must be a non-negative integer",
+          });
+        }
+        parsedSkip = skipNum;
+      }
 
-    return res.status(StatusCodes.OK).json({ ok: true, data: payments });
-  });
+      const payments = await this.paymentService.listUserInitializations(
+        userPublicId!,
+        {
+          status: status as PaymentInitializationStatus | undefined,
+          limit: parsedLimit,
+          skip: parsedSkip,
+        },
+      );
+
+      return res.status(StatusCodes.OK).json({ ok: true, data: payments });
+    },
+  );
 }
 
 export default PaymentController;
