@@ -2,7 +2,6 @@ import { IRequestContext } from "@/config/interfaces/request.interface";
 import { Account, AccountType } from "@/modules/account/account.model";
 import { accountStatus } from "@/modules/auth/authinterface";
 import { NotFoundError } from "@/shared/errors/notFoundError";
-import { NextFunction } from "express";
 import User from "@/modules/auth/authmodel";
 import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
@@ -26,11 +25,22 @@ class userService {
     }
 
     // Not ready yet — return current status
+    if (user.accountStatus === accountStatus.PROVISIONING_FAILED) {
+      return {
+        ok: false,
+        status: user.accountStatus,
+        ready: false,
+        failed: true,
+        message: "ACCOUNT_PROVISIONING_FAILED",
+      };
+    }
+
     if (user.accountStatus !== accountStatus.ACCOUNT_READY) {
       return {
         ok: true,
         status: user.accountStatus,
         ready: false,
+        failed: false,
       };
     }
 
@@ -62,32 +72,64 @@ class userService {
     userSub: string,
     context: IRequestContext,
   ) => {
+    const MAX_PROVISIONING_RETRIES = 3;
+    const RETRY_COOLDOWN_MS = 60 * 1000; // 1 minute between retries
+
     const user = await User.findById(userSub)
-      .select("accountStatus userId email name")
+      .select(
+        "accountStatus userId email name provisioningRetryCount lastProvisioningRetryAt",
+      )
       .lean();
 
     if (!user) {
       throw new NotFoundError("USER_NOT_FOUND");
     }
 
-    // Only retry if stuck in ACCOUNT_PROVISIONING
     if (user.accountStatus === accountStatus.ACCOUNT_READY) {
       return { ok: true, message: "ALREADY_PROVISIONED" };
     }
 
-    if (
-      user.accountStatus !== accountStatus.ACCOUNT_PROVISIONING &&
-      user.accountStatus !== accountStatus.EMAIL_VERIFIED
-    ) {
+    // Only allow retry from stuck states
+    const retryableStatuses = [
+      accountStatus.ACCOUNT_PROVISIONING,
+      accountStatus.PROVISIONING_FAILED,
+      accountStatus.EMAIL_VERIFIED,
+    ];
+
+    if (!retryableStatuses.includes(user.accountStatus)) {
       throw new BadRequestError(
         `CANNOT_RETRY_FROM_STATUS_${user.accountStatus}`,
       );
     }
 
-    // Reset to EMAIL_VERIFIED so consumer can pick it up again
+    // Retry cap
+    const provisioningRetryCount = (user as any).provisioningRetryCount ?? 0;
+    if (provisioningRetryCount >= MAX_PROVISIONING_RETRIES) {
+      throw new BadRequestError("MAX_PROVISIONING_RETRIES_EXCEEDED");
+    }
+
+    // Cooldown — prevent hammering
+    const lastProvisioningRetryAt = (user as any).lastProvisioningRetryAt as
+      | Date
+      | undefined;
+    if (lastProvisioningRetryAt) {
+      const elapsed = Date.now() - lastProvisioningRetryAt.getTime();
+      if (elapsed < RETRY_COOLDOWN_MS) {
+        const waitSeconds = Math.ceil((RETRY_COOLDOWN_MS - elapsed) / 1000);
+        throw new BadRequestError(`RETRY_TOO_SOON_WAIT_${waitSeconds}_SECONDS`);
+      }
+    }
+
+    // Reset status and increment retry counter atomically (use userSub as id)
     await User.updateOne(
-      { _id: user._id },
-      { $set: { accountStatus: accountStatus.EMAIL_VERIFIED } },
+      { _id: userSub },
+      {
+        $set: {
+          accountStatus: accountStatus.EMAIL_VERIFIED,
+          lastProvisioningRetryAt: new Date(),
+        },
+        $inc: { provisioningRetryCount: 1 },
+      },
     );
 
     // Re-emit the event that triggers provisioning

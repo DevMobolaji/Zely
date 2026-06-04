@@ -1,63 +1,65 @@
-import { Document, Model } from "mongoose"
+import { Document, Model } from "mongoose";
 import { KycTier } from "../transactionLimit/transaction.limit.model";
 
 export enum UserRole {
-    ADMIN = "ADMIN",
-    USER = "USER",
-    SYSTEM = "SYSTEM"
+  ADMIN = "ADMIN",
+  USER = "USER",
+  SYSTEM = "SYSTEM",
 }
 
 export enum accountStatus {
-    PENDING_EMAIL_VERIFICATION = "PENDING_EMAIL_VERIFICATION",
-    EMAIL_VERIFIED = "EMAIL_VERIFIED",
-    ACCOUNT_PROVISIONING = "ACCOUNT_PROVISIONING",
-    ACCOUNT_READY = "ACCOUNT_READY",
-    ACCOUNT_CLOSED = "ACCOUNT_CLOSED",
-    ACTIVE = "ACTIVE"
+  PENDING_EMAIL_VERIFICATION = "PENDING_EMAIL_VERIFICATION",
+  EMAIL_VERIFIED = "EMAIL_VERIFIED",
+  ACCOUNT_PROVISIONING = "ACCOUNT_PROVISIONING",
+  PROVISIONING_FAILED = "PROVISIONING_FAILED", // ← add this
+  ACCOUNT_READY = "ACCOUNT_READY",
+  ACCOUNT_CLOSED = "ACCOUNT_CLOSED",
+  ACTIVE = "ACTIVE",
 }
 
 export interface ISecurityState {
-    failedLoginAttempts: number;
-    lockedUntil?: Date | null;
-    lockReason?: 'FAILED_ATTEMPTS' | null;
-    lastFailedAt?: Date;
+  failedLoginAttempts: number;
+  lockedUntil?: Date | null;
+  lockReason?: "FAILED_ATTEMPTS" | null;
+  lastFailedAt?: Date;
 }
 
 // Separate the document properties from methods
 export interface IUserDocument {
-    email: string;
-    password: string;
-    name: string;
-    userId: string;
-    accountStatus: accountStatus;
-    isEmailVerified: boolean;
-    role: UserRole;
-    mfaEnabled?: boolean;
-    passwordAttempts: number;
-    passwordVersion: number;
-    mfaSecretEnc?: string; // AES-GCM encrypted secret
-    createdAt?: Date;
-    updatedAt?: Date;
-    kycTier: KycTier;
-    security: ISecurityState;
-    passwordChangedAt?: Date | null;
-    passwordResetCount?: number;
-    lastPasswordResetAt?: Date | null;
-    passwordHistory?: string[];
+  email: string;
+  password: string;
+  name: string;
+  userId: string;
+  accountStatus: accountStatus;
+  isEmailVerified: boolean;
+  role: UserRole;
+  mfaEnabled?: boolean;
+  passwordAttempts: number;
+  passwordVersion: number;
+  mfaSecretEnc?: string; // AES-GCM encrypted secret
+  createdAt?: Date;
+  updatedAt?: Date;
+  kycTier: KycTier;
+  security: ISecurityState;
+  passwordChangedAt?: Date | null;
+  passwordResetCount?: number;
+  lastProvisioningRetryAt?: Date;
+  lastPasswordResetAt?: Date | null;
+  passwordHistory?: string[];
 }
 
 // Instance methods interface
 export interface IUserMethods {
-    comparePassword(userPassword: string): Promise<boolean>;
+  comparePassword(userPassword: string): Promise<boolean>;
 }
 
 // Combined interface for the document with methods
-export default interface User extends Document, IUserDocument, IUserMethods { }
+export default interface User extends Document, IUserDocument, IUserMethods {}
 
 // Model type
 export interface UserModel extends Model<User, {}, IUserMethods> {
-    userId: string;
-    email: string;
-    role: UserRole;
-    isEmailVerified: boolean;
+  userId: string;
+  email: string;
+  role: UserRole;
+  isEmailVerified: boolean;
 }
