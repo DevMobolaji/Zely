@@ -127,9 +127,6 @@ export async function processAuthEvent(
           //   throw new TransientError("Simulated transient failure");
           // }
 
-          // if (user?.role === "USER") {
-          //   throw new PermanentError("Simulated permanent failure");
-          // }
           if (user?.accountStatus === accountStatus.ACCOUNT_READY) {
             logger.warn("User already provisioned — skipping");
             return;
