@@ -35,7 +35,10 @@ export const authService = {
   },
 
   verify: async (email: string, otp: string): Promise<AuthResponse> => {
-    const response = await axiosPrivate.post("/auth/verify", { email, otp });
+    const response = await axiosPrivate.post("/auth/verify", {
+      email,
+      otp,
+    });
     return response.data;
   },
 
@@ -96,6 +99,8 @@ export const authService = {
     ok: boolean;
     status: string;
     ready: boolean;
+    failed?: boolean;
+    message?: string;
     accounts?: {
       checking: string | null;
       savings: string | null;
