@@ -1,59 +1,57 @@
-
-import { generateMockData } from '../utils/mockData';
-import { Transaction } from '../utils/types';
-
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+import { axiosPrivate } from "../api/client";
 
 export const transactionService = {
-    getAll: async (): Promise<Transaction[]> => {
-        // API Call Preparation (Commented out for production use later)
-        /*
-        // const response = await fetch('/api/user/transactions');
-        // if (!response.ok) throw new Error('Failed to fetch transactions');
-        // return await response.json();
-        */
-        await delay(800);
-        return generateMockData();
-    },
+  // ─── Get all transactions with pagination ────────────────────────────────
+  getAll: async (params?: {
+    page?: number;
+    limit?: number;
+    direction?: "debit" | "credit";
+    walletType?: string;
+    status?: string;
+  }) => {
+    const response = await axiosPrivate.get("/users/transactions", { params });
+    return response.data;
+  },
 
-    getRecent: async (limit: number = 5): Promise<Transaction[]> => {
-        // API Call Preparation (Commented out for production use later)
-        /*
-        // const response = await fetch(`/api/user/transactions?limit=${limit}`);
-        // if (!response.ok) throw new Error('Failed to fetch recent transactions');
-        // return await response.json();
-        */
-        await delay(600);
-        return generateMockData().slice(0, limit);
-    },
+  // ─── Get recent transactions ─────────────────────────────────────────────
+  getRecent: async (limit: number = 5) => {
+    const response = await axiosPrivate.get("/users/transactions", {
+      params: { limit, page: 1 },
+    });
+    return response.data.transactions;
+  },
 
-    transfer: async (data: { recipientId?: string, recipientEmail?: string, amount: number, accountId: string, type: 'internal' | 'p2p' }): Promise<any> => {
-        // API Call Preparation (Commented out for production use later)
-        /*
-        // const response = await fetch('/api/user/transactions/transfer', {
-        //    method: 'POST',
-        //    headers: { 'Content-Type': 'application/json' },
-        //    body: JSON.stringify(data)
-        // });
-        // if (!response.ok) throw new Error('Transfer failed');
-        // return await response.json();
-        */
-        await delay(1500);
-        return { success: true, reference: 'TRF' + Date.now() };
-    },
+  // ─── Get dashboard summary ───────────────────────────────────────────────
+  getDashboardSummary: async () => {
+    const response = await axiosPrivate.get("/users/dashboard-summary");
+    return response.data.data;
+  },
 
-    fundWallet: async (data: { amount: number, reference: string, method: string }): Promise<any> => {
-        // API Call Preparation (Commented out for production use later)
-        /*
-        // const response = await fetch('/api/user/wallets/fund', {
-        //    method: 'POST',
-        //    headers: { 'Content-Type': 'application/json' },
-        //    body: JSON.stringify(data)
-        // });
-        // if (!response.ok) throw new Error('Funding failed');
-        // return await response.json();
-        */
-        await delay(1000);
-        return { success: true };
-    }
+  // ─── Get wallets ─────────────────────────────────────────────────────────
+  getWallets: async () => {
+    const response = await axiosPrivate.get("/users/wallets");
+    return response.data.data;
+  },
+
+  // ─── Transfer (keep existing simulation for now) ─────────────────────────
+  transfer: async (data: {
+    recipientId?: string;
+    recipientEmail?: string;
+    amount: number;
+    accountId: string;
+    type: "internal" | "p2p";
+  }) => {
+    const response = await axiosPrivate.post("/transfers", data);
+    return response.data;
+  },
+
+  // ─── Fund wallet ──────────────────────────────────────────────────────────
+  fundWallet: async (data: {
+    amount: number;
+    reference: string;
+    method: string;
+  }) => {
+    const response = await axiosPrivate.post("/payments/initialize", data);
+    return response.data;
+  },
 };

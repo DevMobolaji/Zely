@@ -7,6 +7,11 @@ import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import BadRequestError from "@/shared/errors/badRequest";
 import { generateEventId } from "@/shared/utils/id.generator";
+import {
+  UserBalanceSummaryModel,
+  UserTransactionModel,
+  UserWalletModel,
+} from "@/kafka/projections/models/projectionModels";
 
 class userService {
   private userModel = User;
@@ -151,6 +156,130 @@ class userService {
     });
 
     return { ok: true, message: "PROVISIONING_RETRIGGERED" };
+  };
+
+  public getDashboardSummary = async (userPublicId: string) => {
+    const summary = await UserBalanceSummaryModel.findOne({
+      userId: userPublicId,
+    }).lean();
+
+    if (!summary) {
+      return {
+        totalBalance: 0,
+        mainBalance: 0,
+        savingsBalance: 0,
+        vaultBalance: 0,
+        totalDebit: 0,
+        totalCredit: 0,
+        currency: "NGN",
+      };
+    }
+
+    return {
+      totalBalance: summary.totalBalance,
+      mainBalance: summary.mainBalance,
+      savingsBalance: summary.savingsBalance,
+      vaultBalance: summary.vaultBalance,
+      totalDebit: summary.totalDebit,
+      totalCredit: summary.totalCredit,
+      currency: summary.currency,
+    };
+  };
+
+  public getWallets = async (userPublicId: string) => {
+    const [wallets, accounts, transactionTotals] = await Promise.all([
+      UserWalletModel.find({ userId: userPublicId }).lean(),
+      Account.find({ userPublicId, status: "ACTIVE" })
+        .select("accountNumber type")
+        .lean(),
+      UserTransactionModel.aggregate([
+        { $match: { userId: userPublicId } },
+        {
+          $group: {
+            _id: { walletType: "$walletType", direction: "$direction" },
+            total: { $sum: "$amount" },
+          },
+        },
+      ]),
+    ]);
+
+    return wallets.map((w) => {
+      const account = accounts.find((a) => a.type === w.walletType);
+
+      const credit =
+        transactionTotals.find(
+          (t) =>
+            t._id.walletType === w.walletType && t._id.direction === "credit",
+        )?.total ?? 0;
+
+      const debit =
+        transactionTotals.find(
+          (t) =>
+            t._id.walletType === w.walletType && t._id.direction === "debit",
+        )?.total ?? 0;
+
+      return {
+        walletId: w.walletId,
+        walletType: w.walletType,
+        balance: w.balance,
+        currency: w.currency,
+        status: w.status,
+        accountNumber: account?.accountNumber ?? null,
+        totalCredit: credit,
+        totalDebit: debit,
+      };
+    });
+  };
+
+  public getTransactions = async (
+    userPublicId: string,
+    query: {
+      limit?: number;
+      page?: number;
+      direction?: "debit" | "credit";
+      walletType?: string;
+      status?: string;
+    },
+  ) => {
+    const limit = Math.min(query.limit ?? 20, 100);
+    const page = query.page ?? 1;
+    const skip = (page - 1) * limit;
+
+    const filter: Record<string, any> = { userId: userPublicId };
+
+    if (query.direction) filter.direction = query.direction;
+    if (query.walletType) filter.walletType = query.walletType;
+    if (query.status) filter.status = query.status;
+
+    const [transactions, total] = await Promise.all([
+      UserTransactionModel.find(filter)
+        .sort({ occurredAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      UserTransactionModel.countDocuments(filter),
+    ]);
+
+    return {
+      transactions: transactions.map((t) => ({
+        transactionId: t.transactionId,
+        direction: t.direction,
+        amount: t.amount,
+        currency: t.currency,
+        walletType: t.walletType,
+        status: t.status,
+        category: t.category,
+        counterpartyUserId: t.counterpartyUserId,
+        name: t.name,
+        occurredAt: t.occurredAt,
+      })),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   };
 }
 

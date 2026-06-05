@@ -29,6 +29,10 @@ import { logger } from "@/shared/utils/logger";
 import mongoose from "mongoose";
 
 import crypto from "crypto";
+import {
+  UserBalanceSummaryModel,
+  UserWalletModel,
+} from "@/kafka/projections/models/projectionModels";
 
 export const deriveOutboxEventId = (
   aggregateId: string,
@@ -199,7 +203,7 @@ export async function processAuthEvent(
           );
 
           // Create wallets
-          const [checkingWalletId, savingsWalletId] = await Promise.all([
+          const [checkingWallet, savingsWallet] = await Promise.all([
             Wallet.findOneAndUpdate(
               {
                 userId: updatedUser._id,
@@ -242,6 +246,47 @@ export async function processAuthEvent(
 
           logger.info(`[v${version}] User wallets created successfully`);
 
+          // Seed wallet projections — ensure read model is complete from day one
+          await UserWalletModel.bulkWrite(
+            [
+              {
+                updateOne: {
+                  filter: { walletId: checkingWallet.walletId },
+                  update: {
+                    $setOnInsert: {
+                      walletId: checkingWallet.walletId,
+                      userId: updatedUser.userId,
+                      walletType: checkingWallet.type,
+                      currency: checkingWallet.currency,
+                      balance: 0,
+                      status: "active",
+                    },
+                  },
+                  upsert: true,
+                },
+              },
+              {
+                updateOne: {
+                  filter: { walletId: savingsWallet.walletId },
+                  update: {
+                    $setOnInsert: {
+                      walletId: savingsWallet.walletId,
+                      userId: updatedUser.userId,
+                      walletType: savingsWallet.type,
+                      currency: savingsWallet.currency,
+                      balance: 0,
+                      status: "active",
+                    },
+                  },
+                  upsert: true,
+                },
+              },
+            ],
+            { session },
+          );
+
+          logger.info(`[v${version}] Wallet and balance projections seeded`);
+
           // Generate account numbers only if accounts don't exist yet
           const existingAccounts = await Account.find({
             userId: updatedUser._id,
@@ -280,7 +325,7 @@ export async function processAuthEvent(
                   accountNumber: genCheckingAccountNumber,
                   currency: "NGN",
                   status: "ACTIVE",
-                  walletId: checkingWalletId,
+                  walletId: checkingWallet,
                   ledgerAccountId: checkingLedger._id,
                   isPublic: true,
                   type: AccountType.MAIN_CHECKINGS,
@@ -300,7 +345,7 @@ export async function processAuthEvent(
                   accountNumber: genSavingsAccountNumber,
                   currency: "NGN",
                   status: "ACTIVE",
-                  walletId: savingsWalletId,
+                  walletId: savingsWallet,
                   ledgerAccountId: savingsLedger._id,
                   isPublic: false,
                   type: AccountType.SAVINGS,

@@ -528,8 +528,13 @@ class authService {
         AuditStatus.BLOCKED,
         { email },
       );
+      const lockedUntil = user.security.lockedUntil;
+      const minutesLeft = Math.ceil(
+        (lockedUntil.getTime() - Date.now()) / 60000,
+      );
+
       throw new BadRequestError(
-        `Account locked until ${user.security.lockedUntil.toISOString()}`,
+        `Account temporarily locked. Please try again in ${minutesLeft} minute${minutesLeft === 1 ? "" : "s"}.`,
       );
     }
 
