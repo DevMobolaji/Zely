@@ -31,11 +31,20 @@ const ProvisioningScreen: React.FC = () => {
     null,
   );
 
+  const MAX_POLL_TIME_MS = 3 * 60 * 1000; // 3 minutes
+  const pollStartTime = useRef<number>(Date.now());
+  const [takingLong, setTakingLong] = useState(false);
+
   const getTimestamp = () => {
     return new Date().toTimeString().split(" ")[0];
   };
   const pollInterval = useRef<any>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
+
+  const elapsed = Date.now() - pollStartTime.current;
+  if (elapsed > MAX_POLL_TIME_MS) {
+    setTakingLong(true);
+  }
 
   const steps = [
     {
@@ -92,6 +101,17 @@ const ProvisioningScreen: React.FC = () => {
       ],
     },
   ];
+
+  {
+    takingLong && !error && (
+      <div className="mt-8 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-2xl text-center">
+        <p className="text-sm font-semibold text-yellow-700 dark:text-yellow-400">
+          This is taking longer than expected. Your account is still being set
+          up — you can safely close this page and check back later.
+        </p>
+      </div>
+    );
+  }
 
   // Handle appending live, simulated retro system logs
   const appendLogs = (newLogs: string[]) => {

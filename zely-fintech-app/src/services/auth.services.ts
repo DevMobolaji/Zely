@@ -49,7 +49,9 @@ export const authService = {
     return response.data;
   },
 
-  resetPasswordRequest: async (email: string): Promise<{ ok: boolean }> => {
+  resetPasswordRequest: async (
+    email: string,
+  ): Promise<{ success: boolean; message: string }> => {
     const response = await axiosPrivate.post("/auth/forgot-password", {
       email,
     });
@@ -59,7 +61,11 @@ export const authService = {
   verifyResetCode: async (
     email: string,
     otp: string,
-  ): Promise<{ ok: boolean }> => {
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: { resetToken: string; expiresIn: number };
+  }> => {
     const response = await axiosPrivate.post("/auth/confirm-reset-code", {
       email,
       otp,
@@ -72,7 +78,7 @@ export const authService = {
     token: string;
     newPassword: string;
     confirmPassword: string;
-  }): Promise<{ ok: boolean }> => {
+  }): Promise<{ success: boolean; message: string }> => {
     const response = await axiosPrivate.post("/auth/reset-password", data);
     return response.data;
   },

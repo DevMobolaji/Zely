@@ -1,40 +1,36 @@
-import { NextFunction, Request, Response, Router } from "express";
-import userService from "./authservice";
-import asyncWrapper from "shared/middleware/async.wrapper";
 import Controller from "@/config/interfaces/controller.interfaces";
-import { StatusCodes } from "http-status-codes";
-import { UserRole } from "./authinterface";
-import validationSchema from "./authvalidation";
-import validateRequest from "shared/middleware/validation.middleware";
-import {
-  getRefreshCookieLifetimeMs,
-  verifyRefreshToken,
-} from "@/infrastructure/helpers/token.helper";
+import { IAuthRequest } from "@/config/interfaces/request.interface";
+import { UserRegistrationResponse } from "@/config/interfaces/userResponse.interface";
 import {
   clearRefreshCookie,
   setRefreshCookie,
 } from "@/infrastructure/helpers/cookie.helper";
 import {
+  confirmResetCodeLimiters,
+  forgotPasswordLimiters,
+  loginLimiters,
+  logoutAllLimiters,
+  logoutLimiters,
+  meLimiters,
+  refreshTokenLimiters,
+  registerLimiters,
+  resendVerificationLimiters,
+  resetPasswordLimiters,
+  verifyEmailLimiters,
+} from "@/infrastructure/helpers/ratelimiter";
+import { getRefreshCookieLifetimeMs } from "@/infrastructure/helpers/token.helper";
+import {
   extractRequestContext,
   getRequestContext,
 } from "@/shared/middleware/request.context";
-import { UserRegistrationResponse } from "@/config/interfaces/userResponse.interface";
+import { Response, Router } from "express";
+import { StatusCodes } from "http-status-codes";
+import asyncWrapper from "shared/middleware/async.wrapper";
 import { requireAuth } from "shared/middleware/auth.middleware";
-import { IAuthRequest } from "@/config/interfaces/request.interface";
-import {
-  registerLimiters,
-  verifyEmailLimiters,
-  resendVerificationLimiters,
-  loginLimiters,
-  refreshTokenLimiters,
-  forgotPasswordLimiters,
-  confirmResetCodeLimiters,
-  resetPasswordLimiters,
-  logoutLimiters,
-  logoutAllLimiters,
-  meLimiters,
-} from "@/infrastructure/helpers/ratelimiter";
+import validateRequest from "shared/middleware/validation.middleware";
+import { UserRole } from "./authinterface";
 import authService from "./authservice";
+import validationSchema from "./authvalidation";
 
 class AuthController implements Controller {
   public path = "/auth";
@@ -284,7 +280,7 @@ class AuthController implements Controller {
 
       const tk = await this.authService.requestPasswordReset(email, context);
 
-      return res.status(StatusCodes.OK).json({ token: tk });
+      return res.status(StatusCodes.OK).json(tk);
     },
   );
 
@@ -296,7 +292,7 @@ class AuthController implements Controller {
 
       const response = await this.authService.verifyResetCode(email, otp, ctx);
 
-      return res.status(StatusCodes.OK).json({ response: response });
+      return res.status(StatusCodes.OK).json(response);
     },
   );
 
@@ -314,7 +310,7 @@ class AuthController implements Controller {
         context,
       );
 
-      return res.status(StatusCodes.OK).json({ response: response });
+      return res.status(StatusCodes.OK).json(response);
     },
   );
 }
