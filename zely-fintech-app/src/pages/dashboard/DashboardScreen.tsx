@@ -1,22 +1,43 @@
-import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
 import {
-  Send,
   ArrowDownLeft,
-  Receipt,
   ArrowUpRight,
+  Loader2,
   Plus,
+  Send,
   User,
 } from "lucide-react";
-import { accountsData } from "../../utils/mockData";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import StateRenderer from "../../components/common/StateRenderer";
 import TransactionDetailsModal from "../../components/TransactionDetailsModal";
-import { Transaction } from "../../utils/types";
 import { useAsync } from "../../hooks/useAsync";
 import { transactionService } from "../../services/transactionService";
-import StateRenderer from "../../components/common/StateRenderer";
+import {
+  ApiTransaction,
+  Transaction,
+  TransactionStatus,
+  TransactionType,
+} from "../../utils/types";
 
 const DashboardScreen: React.FC = () => {
   const navigate = useNavigate();
+
+  const toTransactionModal = (tx: ApiTransaction): Transaction => ({
+    id: tx.transactionId,
+    title: tx.category,
+    category: tx.category,
+    amount: tx.amount,
+    date: tx.occurredAt,
+    status:
+      tx.direction === "debit"
+        ? ((tx.status === "TRANSFER_COMPLETED"
+            ? "success"
+            : "pending") as TransactionStatus)
+        : ("success" as TransactionStatus),
+    type:
+      tx.direction === "debit" ? "outgoing" : ("incoming" as TransactionType),
+    notes: `${tx.walletType} • ${tx.currency}`,
+  });
 
   // Use Custom Hook for Data Fetching
   const {
@@ -24,31 +45,19 @@ const DashboardScreen: React.FC = () => {
     loading: loadingTransactions,
     error: errorTransactions,
     execute: refreshTransactions,
-  } = useAsync<Transaction[]>(
+  } = useAsync<ApiTransaction[]>(
     useCallback(() => transactionService.getRecent(10), []),
   ); // Fetch more to get contacts
 
-  // Simple Account State (Mocked)
-  const [accounts, setAccounts] = useState(accountsData);
-  const totalBalance = accounts.reduce((acc, curr) => acc + curr.balance, 0);
+  const { data: summary, loading: loadingSummary } = useAsync(
+    useCallback(() => transactionService.getDashboardSummary(), []),
+  );
 
-  // API Call Preparation (Commented out for production use later)
-  /*
-    useEffect(() => {
-        const fetchAccounts = async () => {
-            try {
-                // const response = await fetch('/api/user/accounts');
-                // if(response.ok) {
-                //    const data = await response.json();
-                //    setAccounts(data);
-                // }
-            } catch (error) {
-                console.error("Failed to load accounts", error);
-            }
-        };
-        fetchAccounts();
-    }, []);
-    */
+  const { data: wallets, loading: loadingWallets } = useAsync(
+    useCallback(() => transactionService.getWallets(), []),
+  );
+
+  const totalBalance = summary?.totalBalance ?? 0;
 
   // Personalization State
   const [greeting, setGreeting] = useState("");
@@ -75,12 +84,11 @@ const DashboardScreen: React.FC = () => {
   const recentContacts = useMemo(() => {
     if (!transactions) return [];
     const contacts = new Map();
-    transactions.forEach((tx) => {
-      if (tx.type === "outgoing" && tx.recipientName) {
-        if (!contacts.has(tx.recipientName)) {
-          contacts.set(tx.recipientName, {
-            name: tx.recipientName,
-            avatar: tx.recipientAvatar,
+    transactions.forEach((tx: ApiTransaction) => {
+      if (tx.direction === "debit" && tx.counterpartyUserId) {
+        if (!contacts.has(tx.counterpartyUserId)) {
+          contacts.set(tx.counterpartyUserId, {
+            name: tx.name,
           });
         }
       }
@@ -127,7 +135,9 @@ const DashboardScreen: React.FC = () => {
           </div>
           <h2 className="text-4xl sm:text-6xl font-black tracking-tight text-white">
             ₦
-            {totalBalance.toLocaleString("en-NG", { minimumFractionDigits: 2 })}
+            {totalBalance.toLocaleString("en-NG", {
+              minimumFractionDigits: 2,
+            })}
           </h2>
         </div>
 
@@ -200,6 +210,7 @@ const DashboardScreen: React.FC = () => {
           )}
 
           {/* My Cards */}
+          {/* My Cards */}
           <div>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
@@ -213,83 +224,123 @@ const DashboardScreen: React.FC = () => {
               </button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Main Checking Card */}
-              <div
-                onClick={() => navigate(`/wallets/${accounts[0].id}`)}
-                className="relative bg-slate-900 text-white rounded-[1.5rem] p-5 cursor-pointer transition-all hover:scale-[1.02] flex flex-col justify-between aspect-[1.586/1] shadow-xl hover:shadow-2xl overflow-hidden group"
-              >
-                <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none group-hover:bg-primary/10 transition-colors"></div>
-                <div className="absolute bottom-0 left-0 w-40 h-40 bg-purple-500/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2 pointer-events-none"></div>
+              {loadingWallets ? (
+                <div className="col-span-2 flex justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+                </div>
+              ) : (
+                <>
+                  {/* Main Checking Card */}
+                  {wallets?.find(
+                    (w: any) => w.walletType === "MAIN_CHECKINGS",
+                  ) &&
+                    (() => {
+                      const wallet = wallets.find(
+                        (w: any) => w.walletType === "MAIN_CHECKINGS",
+                      )!;
+                      return (
+                        <div
+                          onClick={() =>
+                            navigate(`/wallets/${wallet.walletId}`)
+                          }
+                          className="relative bg-slate-900 text-white rounded-[1.5rem] p-5 cursor-pointer transition-all hover:scale-[1.02] flex flex-col justify-between aspect-[1.586/1] shadow-xl hover:shadow-2xl overflow-hidden group"
+                        >
+                          <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none group-hover:bg-primary/10 transition-colors"></div>
+                          <div className="absolute bottom-0 left-0 w-40 h-40 bg-purple-500/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2 pointer-events-none"></div>
 
-                <div className="flex justify-between items-start relative z-10">
-                  <div>
-                    <span className="font-bold text-white text-sm tracking-wide">
-                      Main Checking
-                    </span>
-                    <div className="w-8 h-6 bg-white/20 border border-white/10 rounded mt-2 opacity-80 backdrop-blur-md"></div>
-                    {/* Chip */}
-                  </div>
-                  <span className="font-black italic text-xl tracking-widest opacity-90">
-                    VISA
-                  </span>
-                </div>
-                <div className="relative z-10 mt-auto">
-                  <p className="font-mono text-slate-300 tracking-[0.2em] text-sm mb-1 drop-shadow-md">
-                    •••• •••• •••• {accounts[0].cardLast4}
-                  </p>
-                  <div className="flex justify-between items-end">
-                    <h3 className="text-xl font-bold tracking-tight">
-                      ₦{accounts[0].balance.toLocaleString("en-NG")}
-                    </h3>
-                    <div className="text-right">
-                      <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">
-                        Exp
-                      </span>
-                      <span className="text-xs font-mono font-medium text-slate-200">
-                        {accounts[0].cardExpiry}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+                          <div className="flex justify-between items-start relative z-10">
+                            <div>
+                              <span className="font-bold text-white text-sm tracking-wide">
+                                Main Checking
+                              </span>
+                              <div className="w-8 h-6 bg-white/20 border border-white/10 rounded mt-2 opacity-80 backdrop-blur-md"></div>
+                            </div>
+                            <span className="font-black italic text-xl tracking-widest opacity-90">
+                              VISA
+                            </span>
+                          </div>
+                          <div className="relative z-10 mt-auto">
+                            <p className="font-mono text-slate-300 tracking-[0.2em] text-sm mb-1 drop-shadow-md">
+                              •••• •••• •••• ••••
+                            </p>
+                            <div className="flex justify-between items-end">
+                              <h3 className="text-xl font-bold tracking-tight">
+                                ₦
+                                {wallet.balance.toLocaleString("en-NG", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </h3>
+                              <span
+                                className={`text-xs font-bold uppercase tracking-wider ${
+                                  wallet.status === "active"
+                                    ? "text-green-400"
+                                    : "text-red-400"
+                                }`}
+                              >
+                                {wallet.status}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
-              {/* Savings Card */}
-              <div
-                onClick={() => navigate(`/wallets/${accounts[1].id}`)}
-                className="relative bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-[1.5rem] p-5 cursor-pointer transition-all hover:scale-[1.02] flex flex-col justify-between aspect-[1.586/1] shadow-xl hover:shadow-2xl overflow-hidden border border-slate-100 dark:border-slate-700/50 group"
-              >
-                <div className="absolute top-0 right-1/2 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl pointer-events-none"></div>
-                <div className="absolute -bottom-10 -right-10 w-48 h-48 bg-green-500/5 rounded-full blur-3xl group-hover:bg-green-500/10 transition-colors pointer-events-none"></div>
+                  {/* Savings Card */}
+                  {wallets?.find((w: any) => w.walletType === "SAVINGS") &&
+                    (() => {
+                      const wallet = wallets.find(
+                        (w: any) => w.walletType === "SAVINGS",
+                      )!;
+                      return (
+                        <div
+                          onClick={() =>
+                            navigate(`/wallets/${wallet.walletId}`)
+                          }
+                          className="relative bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-[1.5rem] p-5 cursor-pointer transition-all hover:scale-[1.02] flex flex-col justify-between aspect-[1.586/1] shadow-xl hover:shadow-2xl overflow-hidden border border-slate-100 dark:border-slate-700/50 group"
+                        >
+                          <div className="absolute top-0 right-1/2 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl pointer-events-none"></div>
+                          <div className="absolute -bottom-10 -right-10 w-48 h-48 bg-green-500/5 rounded-full blur-3xl group-hover:bg-green-500/10 transition-colors pointer-events-none"></div>
 
-                <div className="flex justify-between items-start relative z-10">
-                  <div>
-                    <span className="font-bold text-slate-900 dark:text-white text-sm tracking-wide">
-                      Savings
-                    </span>
-                    <div className="w-8 h-6 bg-slate-200/80 dark:bg-slate-700/80 border border-slate-300/50 dark:border-slate-600/50 rounded mt-2 opacity-80 backdrop-blur-md"></div>
-                    {/* Chip */}
-                  </div>
-                  <span className="font-bold text-slate-400 text-sm">
-                    Mastercard
-                  </span>
-                </div>
-                <div className="relative z-10 mt-auto">
-                  <p className="font-mono text-slate-500 dark:text-slate-300 tracking-[0.2em] text-sm mb-1 drop-shadow-sm">
-                    •••• •••• •••• {accounts[1].cardLast4}
-                  </p>
-                  <div className="flex justify-between items-end">
-                    <h3 className="text-xl font-bold tracking-tight">
-                      ₦{accounts[1].balance.toLocaleString("en-NG")}
-                    </h3>
-                    <div className="text-right">
-                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 font-bold text-[10px] backdrop-blur-sm shadow-sm">
-                        <ArrowUpRight className="w-3 h-3" />
-                        {accounts[1].trend} APY
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+                          <div className="flex justify-between items-start relative z-10">
+                            <div>
+                              <span className="font-bold text-slate-900 dark:text-white text-sm tracking-wide">
+                                Savings
+                              </span>
+                              <div className="w-8 h-6 bg-slate-200/80 dark:bg-slate-700/80 border border-slate-300/50 dark:border-slate-600/50 rounded mt-2 opacity-80 backdrop-blur-md"></div>
+                            </div>
+                            <span className="font-bold text-slate-400 text-sm">
+                              Mastercard
+                            </span>
+                          </div>
+                          <div className="relative z-10 mt-auto">
+                            <p className="font-mono text-slate-500 dark:text-slate-300 tracking-[0.2em] text-sm mb-1 drop-shadow-sm">
+                              •••• •••• •••• ••••
+                            </p>
+                            <div className="flex justify-between items-end">
+                              <h3 className="text-xl font-bold tracking-tight">
+                                ₦
+                                {wallet.balance.toLocaleString("en-NG", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </h3>
+                              <span
+                                className={`text-xs font-bold uppercase tracking-wider ${
+                                  wallet.status === "active"
+                                    ? "text-green-500"
+                                    : "text-red-400"
+                                }`}
+                              >
+                                {wallet.status}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -319,19 +370,21 @@ const DashboardScreen: React.FC = () => {
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {transactions?.slice(0, 6).map((tx) => (
                   <div
-                    key={tx.id}
-                    onClick={() => setSelectedTransaction(tx)}
+                    key={tx.transactionId}
+                    onClick={() =>
+                      setSelectedTransaction(toTransactionModal(tx))
+                    }
                     className="p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors group"
                   >
                     <div className="flex items-center gap-3">
                       <div
                         className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                          tx.type === "incoming"
+                          tx.direction === "credit"
                             ? "bg-green-100 text-green-600 dark:bg-green-900/20 dark:text-green-400"
                             : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
                         }`}
                       >
-                        {tx.type === "incoming" ? (
+                        {tx.direction === "credit" ? (
                           <ArrowDownLeft className="w-5 h-5" />
                         ) : (
                           <ArrowUpRight className="w-5 h-5" />
@@ -339,22 +392,22 @@ const DashboardScreen: React.FC = () => {
                       </div>
                       <div>
                         <h4 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-primary transition-colors line-clamp-1">
-                          {tx.title}
+                          {tx.category}
                         </h4>
                         <p className="text-xs text-slate-500 font-medium">
-                          {formatDate(tx.date)}
+                          {formatDate(tx.occurredAt)}
                         </p>
                       </div>
                     </div>
                     <div className="text-right">
                       <span
                         className={`font-bold text-sm block ${
-                          tx.type === "incoming"
+                          tx.direction === "credit"
                             ? "text-green-600 dark:text-green-400"
                             : "text-slate-900 dark:text-white"
                         }`}
                       >
-                        {tx.type === "incoming" ? "+" : "-"}₦
+                        {tx.direction === "credit" ? "+" : "-"}₦
                         {Math.abs(tx.amount).toLocaleString("en-NG", {
                           minimumFractionDigits: 0,
                           maximumFractionDigits: 0,
@@ -362,14 +415,16 @@ const DashboardScreen: React.FC = () => {
                       </span>
                       <span
                         className={`text-[10px] font-bold uppercase tracking-wider ${
-                          tx.status === "success"
+                          tx.status === "TRANSFER_COMPLETED"
                             ? "text-green-500"
-                            : tx.status === "pending"
+                            : tx.status === "PENDING"
                               ? "text-yellow-500"
                               : "text-red-500"
                         }`}
                       >
-                        {tx.status}
+                        {tx.status === "TRANSFER_COMPLETED"
+                          ? "SUCCESS"
+                          : tx.status}
                       </span>
                     </div>
                   </div>

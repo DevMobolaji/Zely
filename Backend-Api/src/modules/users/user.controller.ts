@@ -27,6 +27,20 @@ class UserController {
       requireAuth,
       this.retryProvisioning,
     );
+
+    this.route.get(
+      `${this.path}/dashboard-summary`,
+      requireAuth,
+      this.getDashboardSummary,
+    );
+
+    this.route.get(`${this.path}/wallets`, requireAuth, this.getWallets);
+
+    this.route.get(
+      `${this.path}/transactions`,
+      requireAuth,
+      this.getTransactions,
+    );
   }
 
   private getProvisioningStatus = asyncWrapper(
@@ -59,6 +73,53 @@ class UserController {
       const result = await this.userService.retryProvisioning(userSub, context);
 
       res.status(200).json(result);
+    },
+  );
+
+  private getDashboardSummary = asyncWrapper(
+    async (req: IAuthRequest, res: Response): Promise<Response | void> => {
+      const userPublicId = req.user?.userId;
+
+      if (!userPublicId) {
+        throw new BadRequestError("USER_PUBLIC_ID_MISSING");
+      }
+
+      const result = await this.userService.getDashboardSummary(userPublicId);
+      res.status(200).json({ ok: true, data: result });
+    },
+  );
+
+  private getWallets = asyncWrapper(
+    async (req: IAuthRequest, res: Response): Promise<Response | void> => {
+      const userPublicId = req.user?.userId;
+
+      if (!userPublicId) {
+        throw new BadRequestError("USER_PUBLIC_ID_MISSING");
+      }
+
+      const result = await this.userService.getWallets(userPublicId);
+      res.status(200).json({ ok: true, data: result });
+    },
+  );
+
+  private getTransactions = asyncWrapper(
+    async (req: IAuthRequest, res: Response): Promise<Response | void> => {
+      const userPublicId = req.user?.userId;
+      const { limit, page, direction, walletType, status } = req.query;
+
+      if (!userPublicId) {
+        throw new BadRequestError("USER_PUBLIC_ID_MISSING");
+      }
+
+      const result = await this.userService.getTransactions(userPublicId, {
+        limit: limit ? parseInt(limit as string) : undefined,
+        page: page ? parseInt(page as string) : undefined,
+        direction: direction as "debit" | "credit" | undefined,
+        walletType: walletType as string | undefined,
+        status: status as string | undefined,
+      });
+
+      res.status(200).json({ ok: true, ...result });
     },
   );
 }

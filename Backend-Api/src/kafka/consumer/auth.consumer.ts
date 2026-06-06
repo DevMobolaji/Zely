@@ -167,8 +167,7 @@ export async function runAuthConsumer() {
           return result;
         });
 
-        onAuthSuccess;
-        result; // ← trigger side effects on success
+        await onAuthSuccess(result); // ← trigger side effects on success
 
         // ✅ Success metrics
         kafkaMessagesProcessedTotal.inc({

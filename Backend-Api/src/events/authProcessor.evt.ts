@@ -24,15 +24,15 @@ import {
   WalletStatus,
   WalletType,
 } from "@/modules/wallet/wallet.model";
-import {
-  generateAccountNumber,
-  generateEventId,
-} from "@/shared/utils/id.generator";
+import { generateAccountNumber } from "@/shared/utils/id.generator";
 import { logger } from "@/shared/utils/logger";
 import mongoose from "mongoose";
 
 import crypto from "crypto";
-import { EmailOutboxModel } from "@/kafka/emails/email.Outbox";
+import {
+  UserBalanceSummaryModel,
+  UserWalletModel,
+} from "@/kafka/projections/models/projectionModels";
 
 export const deriveOutboxEventId = (
   aggregateId: string,
@@ -156,9 +156,6 @@ export async function processAuthEvent(
           //   throw new TransientError("Simulated transient failure");
           // }
 
-          // if (user?.role === "USER") {
-          //   throw new PermanentError("Simulated permanent failure");
-          // }
           if (user?.accountStatus === accountStatus.ACCOUNT_READY) {
             logger.warn("User already provisioned — skipping");
             return;
@@ -191,65 +188,148 @@ export async function processAuthEvent(
           }
 
           // Create ledger accounts
-          const ledgers = await LedgerAccount.insertMany(
-            [
+          const [checkingLedger, savingsLedger] = await Promise.all([
+            LedgerAccount.findOneAndUpdate(
               {
                 ownerId: updatedUser._id,
-                ownerType: LedgerOwnerType.USER,
-                userPublicId: updatedUser.userId,
                 type: LedgerAccountType.MAIN_CHECKINGS,
-                currency: "NGN",
               },
               {
-                ownerId: updatedUser._id,
-                ownerType: LedgerOwnerType.USER,
-                userPublicId: updatedUser.userId,
-                type: LedgerAccountType.SAVINGS,
-                currency: "NGN",
+                $setOnInsert: {
+                  ownerId: updatedUser._id,
+                  ownerType: LedgerOwnerType.USER,
+                  userPublicId: updatedUser.userId,
+                  type: LedgerAccountType.MAIN_CHECKINGS,
+                  currency: "NGN",
+                },
               },
-            ],
-            { session },
-          );
+              { upsert: true, new: true, session },
+            ),
+            LedgerAccount.findOneAndUpdate(
+              {
+                ownerId: updatedUser._id,
+                type: LedgerAccountType.SAVINGS,
+              },
+              {
+                $setOnInsert: {
+                  ownerId: updatedUser._id,
+                  ownerType: LedgerOwnerType.USER,
+                  userPublicId: updatedUser.userId,
+                  type: LedgerAccountType.SAVINGS,
+                  currency: "NGN",
+                },
+              },
+              { upsert: true, new: true, session },
+            ),
+          ]);
+
           logger.info(
             `[v${version}] User ledger accounts created successfully`,
           );
 
           // Create wallets
-          const wallets = await Wallet.insertMany(
-            [
+          const [checkingWallet, savingsWallet] = await Promise.all([
+            Wallet.findOneAndUpdate(
               {
                 userId: updatedUser._id,
-                userPublicId: updatedUser.userId,
-                currency: "NGN",
-                availableBalance: 0,
-                lockedBalance: 0,
-                status: WalletStatus.ACTIVE,
                 type: WalletType.MAIN_CHECKINGS,
-                ledgerAccountId: ledgers[0]._id,
               },
               {
+                $setOnInsert: {
+                  userId: updatedUser._id,
+                  userPublicId: updatedUser.userId,
+                  currency: "NGN",
+                  availableBalance: 0,
+                  lockedBalance: 0,
+                  status: WalletStatus.ACTIVE,
+                  type: WalletType.MAIN_CHECKINGS,
+                  ledgerAccountId: checkingLedger._id,
+                },
+              },
+              { upsert: true, new: true, session },
+            ),
+            Wallet.findOneAndUpdate(
+              {
                 userId: updatedUser._id,
-                userPublicId: updatedUser.userId,
-                currency: "NGN",
-                availableBalance: 0,
-                lockedBalance: 0,
-                status: WalletStatus.ACTIVE,
                 type: WalletType.SAVINGS,
-                ledgerAccountId: ledgers[1]._id,
+              },
+              {
+                $setOnInsert: {
+                  userId: updatedUser._id,
+                  userPublicId: updatedUser.userId,
+                  currency: "NGN",
+                  availableBalance: 0,
+                  lockedBalance: 0,
+                  status: WalletStatus.ACTIVE,
+                  type: WalletType.SAVINGS,
+                  ledgerAccountId: savingsLedger._id,
+                },
+              },
+              { upsert: true, new: true, session },
+            ),
+          ]);
+
+          logger.info(`[v${version}] User wallets created successfully`);
+
+          // Seed wallet projections — ensure read model is complete from day one
+          await UserWalletModel.bulkWrite(
+            [
+              {
+                updateOne: {
+                  filter: { walletId: checkingWallet.walletId },
+                  update: {
+                    $setOnInsert: {
+                      walletId: checkingWallet.walletId,
+                      userId: updatedUser.userId,
+                      walletType: checkingWallet.type,
+                      currency: checkingWallet.currency,
+                      balance: 0,
+                      status: "active",
+                    },
+                  },
+                  upsert: true,
+                },
+              },
+              {
+                updateOne: {
+                  filter: { walletId: savingsWallet.walletId },
+                  update: {
+                    $setOnInsert: {
+                      walletId: savingsWallet.walletId,
+                      userId: updatedUser.userId,
+                      walletType: savingsWallet.type,
+                      currency: savingsWallet.currency,
+                      balance: 0,
+                      status: "active",
+                    },
+                  },
+                  upsert: true,
+                },
               },
             ],
             { session },
           );
-          logger.info(`[v${version}] User wallets created successfully`);
 
-          const [checkingWalletId, savingsWalletId] = [
-            wallets[0]._id,
-            wallets[1]._id,
-          ];
+          logger.info(`[v${version}] Wallet and balance projections seeded`);
 
-          // Generate account numbers
-          const genCheckingAccountNumber = generateAccountNumber();
-          const genSavingsAccountNumber = generateAccountNumber();
+          // Generate account numbers only if accounts don't exist yet
+          const existingAccounts = await Account.find({
+            userId: updatedUser._id,
+          })
+            .session(session)
+            .lean();
+
+          const existingChecking = existingAccounts.find(
+            (a) => a.type === AccountType.MAIN_CHECKINGS,
+          );
+          const existingSavings = existingAccounts.find(
+            (a) => a.type === AccountType.SAVINGS,
+          );
+
+          const genCheckingAccountNumber =
+            existingChecking?.accountNumber ?? generateAccountNumber();
+          const genSavingsAccountNumber =
+            existingSavings?.accountNumber ?? generateAccountNumber();
 
           if (!genCheckingAccountNumber || !genSavingsAccountNumber) {
             throw new PermanentError(
@@ -257,34 +337,49 @@ export async function processAuthEvent(
             );
           }
 
-          // 6️⃣ Create accounts
-          await Account.insertMany(
-            [
+          await Promise.all([
+            Account.findOneAndUpdate(
               {
                 userId: updatedUser._id,
-                userPublicId: updatedUser.userId,
-                accountNumber: genCheckingAccountNumber,
-                currency: "NGN",
-                status: "ACTIVE",
-                walletId: checkingWalletId,
-                ledgerAccountId: ledgers[0]._id,
-                isPublic: true,
                 type: AccountType.MAIN_CHECKINGS,
               },
               {
+                $setOnInsert: {
+                  userId: updatedUser._id,
+                  userPublicId: updatedUser.userId,
+                  accountNumber: genCheckingAccountNumber,
+                  currency: "NGN",
+                  status: "ACTIVE",
+                  walletId: checkingWallet,
+                  ledgerAccountId: checkingLedger._id,
+                  isPublic: true,
+                  type: AccountType.MAIN_CHECKINGS,
+                },
+              },
+              { upsert: true, new: true, session },
+            ),
+            Account.findOneAndUpdate(
+              {
                 userId: updatedUser._id,
-                userPublicId: updatedUser.userId,
-                accountNumber: genSavingsAccountNumber,
-                currency: "NGN",
-                status: "ACTIVE",
-                walletId: savingsWalletId,
-                ledgerAccountId: ledgers[1]._id,
-                isPublic: false,
                 type: AccountType.SAVINGS,
               },
-            ],
-            { session },
-          );
+              {
+                $setOnInsert: {
+                  userId: updatedUser._id,
+                  userPublicId: updatedUser.userId,
+                  accountNumber: genSavingsAccountNumber,
+                  currency: "NGN",
+                  status: "ACTIVE",
+                  walletId: savingsWallet,
+                  ledgerAccountId: savingsLedger._id,
+                  isPublic: false,
+                  type: AccountType.SAVINGS,
+                },
+              },
+              { upsert: true, new: true, session },
+            ),
+          ]);
+
           logger.info(`[v${version}] User accounts created successfully`);
 
           // 7️⃣ Finalize user
@@ -322,7 +417,20 @@ export async function processAuthEvent(
             name: updatedUser.name,
           };
         } catch (err: any) {
-          if (err instanceof PermanentError || err instanceof TransientError) {
+          if (err instanceof PermanentError) {
+            // Mark user as failed so frontend can surface actionable error
+            await User.updateOne(
+              { userId: payload.userId },
+              { $set: { accountStatus: accountStatus.PROVISIONING_FAILED } },
+            ).catch((updateErr) => {
+              logger.error("Failed to mark user as PROVISIONING_FAILED", {
+                userId: payload.userId,
+                error: updateErr.message,
+              });
+            });
+            throw err;
+          }
+          if (err instanceof TransientError) {
             throw err;
           }
           throw new TransientError(`Provisioning failed: ${err.message}`);
