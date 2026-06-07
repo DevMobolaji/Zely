@@ -1,33 +1,34 @@
+import { DashboardDataProvider } from "@/context/DashboardDataContext";
 import React from "react";
 import {
+  Navigate,
+  Route,
   HashRouter as Router,
   Routes,
-  Route,
-  Navigate,
 } from "react-router-dom";
+import { AuthProvider } from "./auth/AuthProvider";
+import RequireAuth from "./auth/RequireAuth";
+import { ToastProvider } from "./context/ToastContext";
+import DashboardLayout from "./layouts/DashboardLayout";
+import AdminDashboardScreen from "./pages/admin/AdminDashboardScreen";
+import AdminKYCScreen from "./pages/admin/AdminKYCScreen";
+import AdminReconciliationDetailScreen from "./pages/admin/AdminReconciliationDetailScreen";
 import LoginScreen from "./pages/auth/LoginScreen";
 import RegisterScreen from "./pages/auth/RegisterScreen";
 import ResetPasswordScreen from "./pages/auth/ResetPasswordScreen";
 import TwoFactorScreen from "./pages/auth/TwoFactorScreen";
-import ProvisioningScreen from "./pages/onboarding/ProvisioningScreen";
+import UnauthorizedScreen from "./pages/common/UnauthorizedScreen";
 import DashboardScreen from "./pages/dashboard/DashboardScreen";
-import WalletsScreen from "./pages/dashboard/WalletsScreen";
-import TransfersScreen from "./pages/dashboard/TransfersScreen";
-import TransactionsScreen from "./pages/dashboard/TransactionsScreen";
-import SettingsScreen from "./pages/dashboard/SettingsScreen";
-import SavingsScreen from "./pages/dashboard/SavingsScreen";
-import ProfileScreen from "./pages/dashboard/ProfileScreen";
 import KYCStatusScreen from "./pages/dashboard/KYCStatusScreen";
 import KYCTier2Form from "./pages/dashboard/KYCTier2Form";
 import KYCTier3Form from "./pages/dashboard/KYCTier3Form";
-import AdminDashboardScreen from "./pages/admin/AdminDashboardScreen";
-import AdminReconciliationDetailScreen from "./pages/admin/AdminReconciliationDetailScreen";
-import AdminKYCScreen from "./pages/admin/AdminKYCScreen";
-import UnauthorizedScreen from "./pages/common/UnauthorizedScreen";
-import DashboardLayout from "./layouts/DashboardLayout";
-import RequireAuth from "./auth/RequireAuth";
-import { ToastProvider } from "./context/ToastContext";
-import { AuthProvider } from "./auth/AuthProvider";
+import ProfileScreen from "./pages/dashboard/ProfileScreen";
+import SavingsScreen from "./pages/dashboard/SavingsScreen";
+import SettingsScreen from "./pages/dashboard/SettingsScreen";
+import TransactionsScreen from "./pages/dashboard/TransactionsScreen";
+import TransfersScreen from "./pages/dashboard/TransfersScreen";
+import WalletsScreen from "./pages/dashboard/WalletsScreen";
+import ProvisioningScreen from "./pages/onboarding/ProvisioningScreen";
 //import UtilityBillsScreen from './pages/dashboard/UtilityBillsScreen';
 
 const App: React.FC = () => {
@@ -53,9 +54,15 @@ const App: React.FC = () => {
                 />
               </Route>
 
-              {/* Protected User Routes (Wrapped in DashboardLayout) */}
               <Route element={<RequireAuth />}>
-                <Route element={<DashboardLayout />}>
+                <Route
+                  element={
+                    <DashboardDataProvider>
+                      <DashboardLayout />
+                    </DashboardDataProvider>
+                  }
+                >
+                  {/* Protected User Routes (Wrapped in DashboardLayout) */}
                   <Route path="/dashboard" element={<DashboardScreen />} />
                   <Route path="/wallets" element={<WalletsScreen />} />
                   <Route

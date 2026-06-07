@@ -1,7 +1,6 @@
-
-import React from 'react';
-import { useLocation, Navigate, Outlet } from 'react-router-dom';
-import { useAuth } from './AuthProvider';
+import React from "react";
+import { useLocation, Navigate, Outlet } from "react-router-dom";
+import { useAuth } from "./AuthProvider";
 
 const RequireAuth = ({ allowedRoles }: { allowedRoles?: string[] }) => {
   const { auth } = useAuth();
@@ -11,7 +10,7 @@ const RequireAuth = ({ allowedRoles }: { allowedRoles?: string[] }) => {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (allowedRoles && !allowedRoles.includes(auth.user.role)) {
+  if (allowedRoles && auth?.user?.role && !allowedRoles.includes(auth.user.role)) {
     return <Navigate to="/unauthorized" replace />;
   }
 

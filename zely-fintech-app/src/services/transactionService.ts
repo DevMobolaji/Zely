@@ -1,5 +1,14 @@
 import { axiosPrivate } from "../api/client";
 
+const generateIdempotencyKey = (): string => {
+  const timestamp = Date.now();
+  const random = Array.from(
+    { length: 16 },
+    () => Math.random().toString(36)[2] || "0",
+  ).join("");
+  return `IDP_${timestamp}_${random}`;
+};
+
 export const transactionService = {
   // ─── Get all transactions with pagination ────────────────────────────────
   getAll: async (params?: {
@@ -35,13 +44,26 @@ export const transactionService = {
 
   // ─── Transfer (keep existing simulation for now) ─────────────────────────
   transfer: async (data: {
-    recipientId?: string;
-    recipientEmail?: string;
     amount: number;
     accountId: string;
     type: "internal" | "p2p";
+    recipientAccountNumber?: string;
+    recipientEmail?: string;
+    destWalletId?: string;
   }) => {
-    const response = await axiosPrivate.post("/transfers", data);
+    const response = await axiosPrivate.post(
+      "/transfer/p2p",
+      {
+        amount: data.amount,
+        to: data.recipientAccountNumber,
+        currency: "NGN",
+      },
+      {
+        headers: {
+          "X-Idempotency-Key": generateIdempotencyKey(),
+        },
+      },
+    );
     return response.data;
   },
 

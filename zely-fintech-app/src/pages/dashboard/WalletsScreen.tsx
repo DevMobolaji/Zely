@@ -11,25 +11,22 @@ import {
   History as HistoryIcon,
   Loader2,
 } from "lucide-react";
-import {
-  accountsData as initialAccounts,
-  generateMockData,
-} from "../../utils/mockData";
+
 import { useToast } from "../../context/ToastContext";
-import { useAsync } from "../../hooks/useAsync";
-import { useCallback } from "react";
-import { transactionService } from "../../services/transactionService";
-import {
-  ApiWallet,
-  ApiTransactionResponse,
-  ApiBalanceSummary,
-} from "../../utils/types";
+
+import { ApiWallet } from "../../utils/types";
+import { useDashboardData } from "@/context/DashboardDataContext";
 
 const getWalletTypeFromId = (
   walletId: string,
   wallets?: ApiWallet[] | null,
 ): string | undefined => {
   return wallets?.find((w) => w.walletId === walletId)?.walletType;
+};
+
+const formatDate = (isoDate: string) => {
+  const d = new Date(isoDate);
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
 };
 
 const getWalletMeta = (walletType: string) => {
@@ -67,30 +64,7 @@ const WalletsScreen: React.FC = () => {
   const { showToast } = useToast();
 
   // Real data
-  const { data: wallets, loading: loadingWallets } = useAsync<ApiWallet[]>(
-    useCallback(() => transactionService.getWallets(), []),
-  );
-
-  const { data: summary } = useAsync<ApiBalanceSummary>(
-    useCallback(() => transactionService.getDashboardSummary(), []),
-  );
-
-  const { data: transactionData, loading: loadingTransactions } =
-    useAsync<ApiTransactionResponse>(
-      useCallback(
-        () =>
-          transactionService.getAll({
-            limit: 20,
-            page: 1,
-            ...(walletId
-              ? { walletType: getWalletTypeFromId(walletId, wallets) }
-              : {}),
-          }),
-        [walletId, wallets],
-      ),
-    );
-
-  const transactions = transactionData?.transactions ?? [];
+  const { wallets, loadingWallets, transactions } = useDashboardData();
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -100,7 +74,8 @@ const WalletsScreen: React.FC = () => {
   // If walletId is present, show details
   if (walletId) {
     const wallet =
-      wallets?.find((w) => w.walletId === walletId) ?? wallets?.[0];
+      wallets?.find((w: { walletId: string }) => w.walletId === walletId) ??
+      wallets?.[0];
 
     if (loadingWallets || !wallet)
       return (
@@ -217,7 +192,7 @@ const WalletsScreen: React.FC = () => {
                 <span className="text-sm text-slate-500">Total In</span>
                 <span className="text-sm font-bold text-green-500">
                   +₦
-                  {(wallet.totalCredit).toLocaleString("en-NG", {
+                  {wallet.totalCredit.toLocaleString("en-NG", {
                     minimumFractionDigits: 2,
                   })}
                 </span>
@@ -226,7 +201,7 @@ const WalletsScreen: React.FC = () => {
                 <span className="text-sm text-slate-500">Total Out</span>
                 <span className="text-sm font-bold text-slate-900 dark:text-white">
                   -₦
-                  {(wallet.totalDebit).toLocaleString("en-NG", {
+                  {wallet.totalDebit.toLocaleString("en-NG", {
                     minimumFractionDigits: 2,
                   })}
                 </span>
@@ -236,11 +211,12 @@ const WalletsScreen: React.FC = () => {
                 <span className="text-sm font-bold">Net Flow</span>
                 <span className="text-sm font-bold text-blue-500">
                   ₦
-                  {(
-                    (wallet.totalCredit - wallet.totalDebit)
-                  ).toLocaleString("en-NG", {
-                    minimumFractionDigits: 2,
-                  })}
+                  {(wallet.totalCredit - wallet.totalDebit).toLocaleString(
+                    "en-NG",
+                    {
+                      minimumFractionDigits: 2,
+                    },
+                  )}
                 </span>
               </div>
             </div>
@@ -255,17 +231,20 @@ const WalletsScreen: React.FC = () => {
             </h3>
           </div>
           <div>
-            {transactions.slice(0, 5).map((tx) => (
+            {transactions.slice(0, 5).map((tx: any) => (
               <div
-                key={tx.transactionId}
+                key={tx.id}
                 className="p-4 border-b border-slate-50 dark:border-slate-800 last:border-0 flex justify-between items-center hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
               >
                 <div>
                   <p className="font-bold text-sm text-slate-900 dark:text-white">
-                    {tx.category} - {tx.name}
+                    {tx.direction === "debit"
+                      ? `Payment Sent to ${tx.counterpartyName || "Unknown"}`
+                      : `Payment Received from ${tx.counterpartyName || "Unknown"}`}
                   </p>
                   <p className="text-xs text-slate-500">
-                    {new Date(tx.occurredAt).toLocaleDateString()}
+                    {formatDate(tx.occurredAt)} at{" "}
+                    {new Date(tx.occurredAt).toLocaleTimeString()}
                   </p>
                 </div>
                 <span
@@ -299,7 +278,7 @@ const WalletsScreen: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {(wallets ?? []).map((wallet) => {
+        {(wallets ?? []).map((wallet: any) => {
           const meta = getWalletMeta(wallet.walletType);
           return (
             <div

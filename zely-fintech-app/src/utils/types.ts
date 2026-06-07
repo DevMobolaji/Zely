@@ -58,6 +58,7 @@ export interface Session {
 // ─── Real API types — match backend projection models ────────────────────
 
 export interface ApiTransaction {
+  id: string;
   transactionId: string;
   direction: "debit" | "credit";
   amount: number;
@@ -65,7 +66,7 @@ export interface ApiTransaction {
   walletType: string;
   status: string;
   category: string;
-  counterpartyUserId?: string;
+  counterpartyName?: string;
   occurredAt: string;
   name: string;
 }
@@ -75,7 +76,7 @@ export interface ApiWallet {
   walletType: "MAIN_CHECKINGS" | "SAVINGS" | "VAULT";
   balance: number;
   currency: string;
-  status: string;
+  status: "ACTIVE" | "FROZEN" | "CLOSED" | "RECONCILING";
   accountNumber: string | null;
   totalCredit: number;
   totalDebit: number;
