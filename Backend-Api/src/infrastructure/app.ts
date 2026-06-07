@@ -1,11 +1,9 @@
 // Dependencies
-import express, { Application, Request, Response } from "express";
-import cookieParser from "cookie-parser";
-import helmet from "helmet";
-import cors from "cors";
 import compression from "compression";
-import mongoSanitize from "express-mongo-sanitize";
-import morgan from "morgan";
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import express, { Application, Request, Response } from "express";
+import helmet from "helmet";
 
 // Interfaces
 import Controller from "@/config/interfaces/controller.interfaces";
@@ -18,76 +16,67 @@ import { BullMQAdapter } from "@bull-board/api/bullMQAdapter";
 import { ExpressAdapter } from "@bull-board/express";
 
 // Middleware
+import { requestLogger } from "@/shared/logging/request-logger";
+import ErrorMiddleware from "@/shared/middleware/errorHandler";
+import { requestIdMiddleware } from "@/shared/middleware/request-id.middleware";
 import {
   attachRequestContext,
   deviceMiddleware,
 } from "@/shared/middleware/request.context";
-import { requestIdMiddleware } from "@/shared/middleware/request-id.middleware";
-import { requestLogger } from "@/shared/logging/request-logger";
-import ErrorMiddleware from "@/shared/middleware/errorHandler";
 
 //KAFKA
 import {
-  startKafkaProducer,
-  shutdownKafkaProducer,
   setupKafkaTopics,
+  shutdownKafkaProducer,
+  startKafkaProducer,
 } from "@/kafka/config";
 import {
   isTransferConsumerReady,
   runTransferConsumer,
+  stopTransferConsumer,
 } from "@/kafka/consumer/transfer.consumer";
 //import { reconciliationQueue } from '@/workers/reconcileLedger.worker';
-import {
-  runAuthConsumer,
-  stopAuthConsumer,
-} from "@/kafka/consumer/auth.consumer";
-import { waitForTopicsReady } from "@/kafka/config/waitForTopicsReady";
 import { kafka } from "@/kafka/config/kafka.config";
 import { getKafkaHealthStatus } from "@/kafka/config/kafka.health";
 import { TOPICS } from "@/kafka/config/kafka.topics";
+import { waitForTopicsReady } from "@/kafka/config/waitForTopicsReady";
+import { runAuthConsumer } from "@/kafka/consumer/auth.consumer";
 
 // Config
 import { config } from "@/config/index";
+import { startDLQSink } from "@/kafka/consumer/dlq.consumer";
+import { runProjectionConsumer } from "@/kafka/consumer/projectConsumer";
+import { runPasswordConsumer } from "@/kafka/consumer/resetPassword.consumer";
+
+import { runVaultConsumer } from "@/kafka/consumer/vault.consumer";
+import { requestIdempotencyKey } from "@/shared/middleware/request-idempotency";
 import { logger } from "@/shared/utils/logger";
 import mongoose from "mongoose";
 import emailQueue from "./queues/email.queue";
-import { requestIdempotencyKey } from "@/shared/middleware/request-idempotency";
-import {
-  runPasswordConsumer,
-  stopPasswordConsumer,
-} from "@/kafka/consumer/resetPassword.consumer";
+
+import { seedFeeConfig } from "@/infrastructure/seeder/fee.seeder";
+import { initializeSocketServer } from "@/infrastructure/websockets/socket.server";
+import { runKycConsumer } from "@/kafka/consumer/kyc.consumer";
+import ensureSystemLedger from "@/modules/ledger/system ledger/create.system.ledger";
+import { paymentReaperQueue } from "@/modules/payments/payments.reaper";
+import { reconciliationQueue } from "@/modules/reconciliation/reconciliation.scheduler";
+import { metricsMiddleware } from "@/shared/middleware/metrics.middleware";
+import { Server } from "socket.io";
+import { registry } from "./resilience";
+import { ensureTransactionLimits } from "./seeder/transactionLimits.seeder";
 import {
   runRetryConsumer,
-  stopRetryConsumer,
+  signalRetryReady,
 } from "@/kafka/consumer/retryConsumer";
-import { startDLQSink, stopDLQSink } from "@/kafka/consumer/dlq.consumer";
-import {
-  runVaultConsumer,
-  stopVaultConsumer,
-} from "@/kafka/consumer/vault.consumer";
-import {
-  runProjectionConsumer,
-  stopProjectionConsumer,
-} from "@/kafka/consumer/projectConsumer";
-
-import { registry } from "./resilience";
-import { metricsMiddleware } from "@/shared/middleware/metrics.middleware";
-import { seedFeeConfig } from "@/infrastructure/seeder/fee.seeder";
-import ensureSystemLedger from "@/modules/ledger/system ledger/create.system.ledger";
-import { ensureTransactionLimits } from "./seeder/transactionLimits.seeder";
-import { runKycConsumer } from "@/kafka/consumer/kyc.consumer";
-import { SKIP_PATHS } from "./helpers/skip.rule.helper";
-import { reconciliationQueue } from "@/modules/reconciliation/reconciliation.scheduler";
-import {
-  paymentReaperQueue,
-  schedulePaymentReaper,
-} from "@/modules/payments/payments.reaper";
 
 class App {
   public express: Application;
   public port: number;
   private server: ReturnType<Application["listen"]> | null = null;
   private isShuttingDown: boolean = false;
+  private io: Server | null = null;
+  private isReady: boolean = false;
+  private connections = new Set<import("net").Socket>();
 
   constructor(controllers: Controller[], port: number) {
     this.express = express();
@@ -108,10 +97,17 @@ class App {
   public async initialize(): Promise<void> {
     try {
       logger.info("Starting application initialization...");
+
+      if (!this.server)
+        throw new Error("HTTP server must be started before initialize()");
+
+      this.io = initializeSocketServer(this.server);
       await this.connectToMongoDB();
       await this.connectToRedis();
       await this.initializeKafka();
 
+      this.isReady = true;
+      signalRetryReady(); // ← unlocks the retry consumer now that WS + DB are ready
       logger.info("✅ All services initialized successfully");
     } catch (error) {
       logger.error("Failed to initialize application", error);
@@ -149,23 +145,23 @@ class App {
   }
 
   private async initializeKafka(): Promise<void> {
-    logger.info("Initializing Kafka...");
-
     try {
       await setupKafkaTopics();
       await waitForTopicsReady(kafka, Object.values(TOPICS));
       await startKafkaProducer();
+
       await runAuthConsumer();
       await runPasswordConsumer();
       await runTransferConsumer();
       await runProjectionConsumer();
       await runVaultConsumer();
       await runKycConsumer();
-      await runRetryConsumer();
       await startDLQSink();
 
-      logger.info("✅ Kafka consumer started");
+      // Retry consumer starts and connects, but blocks on retryReadySignal
+      await runRetryConsumer();
 
+      logger.info("✅ Kafka consumer started");
       logger.info("✅ Kafka system ready");
     } catch (error) {
       logger.error("⚠️  Kafka initialization failed (non-critical):", error);
@@ -295,6 +291,16 @@ class App {
    */
 
   private initializeCustomMiddleware(): void {
+    // in initializeCustomMiddleware()
+    this.express.use((req, res, next) => {
+      if (!this.isReady && req.path !== "/health") {
+        return res
+          .status(503)
+          .json({ message: "Service unavailable, starting up" });
+      }
+      next();
+    });
+
     this.express.set("trust proxy", 1);
     this.express.use(metricsMiddleware); // Metrics middleware should be first to capture all requests
     this.express.use(requestIdMiddleware);
@@ -447,12 +453,16 @@ class App {
       console.log(
         `🔗 API Base:         http://localhost:${this.port}/api/${config.app.apiVersion}`,
       );
-      console.log("");
 
       logger.info("Server started successfully", {
         port: this.port,
         env: config.app.env,
         apiVersion: config.app.apiVersion,
+      });
+
+      this.server!.on("connection", (socket) => {
+        this.connections.add(socket);
+        socket.on("close", () => this.connections.delete(socket));
       });
     });
 
@@ -473,28 +483,38 @@ class App {
       this.isShuttingDown = true;
       logger.info(`Received ${signal}. Starting graceful shutdown...`);
 
-      // Hard deadline — no matter what
       const hardExit = setTimeout(() => {
         logger.error("Shutdown timed out — forcing exit");
         process.exit(1);
       }, 30_000).unref();
 
       try {
+        // 1. Close Socket.io first
+        if (this.io) {
+          await new Promise<void>((resolve) => this.io!.close(() => resolve()));
+          logger.info("✅ Socket.io closed");
+        }
+
+        // 2. Destroy open connections + close HTTP server
         if (this.server) {
-          await Promise.race([
-            new Promise<void>((resolve) => this.server!.close(() => resolve())),
-            new Promise<void>((_, reject) =>
-              setTimeout(
-                () => reject(new Error("Server close timeout")),
-                10_000,
-              ),
-            ),
-          ]);
+          for (const socket of this.connections) socket.destroy();
+          this.connections.clear();
+          await new Promise<void>((resolve) =>
+            this.server!.close(() => resolve()),
+          );
           logger.info("✅ HTTP server closed");
         }
+
+        // 3. Close remaining services
         await shutdownKafkaProducer().catch((e) =>
           logger.error("Kafka shutdown error", e),
         );
+        // await stopTransferConsumer().catch((e) =>
+        //   logger.error("Transfer consumer shutdown error", e),
+        // );
+        // await stopRetryConsumer().catch((e) =>
+        //   logger.error("Retry consumer shutdown error", e),
+        // );
         await redis
           .disconnect()
           .catch((e) => logger.error("Redis shutdown error", e));

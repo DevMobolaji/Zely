@@ -109,6 +109,7 @@ export const lockWalletFunds = async (
       $inc: {
         availableBalance: -amount,
         lockedBalance: +amount,
+        version: 1,
       },
     },
     { session, new: true },
@@ -132,7 +133,7 @@ export const deductWalletFunds = async (
       lockedBalance: { $gte: amount },
     },
     {
-      $inc: { lockedBalance: -amount },
+      $inc: { lockedBalance: -amount, version: 1 },
     },
     { new: true, session },
   );
@@ -157,7 +158,7 @@ export const unlockWalletFunds = async (
 
   const res = await Wallet.findOneAndUpdate(
     { _id: wallet._id, lockedBalance: { $gte: amount } },
-    { $inc: { availableBalance: amount, lockedBalance: -amount } },
+    { $inc: { availableBalance: amount, lockedBalance: -amount, version: 1 } },
     { new: true, session },
   ).session(session);
 

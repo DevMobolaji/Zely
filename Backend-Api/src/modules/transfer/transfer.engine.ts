@@ -1,20 +1,29 @@
 import mongoose, { Types } from "mongoose";
-import { markCompleted, extEnsureIdempotence } from "@/modules/helpers/ext.idempotence";
+import {
+  markCompleted,
+  extEnsureIdempotence,
+} from "@/modules/helpers/ext.idempotence";
 import BadRequestError from "@/shared/errors/badRequest";
 
-import { generateReferenceId, generateTransactionId } from "@/shared/utils/id.generator";
+import {
+  generateReferenceId,
+  generateTransactionId,
+} from "@/shared/utils/id.generator";
 import { IRequestContext } from "@/config/interfaces/request.interface";
 import TransactionBuilder from "../ledger/ledger.transaction.builder";
 
-import {
-  lockAccountToPreventConcurrency,
-} from "../helpers/resolvers";
+import { lockAccountToPreventConcurrency } from "../helpers/resolvers";
 
 import { Wallet, WalletDocument } from "../wallet/wallet.model";
 import { LedgerEntryNature } from "../ledger/ledger.entry.model";
 import { Account } from "../account/account.model";
 import { AccountDocument } from "../account/account.interface";
-import { LedgerAccount, LedgerAccountDocument, LedgerAccountType, LedgerOwnerType } from "../ledger/ledger.account.model";
+import {
+  LedgerAccount,
+  LedgerAccountDocument,
+  LedgerAccountType,
+  LedgerOwnerType,
+} from "../ledger/ledger.account.model";
 import { VaultDocument } from "../vault/vault.model";
 
 type BaseTransferInput = {
@@ -42,20 +51,14 @@ type WalletToVaultInput = BaseTransferInput & {
   receiverWallet?: never;
 };
 
-export type TransferEngineInput =
-  | WalletToWalletInput
-  | WalletToVaultInput;
-
+export type TransferEngineInput = WalletToWalletInput | WalletToVaultInput;
 
 class TransferEngine {
-  constructor(
-    private readonly input: TransferEngineInput,
-
-  ) { }
+  constructor(private readonly input: TransferEngineInput) {}
 
   async transferEngines(
     context: IRequestContext,
-    session: mongoose.ClientSession
+    session: mongoose.ClientSession,
   ) {
     if (!session.inTransaction()) {
       throw new BadRequestError("Transfers must run inside a DB transaction");
@@ -75,7 +78,7 @@ class TransferEngine {
     const referenceId = generateReferenceId();
 
     let accountNumber: string;
-    if ('accountNumber' in receiverAccount) {
+    if ("accountNumber" in receiverAccount) {
       accountNumber = receiverAccount.accountNumber;
     } else {
       accountNumber = receiverAccount.ledgerAccountId.toString();
@@ -96,29 +99,27 @@ class TransferEngine {
      * CONCURRENCY LOCKING
      * ------------------------- */
     if ("accountNumber" in receiverAccount) {
-
       const [first, second] =
         senderAccount._id.toHexString() < receiverAccount._id.toHexString()
           ? [senderAccount, receiverAccount]
           : [receiverAccount, senderAccount];
 
-      if (!await lockAccountToPreventConcurrency(first._id, session)) {
+      if (!(await lockAccountToPreventConcurrency(first._id, session))) {
         throw new BadRequestError("LOCK_FAILED");
       }
 
-      if (!await lockAccountToPreventConcurrency(second._id, session)) {
+      if (!(await lockAccountToPreventConcurrency(second._id, session))) {
         throw new BadRequestError("LOCK_FAILED");
       }
-
     }
 
     // Case 2: Wallet → Vault (receiver is ledger account)
     else {
-
-      if (!await lockAccountToPreventConcurrency(senderAccount._id, session)) {
+      if (
+        !(await lockAccountToPreventConcurrency(senderAccount._id, session))
+      ) {
         throw new BadRequestError("LOCK_FAILED");
       }
-
     }
 
     /** -------------------------
@@ -161,7 +162,7 @@ class TransferEngine {
         throw new BadRequestError("TREASURY_ACCOUNT_NOT_FOUND");
       }
 
-      const feeBuilder = new TransactionBuilder('FEE');
+      const feeBuilder = new TransactionBuilder("FEE");
 
       feeBuilder.addDebit({
         ledgerAccountId: senderLedgerId,
@@ -170,7 +171,7 @@ class TransferEngine {
         nature: LedgerEntryNature.DEBIT,
         transactionRef: `${transactionRef}-FEE`,
         referenceId,
-        referenceType: 'FEE',
+        referenceType: "FEE",
       });
 
       feeBuilder.addCredit({
@@ -180,20 +181,19 @@ class TransferEngine {
         nature: LedgerEntryNature.CREDIT,
         transactionRef: `${transactionRef}-FEE`,
         referenceId,
-        referenceType: 'FEE',
+        referenceType: "FEE",
       });
 
       await feeBuilder.commit(session);
-
 
       await Wallet.findOneAndUpdate(
         {
           userPublicId: treasuryLedgerAccount.userPublicId,
           type: treasuryLedgerAccount.type,
-          currency
+          currency,
         },
-        { $inc: { availableBalance: fee } },
-        { session, new: true }
+        { $inc: { availableBalance: fee, version: 1 } },
+        { session, new: true },
       );
     }
 
@@ -209,29 +209,24 @@ class TransferEngine {
     await Account.updateMany(
       { _id: { $in: accountIdsToUnlock } },
       { $set: { locked: false, lockUntil: null } },
-      { session }
+      { session },
     );
 
     /** -------------------------
      * IDEMPOTENCY FINALIZE
      * ------------------------- */
-    await markCompleted(
-      idempotencyKey,
-      transactionRef,
-      { transactionId: txn.transactionRef }
-    );
-
+    await markCompleted(idempotencyKey, transactionRef, {
+      transactionId: txn.transactionRef,
+    });
 
     return {
       transactionRef,
       referenceId,
       amount,
       fee,
-      totalDeducted
+      totalDeducted,
     };
   }
 }
-
-
 
 export default TransferEngine;

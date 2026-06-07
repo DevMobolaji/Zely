@@ -35,6 +35,17 @@ import { validateWithSchema } from "../schema/zod.helper";
 import { onAuthSuccess } from "@/kafka/consumer/auth.consumer";
 import { onTransferSuccess } from "@/events/publishconfirm.event";
 
+// retry.ready.ts
+let markReady: () => void;
+
+export const retryReadySignal = new Promise<void>((resolve) => {
+  markReady = resolve;
+});
+
+export function signalRetryReady() {
+  markReady();
+}
+
 export const RetryEnvelopeSchema = z.object({
   meta: z.object({
     retryCount: z.number(),
@@ -130,6 +141,9 @@ export async function runRetryConsumer() {
       partition: number;
       message: any;
     }) => {
+      // Wait until all services are fully initialized
+      await retryReadySignal;
+
       if (!message.value) return;
 
       const timer = kafkaProcessingDuration.startTimer({
@@ -235,15 +249,14 @@ export async function runRetryConsumer() {
       }
 
       const createdAtMs = new Date(envelope.meta.createdAt).getTime();
-      const delay = Math.max(
-        retryConfig.delayMs - (Date.now() - createdAtMs),
-        0,
-      );
+      const elapsed = Date.now() - createdAtMs;
+      const delay = Math.max(retryConfig.delayMs - elapsed, 0);
 
       if (delay > 0) {
         logger.info("Retry cool-down applied", {
           delay,
           eventId: envelope.event.eventId,
+          willProcessAt: new Date(Date.now() + delay).toISOString(), // ← add this
         });
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
@@ -365,6 +378,10 @@ export async function runRetryConsumer() {
 }
 
 export async function stopRetryConsumer() {
-  await retryConsumer.disconnect();
-  logger.info("✅ Retry consumer disconnected");
+  try {
+    await retryConsumer.disconnect();
+    logger.info("✅ Retry consumer disconnected");
+  } catch (err) {
+    logger.error("Retry consumer disconnect error", err);
+  }
 }

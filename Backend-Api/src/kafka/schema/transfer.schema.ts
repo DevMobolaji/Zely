@@ -17,6 +17,7 @@ export const TransferCompletedV1Schema = BaseEventSchema.extend({
       currentBalance: z.number(),
       accountNumber: z.string().optional(),
       accountType: z.string(),
+      version: z.number(),
     }),
     receiver: z.object({
       walletId: z.string(),
@@ -27,6 +28,7 @@ export const TransferCompletedV1Schema = BaseEventSchema.extend({
       currentBalance: z.number(),
       accountNumber: z.string(),
       accountType: z.string(),
+      version: z.number(),
     }),
     fee: z.number().optional(),
     totalDeducted: z.number().optional(),

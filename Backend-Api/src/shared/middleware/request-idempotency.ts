@@ -6,12 +6,12 @@ import { validateId, validateTimestampedId } from "../utils/id.generator";
 export const requestIdempotencyKey = async (
   req: IAuthRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
-  const idempotencyKey = req.headers['idempotency-key'] as string 
+  const idempotencyKey = req.headers["x-idempotency-key"] as string;
 
   if (!idempotencyKey) {
-    throw new BadRequestError('Missing idempotency key');
+    throw new BadRequestError("Missing idempotency key");
   }
 
   if (!validateTimestampedId(idempotencyKey)) {
@@ -20,4 +20,4 @@ export const requestIdempotencyKey = async (
 
   req.idempotencyKey = idempotencyKey;
   next();
-}
+};

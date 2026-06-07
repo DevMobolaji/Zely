@@ -42,7 +42,7 @@ export async function processTransferEvents(
       throw new PermanentError(`Missing required fields for ${eventType}`);
     }
 
-    // if (amount === 1000) {
+    // if (amount === 100) {
     //   throw new TransientError("Simulated transient error for testing retries");
     // }
 

@@ -39,6 +39,7 @@ import {
 } from "@/modules/transactionLimit/transactionLimit.service";
 import { KycTier } from "../transactionLimit/transaction.limit.model";
 import UserModel from "../auth/authmodel";
+import { Account } from "@/modules/account/account.model";
 
 class TransferService {
   public async p2pTransfer(
@@ -212,7 +213,7 @@ class TransferService {
 
       const updatedReceiverWallet = await Wallet.findOneAndUpdate(
         { _id: receiverWallet._id },
-        { $inc: { availableBalance: dto.amount } },
+        { $inc: { availableBalance: dto.amount, version: 1 } },
         { session, new: true },
       );
 
@@ -236,6 +237,7 @@ class TransferService {
               accountNumber: senderAccount.accountNumber,
               previousBalance: prevSenderBalance,
               currentBalance: updatedSenderWallet?.availableBalance,
+              version: updatedSenderWallet.version,
             },
             receiver: {
               walletId: receiverWallet.walletId,
@@ -246,6 +248,7 @@ class TransferService {
               accountNumber: receiverAccount.accountNumber,
               previousBalance: prevReceiverBalance,
               currentBalance: updatedReceiverWallet?.availableBalance,
+              version: updatedReceiverWallet?.version,
             },
             amount: dto.amount,
             fee: result.fee, // ← add
@@ -272,7 +275,10 @@ class TransferService {
         currency: dto.currency,
       });
 
-      return result;
+      return {
+        result,
+        senderNewBalance: updatedSenderWallet?.availableBalance,
+      };
     } catch (e) {
       if (!committed) {
         try {
@@ -421,7 +427,7 @@ class TransferService {
       );
       const updatedReceiverWallet = await Wallet.findOneAndUpdate(
         { _id: receiverWallet._id },
-        { $inc: { availableBalance: dto.amount } },
+        { $inc: { availableBalance: dto.amount, version: 1 } },
         { session, new: true },
       );
 
@@ -692,6 +698,34 @@ class TransferService {
       session.endSession();
     }
   }
+
+  public lookupAccount = async (accountNumber: string) => {
+    const account = await Account.findOne({
+      accountNumber,
+      status: "ACTIVE",
+      isPublic: true,
+    })
+      .select("accountNumber type userPublicId")
+      .lean();
+
+    if (!account) {
+      throw new NotFoundError("ACCOUNT_NOT_FOUND");
+    }
+
+    const user = await UserModel.findOne({ userId: account.userPublicId })
+      .select("name userId")
+      .lean();
+
+    if (!user) {
+      throw new NotFoundError("USER_NOT_FOUND");
+    }
+
+    return {
+      accountNumber: account.accountNumber,
+      name: user.name,
+      userId: user.userId,
+    };
+  };
 }
 
 export default TransferService;

@@ -31,8 +31,9 @@ const app = new App(
 );
 
 const start = async () => {
-  await app.initialize();
   app.listen();
+
+  await app.initialize();
 };
 
 start().catch((err) => {

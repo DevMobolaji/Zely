@@ -96,6 +96,7 @@ export async function runTransferConsumer() {
       let envelope: RetryEnvelope;
       try {
         const raw = JSON.parse(message.value.toString());
+
         const parsedPayload =
           typeof raw.payload === "string"
             ? JSON.parse(raw.payload)
@@ -255,9 +256,10 @@ export async function runTransferConsumer() {
 }
 
 export async function stopTransferConsumer() {
-  await Promise.race([
-    transferConsumer.disconnect(),
-    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
-  ]);
-  logger.info("✅ Transfer consumer disconnected");
+  try {
+    await transferConsumer.disconnect();
+    logger.info("✅ Transfer consumer disconnected");
+  } catch (err) {
+    logger.error("Transfer consumer disconnect error", err);
+  }
 }

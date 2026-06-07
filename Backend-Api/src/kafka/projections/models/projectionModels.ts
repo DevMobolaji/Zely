@@ -1,19 +1,18 @@
-
-import mongoose, { Schema, Document } from "mongoose"
+import mongoose, { Schema, Document } from "mongoose";
 
 /* ============================================================
    1️⃣ USER PROFILE PROJECTION
 ============================================================ */
 
 export interface IUserProfile extends Document {
-  userId: string
-  email: string
-  fullName: string
-  kycStatus: string
-  accountStatus: string
-  createdAt: Date
-  updatedAt: Date
-  lastLoginAt?: Date
+  userId: string;
+  email: string;
+  fullName: string;
+  kycStatus: string;
+  accountStatus: string;
+  createdAt: Date;
+  updatedAt: Date;
+  lastLoginAt?: Date;
 }
 
 const UserProfileSchema = new Schema(
@@ -23,7 +22,7 @@ const UserProfileSchema = new Schema(
       required: true,
       immutable: true,
       unique: true,
-      index: true
+      index: true,
     },
 
     email: {
@@ -31,48 +30,49 @@ const UserProfileSchema = new Schema(
       required: true,
       lowercase: true,
       trim: true,
-      index: true
+      index: true,
     },
 
     fullName: {
       type: String,
       required: true,
-      trim: true
+      trim: true,
     },
 
     kycStatus: {
       type: String,
       enum: ["pending", "verified", "rejected"],
       default: "pending",
-      index: true
+      index: true,
     },
 
     accountStatus: {
       type: String,
       enum: ["active", "suspended", "closed"],
       default: "active",
-      index: true
-    }
+      index: true,
+    },
   },
   {
     timestamps: true,
     strict: "throw",
-    versionKey: false
-  }
-)
+    versionKey: false,
+  },
+);
 
 /* ============================================================
    2️⃣ USER WALLET PROJECTION
 ============================================================ */
 
 export interface IUserWallet extends Document {
-  userId: string
-  walletId: string
-  walletType: string
-  currency: string
-  balance: number
-  status: string
-  updatedAt: Date
+  userId: string;
+  walletId: string;
+  walletType: string;
+  currency: string;
+  balance: number;
+  status: string;
+  version: number;
+  updatedAt: Date;
 }
 
 const UserWalletSchema = new Schema(
@@ -82,62 +82,58 @@ const UserWalletSchema = new Schema(
       required: true,
       immutable: true,
       unique: true,
-      index: true
+      index: true,
     },
-
     userId: {
       type: String,
       required: true,
-      index: true
+      index: true,
     },
-
     walletType: {
       type: String,
       enum: ["MAIN_CHECKINGS", "SAVINGS", "VAULT"],
       required: true,
-      index: true
+      index: true,
     },
-
     currency: {
       type: String,
       required: true,
-      uppercase: true
+      uppercase: true,
     },
-
     balance: {
       type: Number,
       required: true,
-      min: 0
+      min: 0,
     },
-
     status: {
       type: String,
       enum: ["active", "frozen", "closed"],
       default: "active",
-      index: true
-    }
+      index: true,
+    },
+    version: {
+      // ← add this
+      type: Number,
+      default: 0,
+    },
   },
-  {
-    timestamps: true,
-    strict: "throw",
-    versionKey: false
-  }
-)
+  { imestamps: true, strict: "throw" },
+);
 
-UserWalletSchema.index({ userId: 1, walletType: 1, walletId: 1 })
+UserWalletSchema.index({ userId: 1, walletType: 1, walletId: 1 });
 
 /* ============================================================
    3️⃣ USER BALANCE SUMMARY (DASHBOARD OPTIMIZED)
 ============================================================ */
 
 export interface IUserBalanceSummary extends Document {
-  userId: string
-  totalBalance: number
-  mainBalance: number
-  savingsBalance: number
-  vaultBalance: number
-  currency: string
-  updatedAt: Date
+  userId: string;
+  totalBalance: number;
+  mainBalance: number;
+  savingsBalance: number;
+  vaultBalance: number;
+  currency: string;
+  updatedAt: Date;
 }
 const UserBalanceSummarySchema = new Schema(
   {
@@ -147,10 +143,10 @@ const UserBalanceSummarySchema = new Schema(
     savingsBalance: { type: Number, default: 0 },
     vaultBalance: { type: Number, default: 0 },
     totalBalance: { type: Number, default: 0 },
-    totalDebit: { type: Number, default: 0 },   // cumulative debits
-    totalCredit: { type: Number, default: 0 },  // cumulative credits
+    totalDebit: { type: Number, default: 0 }, // cumulative debits
+    totalCredit: { type: Number, default: 0 }, // cumulative credits
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 /* ============================================================
@@ -158,20 +154,20 @@ const UserBalanceSummarySchema = new Schema(
 ============================================================ */
 
 export interface IUserTransaction extends Document {
-  userId: string
-  name: string
-  transactionId: string
-  eventId: string
-  reference: string
-  direction: "debit" | "credit"
-  amount: number
-  currency: string
-  walletType: string
-  counterpartyUserId?: string
-  counterpartyName?: string
-  status: string
-  category: string
-  occurredAt: Date
+  userId: string;
+  name: string;
+  transactionId: string;
+  eventId: string;
+  reference: string;
+  direction: "debit" | "credit";
+  amount: number;
+  currency: string;
+  walletType: string;
+  counterpartyUserId?: string;
+  counterpartyName?: string;
+  status: string;
+  category: string;
+  occurredAt: Date;
 }
 
 const UserTransactionSchema = new Schema<IUserTransaction>(
@@ -186,18 +182,19 @@ const UserTransactionSchema = new Schema<IUserTransaction>(
     currency: { type: String, required: true },
     walletType: { type: String, required: true },
     counterpartyUserId: { type: String },
-    // counterpartyName: { type: String },
+    counterpartyName: { type: String },
     status: { type: String, required: true, index: true },
     category: { type: String, required: true, index: true },
     occurredAt: { type: Date, required: true, index: true },
-
   },
-  { timestamps: true }
-)
+  { timestamps: true },
+);
 
 // Optimized pagination index
-UserTransactionSchema.index({ eventId: 1, userId: 1, walletType: 1, occurredAt: -1 }, { unique: true })
-
+UserTransactionSchema.index(
+  { eventId: 1, userId: 1, walletType: 1, occurredAt: -1 },
+  { unique: true },
+);
 
 /* ============================================================
    EXPORT MODELS
@@ -205,20 +202,17 @@ UserTransactionSchema.index({ eventId: 1, userId: 1, walletType: 1, occurredAt: 
 
 export const UserProfileModel = mongoose.model(
   "UserProfile",
-  UserProfileSchema
-)
+  UserProfileSchema,
+);
 
-export const UserWalletModel = mongoose.model(
-  "UserWallet",
-  UserWalletSchema
-)
+export const UserWalletModel = mongoose.model("UserWallet", UserWalletSchema);
 
 export const UserBalanceSummaryModel = mongoose.model(
   "UserBalanceSummary",
-  UserBalanceSummarySchema
-)
+  UserBalanceSummarySchema,
+);
 
 export const UserTransactionModel = mongoose.model(
   "UserTransaction",
-  UserTransactionSchema
-)
+  UserTransactionSchema,
+);
