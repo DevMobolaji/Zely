@@ -119,7 +119,8 @@ export function deviceMiddleware(
     deviceId = generateDeviceId();
     res.cookie("deviceId", deviceId, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
+      //secure: true,
       sameSite: "strict",
       maxAge: 1000 * 60 * 60 * 24 * 365,
     });

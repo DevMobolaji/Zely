@@ -12,6 +12,7 @@ export interface IUserProfile extends Document {
   accountStatus: string;
   createdAt: Date;
   updatedAt: Date;
+  limit: number;
   lastLoginAt?: Date;
 }
 
@@ -111,6 +112,7 @@ const UserWalletSchema = new Schema(
       default: "active",
       index: true,
     },
+    limit: { type: Number, required: true },
     version: {
       // ← add this
       type: Number,
@@ -156,16 +158,19 @@ const UserBalanceSummarySchema = new Schema(
 export interface IUserTransaction extends Document {
   userId: string;
   name: string;
-  transactionId: string;
+  transactionRef: string;
   eventId: string;
-  reference: string;
+  referenceId: string;
   direction: "debit" | "credit";
   amount: number;
   currency: string;
   walletType: string;
   counterpartyUserId?: string;
   counterpartyName?: string;
+  counterpartyWalletType: string;
   status: string;
+  action: string;
+  fee: number;
   category: string;
   occurredAt: Date;
 }
@@ -174,16 +179,19 @@ const UserTransactionSchema = new Schema<IUserTransaction>(
   {
     userId: { type: String, required: true, index: true },
     name: { type: String, required: true, index: true },
-    transactionId: { type: String, required: true, index: true },
-    eventId: { type: String, required: true },
-    reference: { type: String },
+    transactionRef: { type: String, required: true, index: true },
+    referenceId: { type: String, required: true, index: true },
     direction: { type: String, enum: ["debit", "credit"], required: true },
     amount: { type: Number, required: true },
     currency: { type: String, required: true },
     walletType: { type: String, required: true },
     counterpartyUserId: { type: String },
     counterpartyName: { type: String },
+    counterpartyWalletType: { type: String },
+    eventId: { type: String, required: true, index: true },
+    fee: { type: Number, required: true, index: true },
     status: { type: String, required: true, index: true },
+    action: { type: String, required: true, index: true },
     category: { type: String, required: true, index: true },
     occurredAt: { type: Date, required: true, index: true },
   },

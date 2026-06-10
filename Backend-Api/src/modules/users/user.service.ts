@@ -294,6 +294,7 @@ class userService {
             balance: w.balance,
             currency: w.currency,
             status: w.status,
+            limit: w.limit,
             accountNumber: account?.accountNumber ?? null,
             ...getTotals(w.walletType),
           };
@@ -390,6 +391,7 @@ class userService {
     if (query.walletType) filter.walletType = query.walletType;
     if (query.status) filter.status = query.status;
 
+    // Add to the filter
     const [transactions, total] = await Promise.all([
       UserTransactionModel.find(filter)
         .sort({ occurredAt: -1 })
@@ -398,19 +400,20 @@ class userService {
         .lean(),
       UserTransactionModel.countDocuments(filter),
     ]);
-
     return {
       transactions: transactions.map((t) => ({
-        transactionId: t.transactionId,
-        eventId: t.eventId,
+        transactionId: t.transactionRef ?? t.eventId, // ← use eventId as transactionId
         direction: t.direction,
         amount: t.amount,
         currency: t.currency,
         walletType: t.walletType,
         status: t.status,
+        referenceId: t.referenceId,
         category: t.category,
         counterpartyName: t.counterpartyName,
+        counterpartyWalletType: t.counterpartyWalletType,
         name: t.name,
+        fee: t.fee,
         occurredAt: t.occurredAt,
       })),
       pagination: {

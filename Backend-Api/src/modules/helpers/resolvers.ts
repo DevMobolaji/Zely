@@ -1,21 +1,20 @@
+import BadRequestError from "@/shared/errors/badRequest";
+import { NotFoundError } from "@/shared/errors/notFoundError";
 import { ClientSession, Types } from "mongoose";
+import { AccountDocument } from "../account/account.interface";
+import { Account } from "../account/account.model";
 import {
   LedgerAccount,
-  LedgerAccountDocument,
   LedgerAccountType,
   LedgerOwnerType,
 } from "../ledger/ledger.account.model";
-import BadRequestError from "@/shared/errors/badRequest";
+import vaultModel, { VaultDocument } from "../vault/vault.model";
 import {
   IUser,
   Wallet,
   WalletDocument,
   WalletType,
 } from "../wallet/wallet.model";
-import { Account } from "../account/account.model";
-import { NotFoundError } from "@/shared/errors/notFoundError";
-import { AccountDocument } from "../account/account.interface";
-import vaultModel, { VaultDocument } from "../vault/vault.model";
 
 interface IWalletPopulated extends Omit<WalletDocument, "userId"> {
   userId: IUser;
@@ -407,32 +406,6 @@ export const findWalletByType = async (
   return wallet;
 };
 
-export const findVault = async (
-  vaultId: string,
-  currency: string,
-  userId: string,
-  session: ClientSession,
-): Promise<VaultDocument> => {
-  const vault = await vaultModel
-    .findOne({
-      vaultId,
-      currency,
-      userPublicId: userId,
-    })
-    .populate("userId", "email name -_id")
-    .session(session);
-
-  if (!vault) {
-    throw new BadRequestError(`vault not found for ${currency}`);
-  }
-
-  if (vault.status !== "ACTIVE") {
-    throw new BadRequestError("VAULT_NOT_ACTIVE");
-  }
-
-  return vault;
-};
-
 export const resolveAccountByUserId = async (
   userId: string,
   type: string,
@@ -563,4 +536,53 @@ export const lookupVaultLedger = async (
   if (!receiverLedger) throw new BadRequestError("RECEIVER_LEDGER_NOT_FOUND");
 
   return receiverLedger;
+};
+
+//VAULT USAGE
+
+export const mainChecking = async (
+  userPublicId: string,
+  currency: string,
+  type: string,
+  session: ClientSession,
+) => {
+  const wallet = await Wallet.findOne({
+    userPublicId,
+    type,
+    currency,
+  }).session(session);
+
+  if (!wallet) throw new NotFoundError("Main wallet not found");
+
+  if (wallet.status !== "ACTIVE") {
+    throw new BadRequestError("Main wallet is not active");
+  }
+
+  return wallet;
+};
+
+export const findVault = async (
+  vaultId: string,
+  userId: string,
+  currency: string,
+  session: ClientSession,
+): Promise<VaultDocument> => {
+  const vault = await vaultModel
+    .findOne({
+      vaultId,
+      currency,
+      userPublicId: userId,
+    })
+    .populate("userId", "email name -_id")
+    .session(session);
+
+  if (!vault) {
+    throw new BadRequestError(`vault not found for ${currency}`);
+  }
+
+  if (vault.status !== "ACTIVE") {
+    throw new BadRequestError("VAULT_NOT_ACTIVE");
+  }
+
+  return vault;
 };

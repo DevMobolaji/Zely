@@ -137,7 +137,8 @@ class TransferController implements Controller {
   private saveToVault = asyncWrapper(
     async (req: IAuthRequest, res: Response): Promise<Response> => {
       const context = getRequestContext(req);
-      const { amount, currency, vaultId, fromType, toType } = req.body;
+      const { amount, currency, fromType, toType } = req.body;
+      const { vaultId } = req.params;
       const senderId = req.user!.userId;
 
       const dto = {

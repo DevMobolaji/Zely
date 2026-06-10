@@ -5,6 +5,8 @@ export const TransferCompletedV1Schema = BaseEventSchema.extend({
   eventType: z.literal("TRANSACTION_COMPLETED"),
   version: z.literal(1),
   aggregateType: z.literal("TRANSFER"),
+  action: z.string(),
+  status: z.string(),
   aggregateId: z.string(),
   eventId: z.string(),
   payload: z.object({
@@ -35,6 +37,7 @@ export const TransferCompletedV1Schema = BaseEventSchema.extend({
     referenceId: z.string(),
     transactionRef: z.string(),
     transferType: z.string(),
+    limit: z.number(),
     amount: z.number(),
     currency: z.string(),
   }),

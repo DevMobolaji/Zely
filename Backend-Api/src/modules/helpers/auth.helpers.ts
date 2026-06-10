@@ -1,36 +1,38 @@
 import { verifyPassword } from "@/config/password";
-import redis from "@/infrastructure/cache/redis.cli"
+import redis from "@/infrastructure/cache/redis.cli";
+import { revokeAllSessionsFull } from "@/infrastructure/helpers/session.helper";
 
-export const storeResetMetadata = async (email: string, metadata: any): Promise<void> => {
-  await redis.getClient().setex(
-    `password_reset_meta:${email}`,
-    15 * 60,
-    JSON.stringify(metadata)
-    )
-}
+export const storeResetMetadata = async (
+  email: string,
+  metadata: any,
+): Promise<void> => {
+  await redis
+    .getClient()
+    .setex(`password_reset_meta:${email}`, 15 * 60, JSON.stringify(metadata));
+};
 
-export const isPasswordInHistory = async (user: any, newPassword: string): Promise <boolean> => {
-  if(!user.passwordHistory || user.passwordHistory.length === 0) {
+export const isPasswordInHistory = async (
+  user: any,
+  newPassword: string,
+): Promise<boolean> => {
+  if (!user.passwordHistory || user.passwordHistory.length === 0) {
+    return false;
+  }
+
+  for (const oldHash of user.passwordHistory) {
+    console.log(oldHash);
+    const isMatch = await verifyPassword(newPassword, oldHash);
+    if (isMatch) {
+      return true;
+    }
+  }
+
   return false;
-}
+};
 
-for (const oldHash of user.passwordHistory) {
-  console.log(oldHash)
-  const isMatch = await verifyPassword(newPassword, oldHash)
-  if (isMatch) {
-    return true;
-  }
-}
-
-return false;
-}
-    
-export const invalidateAllUsrSess = async (email: string): Promise<void> => {
-    const keys = await redis.getClient().keys(`refresh_token:*:${email}`);
-    if(keys.length > 0) {
-    await redis.getClient().del(...keys);
-  }
-}
+export const invalidateAllUsrSess = async (userId: string): Promise<void> => {
+  await revokeAllSessionsFull(userId);
+};
 
 // export const checkPasswordStrengthc = async (password: string): Promise<isStrong: boolean | string[]> => {
 //   const issues: string[] = [];

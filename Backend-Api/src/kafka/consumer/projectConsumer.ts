@@ -14,7 +14,6 @@ import {
   kafkaProcessingDuration,
 } from "@/infrastructure/resilience/metrics";
 
-
 const PROJECTION_CONSUMER_GROUP = "projection-consumer";
 
 const ProjectionConsumer = kafka.consumer({
@@ -56,8 +55,8 @@ export async function runProjectionConsumer() {
         meta: {
           retryCount: Number(
             message.headers?.["x-retry-count"] ??
-            rawEvent.meta?.retryCount ??
-            0
+              rawEvent.meta?.retryCount ??
+              0,
           ),
           createdAt: rawEvent.meta?.createdAt ?? new Date().toISOString(),
           originalConsumerGroup: PROJECTION_CONSUMER_GROUP,
@@ -70,14 +69,20 @@ export async function runProjectionConsumer() {
 
       logger.info("Received confirmed event for projection");
 
-
       let validatedEvent;
       try {
-        validatedEvent = validateWithSchema(TransferEventSchema, envelope.event);
+        validatedEvent = validateWithSchema(
+          TransferEventSchema,
+          envelope.event,
+        );
       } catch (err: any) {
         logger.warn("Skipping non-transfer event on projection topic");
         await ProjectionConsumer.commitOffsets([
-          { topic, partition, offset: (parseInt(message.offset) + 1).toString() },
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
         ]);
         return;
       }
@@ -94,9 +99,8 @@ export async function runProjectionConsumer() {
       const IdkChks = await initIdempotency(
         envelope.event.eventId,
         topic,
-        PROJECTION_CONSUMER_GROUP
+        PROJECTION_CONSUMER_GROUP,
       );
-
 
       if (IdkChks.decision === "SKIP") {
         kafkaMessagesProcessedTotal.inc({
@@ -105,16 +109,18 @@ export async function runProjectionConsumer() {
         });
         timer();
 
-        await ProjectionConsumer.commitOffsets([{
-          topic, partition,
-          offset: (parseInt(message.offset) + 1).toString(),
-        }]);
+        await ProjectionConsumer.commitOffsets([
+          {
+            topic,
+            partition,
+            offset: (parseInt(message.offset) + 1).toString(),
+          },
+        ]);
         return;
       }
 
       try {
         await withMongoTransaction(async (session) => {
-
           /** -------------------------
            * PROJECTION HANDLER
            * ------------------------- */
@@ -124,18 +130,15 @@ export async function runProjectionConsumer() {
             envelope.event.eventId,
             PROJECTION_CONSUMER_GROUP,
             IdkChks.version,
-            session
+            session,
           );
         });
 
-
-
         // ✅ Success metrics
-        kafkaMessagesProcessedTotal
-          .inc({
-            topic,
-            consumer_group: PROJECTION_CONSUMER_GROUP,
-          });
+        kafkaMessagesProcessedTotal.inc({
+          topic,
+          consumer_group: PROJECTION_CONSUMER_GROUP,
+        });
         timer();
 
         /** -------------------------

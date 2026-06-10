@@ -12,6 +12,8 @@ import WebhookController from "./modules/payments/webhook.controller";
 import ReconciliationController from "./modules/reconciliation/reconciliation.controller";
 import vaultController from "./modules/vault/vault.controller";
 import WalletAdminController from "./modules/wallet/wallet.contoller";
+import NotificationController from "@/modules/notification/notification.controller";
+import { SessionController } from "@/modules/sessions/sesssion.controller";
 
 const app = new App(
   [
@@ -26,6 +28,8 @@ const app = new App(
     new PaymentController(),
     new WebhookController(),
     new UserController(),
+    new NotificationController(),
+    new SessionController(),
   ],
   Number(config.app.port),
 );

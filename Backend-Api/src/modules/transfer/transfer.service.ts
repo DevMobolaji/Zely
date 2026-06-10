@@ -1,3 +1,20 @@
+import { IRequestContext } from "@/config/interfaces/request.interface";
+import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
+import { Account } from "@/modules/account/account.model";
+import {
+  commitTransactionLimits,
+  enforceReceiverBalanceCap,
+  enforceTransactionLimits,
+  rollbackTransactionLimits,
+} from "@/modules/transactionLimit/transactionLimit.service";
+import BadRequestError from "@/shared/errors/badRequest";
+import { NotFoundError } from "@/shared/errors/notFoundError";
+import { logger } from "@/shared/utils/logger";
+import mongoose from "mongoose";
+import { AuditAction, AuditStatus } from "../audit/audit.interface";
+import UserModel from "../auth/authmodel";
+import { calculateFeeBreakdown } from "../fee/transfer.fee.engine";
+import { extEnsureIdempotence } from "../helpers/ext.idempotence";
 import {
   deductWalletFunds,
   ensureWalletsAreActive,
@@ -6,40 +23,26 @@ import {
   lockVaultToPreventConcurrency,
   lockWalletFunds,
   lookUpAccounts,
-  lookUpLedgerAccountforP2P,
   lookUpLedgerAccountForInternalTrx,
+  lookUpLedgerAccountforP2P,
   lookUpPrimaryWallets,
   LookUpVaultLedger,
   resolveAccountByUserId,
   unlockVault,
 } from "../helpers/resolvers";
-import BadRequestError from "@/shared/errors/badRequest";
+import { LedgerOwnerType } from "../ledger/ledger.account.model";
+import {
+  KycTier,
+  TransactionLimitConfig,
+} from "../transactionLimit/transaction.limit.model";
+import vaultModel, { VaultDocument } from "../vault/vault.model";
+import { Wallet, WalletDocument, WalletType } from "../wallet/wallet.model";
 import TransferEngine from "./transfer.engine";
-import { IRequestContext } from "@/config/interfaces/request.interface";
 import {
   internalTransferRequest,
   TransferRequestInput,
   vaultTransferRequest,
 } from "./transfer.interface";
-import mongoose from "mongoose";
-import { Wallet, WalletDocument, WalletType } from "../wallet/wallet.model";
-import vaultModel, { VaultDocument } from "../vault/vault.model";
-import { LedgerOwnerType } from "../ledger/ledger.account.model";
-import { NotFoundError } from "@/shared/errors/notFoundError";
-import { AuditAction, AuditStatus } from "../audit/audit.interface";
-import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
-import { logger } from "@/shared/utils/logger";
-import { extEnsureIdempotence } from "../helpers/ext.idempotence";
-import { calculateFeeBreakdown } from "../fee/transfer.fee.engine";
-import {
-  enforceTransactionLimits,
-  enforceReceiverBalanceCap,
-  commitTransactionLimits,
-  rollbackTransactionLimits,
-} from "@/modules/transactionLimit/transactionLimit.service";
-import { KycTier } from "../transactionLimit/transaction.limit.model";
-import UserModel from "../auth/authmodel";
-import { Account } from "@/modules/account/account.model";
 
 class TransferService {
   public async p2pTransfer(
@@ -70,7 +73,7 @@ class TransferService {
       );
 
       if (!senderAccount || !receiverAccount) {
-        throw new BadRequestError("ACCOUNTS_NOT_FOUND");
+        throw new NotFoundError("ACCOUNTS_NOT_FOUND");
       }
 
       if (senderAccount.userId.equals(receiverAccount.userId)) {
@@ -100,7 +103,7 @@ class TransferService {
       );
 
       if (!senderWallet || !receiverWallet) {
-        throw new BadRequestError("WALLETS_NOT_FOUND");
+        throw new NotFoundError("WALLETS_NOT_FOUND");
       }
 
       /** -------------------------
@@ -132,7 +135,7 @@ class TransferService {
       const senderTier = senderUser?.kycTier ?? KycTier.TIER_1;
       const receiverTier = receiverUser?.kycTier ?? KycTier.TIER_1;
 
-      await enforceTransactionLimits({
+      const tier = await enforceTransactionLimits({
         userId: senderAccount.userId.toString(),
         userPublicId: dto.senderId,
         kycTier: senderTier,
@@ -141,6 +144,8 @@ class TransferService {
         senderWallet,
         session,
       });
+
+      const config = await TransactionLimitConfig.findOne({ tier: tier });
 
       await enforceReceiverBalanceCap({
         receiverWallet,
@@ -257,6 +262,7 @@ class TransferService {
             referenceId: result.referenceId,
             transactionRef: result.transactionRef,
             transferType: "P2P_TRANSFER",
+            limit: config?.maxPerDay,
           },
           aggregateType: "TRANSFER",
           aggregateId: result.transactionRef,
@@ -451,6 +457,7 @@ class TransferService {
               accountNumber: checkingAccount.accountNumber,
               previousBalance: prevSenderBalance,
               currentBalance: updatedSenderWallet?.availableBalance,
+              version: updatedSenderWallet.version,
             },
             receiver: {
               walletId: receiverWallet.walletId,
@@ -461,6 +468,7 @@ class TransferService {
               accountNumber: savingsAccount.accountNumber,
               previousBalance: prevReceiverBalance,
               currentBalance: updatedReceiverWallet?.availableBalance,
+              version: updatedReceiverWallet?.version,
             },
             amount: dto.amount,
             currency: dto.currency,
@@ -626,11 +634,40 @@ class TransferService {
       );
       const updatedVault = await vaultModel.findOneAndUpdate(
         { _id: vault._id },
-        { $inc: { currentBalanceMinor: dto.amount } },
+        {
+          $inc: {
+            currentBalanceMinor: dto.amount,
+            version: (vault as any).version + 1,
+          },
+        },
         { session, new: true },
       );
 
       await unlockVault(vault._id, session);
+
+      if (
+        vault.vaultType === "TARGET" &&
+        vault.targetAmountMinor > 0 &&
+        updatedVault &&
+        updatedVault.currentBalanceMinor >= vault.targetAmountMinor
+      ) {
+        await vaultModel.updateOne(
+          { _id: vault._id },
+          {
+            $set: {
+              "lock.state": "MATURED",
+              status: "COMPLETED",
+            },
+          },
+          { session },
+        );
+
+        logger.info("Target vault goal reached", {
+          vault,
+          targetAmountMinor: vault.targetAmountMinor,
+          currentBalance: updatedVault.currentBalanceMinor,
+        });
+      }
 
       /** -------------------------
        * OUTBOX / EVENT EMISSION
@@ -678,7 +715,15 @@ class TransferService {
        * COMMIT TRANSACTION
        * ------------------------- */
       await session.commitTransaction();
-      return result;
+      return {
+        vault,
+        amount: dto.amount,
+        newBalance: updatedVault?.currentBalanceMinor,
+        targetReached:
+          vault.vaultType === "TARGET" &&
+          updatedVault &&
+          updatedVault?.currentBalanceMinor >= vault.targetAmountMinor,
+      };
     } catch (e) {
       if (!committed) {
         try {

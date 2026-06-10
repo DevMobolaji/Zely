@@ -489,7 +489,7 @@ export async function enforceTransactionLimits({
   currency: string;
   senderWallet: WalletDocument;
   session: ClientSession;
-}): Promise<void> {
+}): Promise<KycTier> {
 
   const DAILY_TX_TTL = 48 * 60 * 60;       // 2 days
   const VELOCITY_TTL = 60 * 60; // 1 hour
@@ -581,6 +581,7 @@ export async function enforceTransactionLimits({
   }
 
   logger.info('All limit checks passed', { userPublicId, amount, currency });
+  return kycTier;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

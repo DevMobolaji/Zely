@@ -21,6 +21,9 @@ import {
 } from "../kafka/projections/models/projectionModels";
 import redis from "@/infrastructure/cache/redis.cli";
 import { socketRegistry } from "@/infrastructure/websockets/socket.registry";
+import NotificationService from "@/modules/notification/notification.service";
+// import notificationService from "@/modules/notifications/notification.service";
+import { NotificationType } from "@/modules/notification/notification.model";
 
 const accountFieldMap: Record<string, string> = {
   MAIN_CHECKINGS: "mainBalance",
@@ -28,21 +31,26 @@ const accountFieldMap: Record<string, string> = {
   VAULT: "vaultBalance",
 };
 
+const notification = new NotificationService();
+
 export async function handleTransactionCompleted(
   topic: string,
   envelope: any,
   session: ClientSession,
 ) {
-  const { payload, eventId, occurredAt } = envelope.event;
+  console.log(envelope);
+  const { payload, eventId, occurredAt, action } = envelope.event;
 
   const {
-    transactionId,
+    transactionRef,
+    referenceId,
     sender,
     receiver,
     amount,
     currency,
-    action,
     transferType,
+    fee,
+    limit,
   } = payload;
 
   const occurredAtDate = new Date(occurredAt);
@@ -50,23 +58,26 @@ export async function handleTransactionCompleted(
   /** -------------------------
    * TRANSACTION PROJECTIONS
    * ------------------------- */
+
   await UserTransactionModel.updateOne(
     { eventId, userId: sender.userId, walletType: sender.accountType },
     {
       $setOnInsert: {
         userId: sender.userId,
         name: sender.name,
-        eventId,
-        transactionId,
+        transactionRef,
         category: transferType,
         direction: "debit",
         amount,
         currency,
+        fee,
         walletType: sender.accountType,
         status: action,
+        referenceId,
         counterpartyUserId: receiver.userId,
         counterpartyName: receiver.name,
         occurredAt: occurredAtDate,
+        counterpartyWalletType: sender.accountType,
       },
     },
     { upsert: true, session },
@@ -78,17 +89,19 @@ export async function handleTransactionCompleted(
       $setOnInsert: {
         userId: receiver.userId,
         name: receiver.name,
-        eventId,
-        transactionId,
+        transactionRef,
         category: transferType,
         direction: "credit",
         amount,
         currency,
+        referenceId,
+        fee,
         walletType: receiver.accountType,
         status: action,
         counterpartyUserId: sender.userId,
         counterpartyName: sender.name,
         occurredAt: occurredAtDate,
+        counterpartyWalletType: sender.accountType,
       },
     },
     { upsert: true, session },
@@ -113,6 +126,7 @@ export async function handleTransactionCompleted(
               balance: sender.currentBalance,
               status: "ACTIVE",
               version: sender.version,
+              limit,
             },
           },
           upsert: true,
@@ -133,6 +147,7 @@ export async function handleTransactionCompleted(
               balance: receiver.currentBalance,
               status: "ACTIVE",
               version: receiver.version,
+              limit,
             },
           },
           upsert: true,
@@ -198,7 +213,7 @@ export async function handleTransactionCompleted(
       direction: "debit",
       amount,
       currency,
-      transactionId,
+      transactionRef,
       occurredAt: occurredAtDate,
     });
 
@@ -210,8 +225,18 @@ export async function handleTransactionCompleted(
       direction: "credit",
       amount,
       currency,
-      transactionId,
+      transactionRef,
       occurredAt: occurredAtDate,
+    });
+
+    await notification.createAndEmit({
+      userId: sender.userId,
+      type: NotificationType.INFO,
+      title: "Internal Transfer",
+      message: `You moved ₦${amount.toLocaleString("en-NG")} from ${sender.accountType === "MAIN_CHECKINGS" ? "Main Checking" : "Savings"} to ${receiver.accountType === "SAVINGS" ? "Savings" : "Main Checking"}`,
+      amount,
+      currency,
+      referenceId: `${transactionRef}:internal`,
     });
 
     logger.info("✅ WebSocket events emitted for internal transfer");
@@ -303,7 +328,7 @@ export async function handleTransactionCompleted(
       direction: "debit",
       amount,
       currency,
-      transactionId,
+      transactionRef,
       occurredAt: occurredAtDate,
     });
 
@@ -315,28 +340,28 @@ export async function handleTransactionCompleted(
       direction: "credit",
       amount,
       currency,
-      transactionId,
+      transactionRef,
       occurredAt: occurredAtDate,
     });
 
-    socketRegistry.emitToUser(sender.userId, "notification:new", {
-      id: eventId,
-      type: "debit",
+    await notification.createAndEmit({
+      userId: sender.userId,
+      type: NotificationType.DEBIT,
       title: "Payment Sent",
       message: `You sent ₦${amount.toLocaleString("en-NG")} to ${receiver.name}`,
       amount,
       currency,
-      occurredAt: occurredAtDate,
+      referenceId: `${transactionRef}:sender`,
     });
 
-    socketRegistry.emitToUser(receiver.userId, "notification:new", {
-      id: eventId,
-      type: "credit",
+    await notification.createAndEmit({
+      userId: receiver.userId,
+      type: NotificationType.CREDIT,
       title: "Payment Received",
       message: `You received ₦${amount.toLocaleString("en-NG")} from ${sender.name}`,
       amount,
       currency,
-      occurredAt: occurredAtDate,
+      referenceId: `${transactionRef}:receiver`,
     });
 
     logger.info("✅ WebSocket events emitted for external transfer");

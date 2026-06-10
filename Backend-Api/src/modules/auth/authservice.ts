@@ -1,53 +1,56 @@
-import User from "./authmodel";
-import AuditLogger from "../audit/audit.service";
-import BadRequestError from "@/shared/errors/badRequest";
-import {
-  issueTokensForUser,
-  signAccessToken,
-  signRefreshToken,
-  verifyRefreshToken,
-} from "@/infrastructure/helpers/token.helper";
-import {
-  deleteRefreshByHash,
-  getLatestHashForDevice,
-  getPayloadByRefreshToken,
-  revokeAllSessions,
-  revokeSession,
-  storeRefreshToken,
-} from "@/infrastructure/helpers/session.helper";
-import { generateResetToken, hashToken } from "@/config/hashToken";
+import { hashToken } from "@/config/hashToken";
 import { IRequestContext } from "@/config/interfaces/request.interface";
-import { AuditAction, AuditStatus } from "../audit/audit.interface";
-import { generateEventId, generateUserId } from "@/shared/utils/id.generator";
-import mongoose from "mongoose";
 import { hashedPassword, verifyPassword } from "@/config/password";
 import {
   emitOutboxEvent,
   getLockTime,
 } from "@/infrastructure/helpers/emit.audit.helper";
+import {
+  getLatestHashForDevice,
+  revokeAllSessionsFull,
+  revokeSessionFull,
+  storeRefreshToken,
+} from "@/infrastructure/helpers/session.helper";
+import {
+  createSession,
+  issueTokensForUser,
+  verifyRefreshToken,
+} from "@/infrastructure/helpers/token.helper";
+import BadRequestError from "@/shared/errors/badRequest";
 import Unauthorized from "@/shared/errors/unauthorized";
+import { generateEventId, generateUserId } from "@/shared/utils/id.generator";
+import mongoose from "mongoose";
+import { AuditAction, AuditStatus } from "../audit/audit.interface";
+import AuditLogger from "../audit/audit.service";
 import { accountStatus } from "./authinterface";
+import User from "./authmodel";
 
+import { deriveOutboxEventId } from "@/events/authProcessor.evt";
+import { markOldTokenForDeletionAfter } from "@/infrastructure/helpers/markOld";
 import OTPManager, { OTPPurpose } from "@/modules/helpers/otp.manager";
+import { NotFoundError } from "@/shared/errors/notFoundError";
 import {
   invalidateAllUsrSess,
   isPasswordInHistory,
   storeResetMetadata,
 } from "../helpers/auth.helpers";
-import { markOldTokenForDeletionAfter } from "@/infrastructure/helpers/markOld";
-import { NotFoundError } from "@/shared/errors/notFoundError";
-import { deriveOutboxEventId } from "@/events/authProcessor.evt";
 
-import jwt from "jsonwebtoken";
-import crypto from "crypto";
-import { PasswordResetTokenModel } from "@/infrastructure/helpers/psdtoken.model";
-import { logger } from "@/shared/utils/logger";
 import { config } from "@/config/index";
+import redis from "@/infrastructure/cache/redis.cli";
+import { PasswordResetTokenModel } from "@/infrastructure/helpers/psdtoken.model";
+import { parseUserAgent } from "@/modules/helpers/parser.agent";
+import { NotificationType } from "@/modules/notification/notification.model";
+import NotificationService from "@/modules/notification/notification.service";
+import { SessionModel } from "@/modules/sessions/session.model";
+import { logger } from "@/shared/utils/logger";
+import crypto from "crypto";
+import jwt from "jsonwebtoken";
 
 class authService {
   private userModel = User;
   private otpManager = new OTPManager();
   private static readonly RESET_TOKEN_TTL_MS = 20 * 60 * 1000; // 20 min
+  private notification = new NotificationService();
 
   private createResponseDTO(
     user: any,
@@ -248,13 +251,35 @@ class authService {
         user!.userId,
       );
 
+      if (!context.deviceId) {
+        throw new BadRequestError("Device ID required");
+      }
+
       // ✅ Only issue tokens after email verification
-      const { accTk, refreshToken } = await issueTokensForUser({
-        _id: user!._id.toString(),
-        userId: user!.userId,
-        email: user!.email,
-        role: user!.role,
-        deviceId: context.deviceId || context.userAgent,
+      const { accTk, refreshToken, payload, jti, accessTokenExp } =
+        await issueTokensForUser({
+          _id: user!._id.toString(),
+          userId: user!.userId,
+          email: user!.email,
+          role: user!.role,
+          deviceId: context.deviceId, // hard error if missing — fix #8
+          passwordVersion: user!.passwordVersion ?? 0,
+          ipAddress: context.ip,
+          userAgent: context.userAgent,
+        });
+
+      await createSession({
+        user: {
+          ...user!.toObject(),
+          deviceId: context.deviceId,
+          userAgent: context.userAgent,
+          ipAddress: context.ip,
+        },
+        accessJti: jti,
+        refreshTokenHash: hashToken(refreshToken),
+        refreshJti: payload.jti,
+        payload,
+        accessTokenExpiresAt: new Date(accessTokenExp * 1000),
       });
 
       return {
@@ -422,13 +447,79 @@ class authService {
       context,
     });
 
-    const { accTk, refreshToken } = await issueTokensForUser({
-      _id: user._id.toString(),
-      userId: user.userId,
-      email: user.email,
-      role: user.role,
-      deviceId: context.deviceId || context.userAgent,
+    if (!context.deviceId) {
+      throw new BadRequestError("Device ID required");
+    }
+
+    const { accTk, refreshToken, payload, hashRf, jti, accessTokenExp } =
+      await issueTokensForUser({
+        _id: user!._id.toString(),
+        userId: user!.userId,
+        email: user!.email,
+        role: user!.role,
+        deviceId: context.deviceId || context.userAgent,
+        passwordVersion: user!.passwordVersion ?? 0,
+        ipAddress: context.ip,
+        userAgent: context.userAgent,
+      });
+
+    const sess = await createSession({
+      user: {
+        ...user.toObject(),
+        deviceId: context.deviceId,
+        userAgent: context.userAgent,
+        ipAddress: context.ip,
+      },
+      accessJti: jti,
+      refreshTokenHash: hashToken(refreshToken),
+      refreshJti: payload.jti,
+      payload,
+      accessTokenExpiresAt: new Date(accessTokenExp * 1000),
     });
+
+    if (!sess) throw new Error("SESSION_CREATION_FAILED");
+
+    const existingDeviceSession = await SessionModel.findOne({
+      userPublicId: user!.userId,
+      deviceId: context.deviceId,
+      isActive: true,
+      sessionId: { $ne: sess }, // ← use sessionId field, not _id
+    }).lean();
+
+    if (!existingDeviceSession) {
+      await this.notification.createAndEmit({
+        userId: user!.userId,
+        type: NotificationType.SECURITY,
+        title: "New Login Detected",
+        message: `New login from ${parseUserAgent(context.userAgent)} at ${context.ip}`,
+        referenceId: `login:${sess}`,
+      });
+    }
+
+    // Fire and forget — MongoDB is source of truth
+    Promise.all([
+      redis
+        .getClient()
+        .set(
+          `${config.redis.latestPrefix}${user._id}:${context.deviceId}`,
+          hashRf.toString(),
+          "EX",
+          60 * 60 * 24 * 7,
+        ),
+      redis
+        .getClient()
+        .set(
+          `user:pwdver:${user._id}`,
+          user.passwordVersion,
+          "EX",
+          60 * 60 * 24 * 7,
+        ),
+    ]).catch((err) =>
+      logger.warn("Redis seed after login failed", {
+        userId: user.userId,
+        err,
+      }),
+    );
 
     AuditLogger.logUserAction(
       context,
@@ -445,40 +536,70 @@ class authService {
       await verifyRefreshToken(refreshToken);
 
     const incomingHash = hashToken(refreshToken);
+    // When issuing new tokens, mark the old hash as "rotated"
+    // not just expired
+    await redis.getClient().set(
+      `rotated:${incomingHash}`,
+      "1",
+      "EX",
+      30, // 30 second grace
+    );
     const latestHash = await getLatestHashForDevice(
       jwtPayload.sub,
       jwtPayload.deviceId,
     );
 
     const GRACE_WINDOW_MS = 30_000;
-    const tokenAge = Date.now() - (storedPayload.iat ?? Date.now());
+    const tokenAge = Date.now() - (storedPayload.iat ?? 0) * 1000;
 
-    if (
-      latestHash &&
-      incomingHash !== latestHash &&
-      tokenAge > GRACE_WINDOW_MS
-    ) {
-      await revokeAllSessions(jwtPayload.sub);
-      throw new Unauthorized("Refresh token reuse detected");
+    if (incomingHash !== latestHash) {
+      // Check if this is a known rotated token (legitimate race)
+      const wasRotated = await redis.getClient().get(`rotated:${incomingHash}`);
+
+      if (!wasRotated) {
+        // Never seen this hash — genuine replay attempt
+        await revokeAllSessionsFull(jwtPayload.sub);
+        throw new Unauthorized("Refresh token reuse detected");
+      }
+
+      // Was legitimately rotated — reject gracefully without revoking
+      throw new Unauthorized("Token already rotated, use new token");
     }
 
     const user = await this.userModel.findById(jwtPayload.sub).exec();
     if (!user) throw new NotFoundError("User not found");
 
-    const { token: newRefresh, payload } = await signRefreshToken(
-      user._id.toString(),
-      user.userId,
-      jwtPayload.deviceId,
-      user.email,
-    );
-
-    const newAccess = await signAccessToken({
-      sub: user._id.toString(),
-      userId: user.userId,
-      email: user.email,
-      role: user.role,
-      deviceId: jwtPayload.deviceId,
+    const {
+      accTk: newAccess,
+      refreshToken: newRefresh,
+      payload,
+      jti,
+      accessTokenExp,
+    } = await issueTokensForUser({
+      _id: user!._id.toString(),
+      userId: user!.userId,
+      email: user!.email,
+      role: user!.role,
+      deviceId: context.deviceId || context.userAgent,
+      passwordVersion: user!.passwordVersion ?? 0,
+      ipAddress: context.ip,
+      userAgent: context.userAgent,
     });
+
+    await SessionModel.updateOne(
+      { userId: jwtPayload.sub, deviceId: jwtPayload.deviceId, isActive: true },
+      {
+        $set: {
+          refreshTokenHash: hashToken(newRefresh),
+          refreshTokenJti: payload.jti,
+          accessTokenJti: jti,
+          accessTokenExpiresAt: new Date(accessTokenExp * 1000),
+          expiresAt: new Date(payload.exp * 1000),
+          lastUsedAt: new Date(),
+          passwordVersion: user.passwordVersion ?? 0, // ← add this
+        },
+      },
+    );
 
     await storeRefreshToken(newRefresh, payload);
     await markOldTokenForDeletionAfter(refreshToken, GRACE_WINDOW_MS);
@@ -693,6 +814,7 @@ class authService {
   ) {
     const normalizedEmail = email.toLowerCase().trim();
     const eventId = generateEventId();
+    const mongoSession = await mongoose.startSession();
 
     if (newPassword !== confirmPassword) {
       throw new BadRequestError("Passwords do not match");
@@ -770,50 +892,54 @@ class authService {
     // 9. Hash and update — bumping passwordVersion invalidates all outstanding tokens
     const hashedPwd = await hashedPassword(newPassword);
 
-    await User.updateOne(
-      { email: normalizedEmail },
-      {
-        $set: {
-          password: hashedPwd,
-          passwordChangedAt: new Date(),
-          failedLoginAttempts: 0,
-          accountLockedUntil: null,
-          passwordResetCount: 0,
-        },
-        $inc: { passwordVersion: 1 },
-        $push: {
-          passwordHistory: {
-            $each: [hashedPwd],
-            $slice: -5,
+    await mongoSession.withTransaction(async () => {
+      await User.updateOne(
+        { email: normalizedEmail },
+        {
+          $set: {
+            password: hashedPwd,
+            passwordChangedAt: new Date(),
+            "security.failedLoginAttempts": 0,
+            "security.lockedUntil": null,
+            "security.lockReason": null,
+          },
+          $inc: { passwordVersion: 1 },
+          $push: {
+            passwordHistory: { $each: [hashedPwd], $slice: -5 },
           },
         },
-      },
-      { runValidators: true },
-    );
+        { session: mongoSession, runValidators: true },
+      );
+
+      // 11. Emit success event
+      await emitOutboxEvent({
+        topic: "password.events",
+        eventId,
+        eventType: AuditAction.PASSWORD_RESET_SUCCESS,
+        action: AuditAction.PASSWORD_RESET_SUCCESS,
+        status: AuditStatus.PENDING,
+        payload: {
+          email: normalizedEmail,
+          name: user.name,
+        },
+        aggregateType: "PASSWORD_RESET_SUCCESS",
+        aggregateId: normalizedEmail,
+        version: 1,
+        context,
+      });
+    });
+
+    mongoSession.endSession();
 
     // 10. Side effects: invalidate sessions, kill any stray OTPs
-    await invalidateAllUsrSess(normalizedEmail);
+    await invalidateAllUsrSess(user._id.toString());
+    await redis
+      .getClient()
+      .del(`${config.redis.pwdverPrefix}${user._id.toString()}`);
     await this.otpManager.invalidate(
       normalizedEmail,
       OTPPurpose.PASSWORD_RESET,
     );
-
-    // 11. Emit success event
-    await emitOutboxEvent({
-      topic: "password.events",
-      eventId,
-      eventType: AuditAction.PASSWORD_RESET_SUCCESS,
-      action: AuditAction.PASSWORD_RESET_SUCCESS,
-      status: AuditStatus.PENDING,
-      payload: {
-        email: normalizedEmail,
-        name: user.name,
-      },
-      aggregateType: "PASSWORD_RESET_SUCCESS",
-      aggregateId: normalizedEmail,
-      version: 1,
-      context,
-    });
 
     AuditLogger.logUserAction(
       context,
@@ -835,21 +961,28 @@ class authService {
     const sub = jwtPayload.sub;
     const deviceId = jwtPayload.deviceId;
 
+    if (!sub) throw new Unauthorized("Missing subject");
+    if (!deviceId) throw new Unauthorized("Missing device ID");
+
     if (context) {
       context.userId = jwtPayload.userId;
       context.email = jwtPayload.email;
       context.deviceId = jwtPayload.deviceId;
     }
 
-    if (!sub && !deviceId) {
-      throw new Unauthorized("Missing tokens");
-    }
-    if (deviceId) {
-      await revokeSession(sub, deviceId);
-    } else {
-      // optional: revoke all devices
-      await revokeAllSessions(sub);
-    }
+    const session = await SessionModel.findOne({
+      userId: sub,
+      deviceId,
+      isActive: true,
+    }).lean();
+
+    await revokeSessionFull(
+      sub,
+      deviceId,
+      session?.accessTokenJti,
+      session?.accessTokenExpiresAt,
+    );
+
     await AuditLogger.logUserAction(
       context,
       AuditAction.USER_LOGOUT,
@@ -863,7 +996,7 @@ class authService {
   public async logoutAll(sub: string, context: IRequestContext) {
     if (!sub) throw new BadRequestError("User ID required");
 
-    await revokeAllSessions(sub);
+    await revokeAllSessionsFull(sub);
 
     await AuditLogger.logUserAction(
       context,
