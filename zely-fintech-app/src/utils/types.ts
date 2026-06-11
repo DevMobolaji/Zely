@@ -34,6 +34,7 @@ export interface Account {
   cardProvider?: "VISA" | "Mastercard";
   cardExpiry?: string;
   cardLast4?: string;
+  limit: number;
 }
 
 export interface Notification {
@@ -64,11 +65,14 @@ export interface ApiTransaction {
   amount: number;
   currency: string;
   walletType: string;
+  fee: number;
   status: string;
   category: string;
   counterpartyName?: string;
+  counterpartyWalletType?: string;
   occurredAt: string;
   name: string;
+  referenceId: string;
 }
 
 export interface ApiWallet {
@@ -80,6 +84,7 @@ export interface ApiWallet {
   accountNumber: string | null;
   totalCredit: number;
   totalDebit: number;
+  limit: number;
 }
 export interface ApiBalanceSummary {
   totalBalance: number;

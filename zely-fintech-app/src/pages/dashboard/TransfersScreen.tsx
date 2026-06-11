@@ -1,6 +1,10 @@
 import axiosPrivate from "@/api/client";
+import { useAuth } from "@/auth/AuthProvider";
 import { useDashboardData } from "@/context/DashboardDataContext";
-import { transactionService } from "@/services/transactionService";
+import {
+  generateIdempotencyKey,
+  transactionService,
+} from "@/services/transactionService";
 import {
   AlertCircle,
   ArrowLeftRight,
@@ -173,6 +177,7 @@ const AccountSelect: React.FC<AccountSelectProps> = ({
 const TransfersScreen: React.FC = () => {
   const location = useLocation();
   const { showToast } = useToast();
+  const { auth } = useAuth();
   const isFunding = location.pathname.includes("fund-wallet");
   // Tab State for Transfers (Internal vs P2P)
   const [transferType, setTransferType] = useState<"internal" | "p2p">(
@@ -205,7 +210,7 @@ const TransfersScreen: React.FC = () => {
   const [destId, setDestId] = useState("");
   const [lookupAttempted, setLookupAttempted] = useState(false);
 
-  const { wallets, refreshWallets } = useDashboardData();
+  const { wallets, refreshWallets, refreshTransactions } = useDashboardData();
 
   useEffect(() => {
     if (!wallets) return;
@@ -222,9 +227,49 @@ const TransfersScreen: React.FC = () => {
   }, [wallets]);
 
   useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const recipient = params.get("recipient");
+    const type = params.get("type");
+    const status = params.get("status");
+    const trxref = params.get("trxref");
+
+    if (trxref && isFunding) {
+      setFundStatus("success");
+      showToast(
+        "success",
+        "Payment received. Wallet will be credited shortly.",
+      );
+      refreshWallets();
+      refreshTransactions();
+    }
+
+    if (type === "p2p") {
+      setTransferType("p2p");
+      if (recipient) setP2pRecipient(decodeURIComponent(recipient));
+    }
+
+    if (status === "success" && isFunding) {
+      setFundStatus("success");
+      showToast(
+        "success",
+        "Payment received. Wallet will be credited shortly.",
+      );
+      refreshWallets();
+      refreshTransactions();
+    }
+  }, [location.search]);
+
+  useEffect(() => {
     if (!amount || Number(amount) <= 0) {
       setFee(null);
       setTotalDeducted(null);
+      return;
+    }
+
+    // No fee for internal transfers
+    if (transferType === "internal") {
+      setFee(0);
+      setTotalDeducted(Number(amount));
       return;
     }
 
@@ -243,7 +288,7 @@ const TransfersScreen: React.FC = () => {
 
     const debounce = setTimeout(fetchFee, 500);
     return () => clearTimeout(debounce);
-  }, [amount]);
+  }, [amount, transferType]);
 
   useEffect(() => {
     if (transferType !== "p2p" || !p2pRecipient || p2pRecipient.length < 10) {
@@ -295,32 +340,54 @@ const TransfersScreen: React.FC = () => {
   // Handle auto directory lookup when P2P recipient changes
 
   const getSourceAccounts = (): Account[] =>
-    (wallets ?? [])
-      .filter((w: { walletType: string }) => w.walletType === "MAIN_CHECKINGS")
-      .map((w: { walletId: any; balance: any; accountNumber: any }) => ({
+    (wallets ?? []).map(
+      (w: {
+        walletId: any;
+        walletType: string;
+        balance: any;
+        accountNumber: any;
+        limit?: any;
+      }) => ({
         id: w.walletId,
-        name: "Main Checking",
-        type: "current" as const,
+        name: w.walletType === "MAIN_CHECKINGS" ? "Main Checking" : "Savings",
+        type:
+          w.walletType === "MAIN_CHECKINGS"
+            ? ("current" as const)
+            : ("savings" as const),
         balance: w.balance,
         currency: "₦",
         number: w.accountNumber ?? "",
         trend: "",
         trendUp: true,
-      }));
+        limit: w.limit,
+      }),
+    );
 
   const getDestAccounts = (): Account[] =>
     (wallets ?? [])
-      .filter((w: { walletType: string }) => w.walletType === "SAVINGS")
-      .map((w: { walletId: any; balance: any; accountNumber: any }) => ({
-        id: w.walletId,
-        name: "Savings",
-        type: "savings" as const,
-        balance: w.balance,
-        currency: "₦",
-        number: w.accountNumber ?? "",
-        trend: "",
-        trendUp: true,
-      }));
+      .filter((w: { walletId: string }) => w.walletId !== sourceId) // exclude currently selected source
+      .map(
+        (w: {
+          walletId: any;
+          walletType: string;
+          balance: any;
+          accountNumber: any;
+          limit: number;
+        }) => ({
+          id: w.walletId,
+          name: w.walletType === "MAIN_CHECKINGS" ? "Main Checking" : "Savings",
+          type:
+            w.walletType === "MAIN_CHECKINGS"
+              ? ("current" as const)
+              : ("savings" as const),
+          balance: w.balance,
+          currency: "₦",
+          number: w.accountNumber ?? "",
+          trend: "",
+          trendUp: true,
+          limit: w.limit,
+        }),
+      );
 
   const handleTypeChange = (type: "internal" | "p2p") => {
     setTransferType(type);
@@ -396,20 +463,48 @@ const TransfersScreen: React.FC = () => {
     setTransferStatus("processing");
 
     try {
-      const response = await transactionService.transfer({
-        amount: Number(amount),
-        accountId: sourceId,
-        type: transferType,
-        recipientAccountNumber:
-          transferType === "p2p" ? p2pRecipient : undefined,
-        destWalletId: transferType === "internal" ? destId : undefined,
-      });
+      if (transferType === "internal") {
+        // Internal transfer — no fee, different endpoint
+        const sourceWallet = wallets?.find(
+          (w: { walletId: string }) => w.walletId === sourceId,
+        );
+        const destWallet = wallets?.find(
+          (w: { walletId: string }) => w.walletId === destId,
+        );
 
-      // Optimistic balance update from API response
-      if (response?.status?.senderNewBalance !== undefined) {
-        // Refresh wallets to reflect new balance
-        refreshWallets();
+        if (!sourceWallet || !destWallet) {
+          showToast("error", "Invalid wallet selection");
+          setTransferStatus("idle");
+          return;
+        }
+
+        await axiosPrivate.post(
+          "/transfer/internal",
+          {
+            amount: Number(amount),
+            currency: "NGN",
+            fromType: sourceWallet.walletType,
+            toType: destWallet.walletType,
+          },
+          {
+            headers: {
+              "X-Idempotency-Key": generateIdempotencyKey(),
+            },
+          },
+        );
+      } else {
+        // P2P transfer
+        await transactionService.transfer({
+          amount: Number(amount),
+          accountId: sourceId,
+          type: "p2p",
+          recipientAccountNumber: p2pRecipient,
+        });
       }
+
+      // Refresh wallets after either transfer type
+      refreshWallets();
+      refreshTransactions();
 
       const finalRecipient =
         transferType === "internal"
@@ -432,45 +527,67 @@ const TransfersScreen: React.FC = () => {
       setTransferStatus("idle");
     }
   };
+
   const handleFunding = async () => {
     if (!fundingAmount || Number(fundingAmount) <= 0) {
       showToast("error", "Please enter a valid amount to fund");
       return;
     }
 
+    if (Number(fundingAmount) < 100) {
+      showToast("error", "Minimum funding amount is ₦100");
+      return;
+    }
+
+    // Get main checking wallet
+    const mainWallet = wallets?.find(
+      (w: { walletType: string }) => w.walletType === "MAIN_CHECKINGS",
+    );
+
+    if (!mainWallet) {
+      showToast("error", "No wallet found");
+      return;
+    }
+
     setFundStatus("processing");
 
     try {
-      const scriptLoaded = await loadPaystackScript();
-      if (!scriptLoaded)
-        throw new Error("Failed to load payment provider script");
-
-      const publicKey = "pk_test_0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a";
-
-      const handler = (window as any).PaystackPop.setup({
-        key: publicKey,
-        email: "user@example.com",
-        amount: Number(fundingAmount) * 100,
+      const response = await axiosPrivate.post("payments/initialize", {
+        amount: Number(fundingAmount),
         currency: "NGN",
-        ref: "fund_" + Math.floor(Math.random() * 1000000000 + 1),
-        callback: (response: any) => {
-          setFundStatus("success");
-          showToast(
-            "success",
-            `Funding successful! Reference: ${response.reference}`,
-          );
-          setFundingAmount("");
-        },
-        onClose: () => {
-          setFundStatus("idle");
-          showToast("error", "Transaction was cancelled");
-        },
+        purpose: "USER_WALLET_FUNDING",
+        targetWalletId: mainWallet.walletId,
+        clientIdempotencyKey: `fund_${mainWallet.walletId}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
       });
 
-      handler.openIframe();
-    } catch (error) {
-      console.error("Payment Error:", error);
-      showToast("error", "Unable to initialize payment. Please try again.");
+      const { reference, authorizationUrl, alreadyExists } = response.data.data;
+
+      const key = `fund_${mainWallet.walletId}_${crypto.randomUUID()}`;
+      const publicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
+
+      if (alreadyExists) {
+        // Transaction already initialized with Paystack — open existing checkout
+        window.open(authorizationUrl, "_blank");
+        setFundStatus("idle");
+        return;
+      }
+
+      console.log("reference being sent to Paystack", reference);
+      console.log("alreadyExists", alreadyExists);
+
+      window.open(authorizationUrl, "_blank");
+
+      setFundStatus("idle");
+      showToast(
+        "success",
+        "Complete your payment in the new tab. Your wallet will be credited automatically.",
+      );
+      setFundingAmount("");
+    } catch (error: any) {
+      const msg =
+        error.response?.data?.message ||
+        "Unable to initialize payment. Please try again.";
+      showToast("error", msg);
       setFundStatus("idle");
     }
   };
@@ -501,6 +618,7 @@ const TransfersScreen: React.FC = () => {
           {fundStatus === "success" ? (
             <div className="text-center py-10 animate-in zoom-in duration-300">
               <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto text-green-500 mb-6">
+                MAX_TRMAX_TRANSFER_LIMITANSFER_LIMITMAX_TRANSFER_LIMIT
                 <CheckCircle2 className="w-10 h-10" />
               </div>
               <h3 className="text-2xl font-black mb-2">Funding Successful!</h3>
@@ -849,7 +967,7 @@ const TransfersScreen: React.FC = () => {
                   Amount
                 </label>
                 <span className="text-xs font-bold text-slate-400">
-                  Limit: ₦{MAX_TRANSFER_LIMIT.toLocaleString()}
+                  Limit: {getAccount(sourceId)?.limit}
                 </span>
               </div>
               <div className="relative">

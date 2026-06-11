@@ -38,7 +38,7 @@ export class PaystackProvider implements PaymentProvider {
 
     const response = await this.client.post("/transaction/initialize", {
       email: params.customerEmail,
-      amount: params.amount, // Paystack expects kobo
+      amount: params.amount * 100, // Paystack expects kobo
       reference: params.reference, // OUR reference — Paystack stores it
       currency: params.currency,
       callback_url: params.callbackUrl,

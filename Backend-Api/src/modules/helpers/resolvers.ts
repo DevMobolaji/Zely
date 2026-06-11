@@ -339,7 +339,6 @@ export const LookUpVaultLedger = async (
   senderAccountId: Types.ObjectId,
   receiverAccountId: Types.ObjectId,
   fromType: string,
-  toType: string,
   session: ClientSession,
 ) => {
   const [senderLedger, receiverLedger] = await Promise.all([
@@ -350,7 +349,7 @@ export const LookUpVaultLedger = async (
 
     LedgerAccount.findOne({
       _id: receiverAccountId,
-      type: toType,
+      type: LedgerAccountType.VAULT,
     }).session(session),
   ]);
 
@@ -575,6 +574,8 @@ export const findVault = async (
     })
     .populate("userId", "email name -_id")
     .session(session);
+
+  console.log(vault);
 
   if (!vault) {
     throw new BadRequestError(`vault not found for ${currency}`);

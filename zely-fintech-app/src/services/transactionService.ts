@@ -1,6 +1,6 @@
 import { axiosPrivate } from "../api/client";
 
-const generateIdempotencyKey = (): string => {
+export const generateIdempotencyKey = (): string => {
   const timestamp = Date.now();
   const random = Array.from(
     { length: 16 },
@@ -74,6 +74,34 @@ export const transactionService = {
     method: string;
   }) => {
     const response = await axiosPrivate.post("/payments/initialize", data);
+    return response.data;
+  },
+
+  // ─── Notifications ───────────────────────────────────────────────────────────
+  getNotifications: async (page: number = 1, limit: number = 20) => {
+    const response = await axiosPrivate.get("/notification", {
+      params: { page, limit },
+    });
+    return response.data;
+  },
+
+  markAllNotificationsRead: async () => {
+    const response = await axiosPrivate.patch("/notification/read");
+    return response.data;
+  },
+
+  markOneNotificationRead: async (id: string) => {
+    const response = await axiosPrivate.patch(`/notification/${id}/read`);
+    return response.data;
+  },
+
+  deleteNotification: async (id: string) => {
+    const response = await axiosPrivate.delete(`/notification/${id}`);
+    return response.data;
+  },
+
+  clearAllNotifications: async () => {
+    const response = await axiosPrivate.delete("/notification");
     return response.data;
   },
 };

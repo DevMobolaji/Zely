@@ -9,19 +9,24 @@ const SOCKET_URL =
 export const useSocket = (
   onBalanceUpdate: (data: BalanceUpdatePayload) => void,
   onNotification: (data: NotificationPayload) => void,
+  onReconnect?: () => void, // ← add this
 ) => {
   const socketRef = useRef<Socket | null>(null);
-
-  // Store latest handlers in refs — updated every render, never stale
   const onBalanceUpdateRef = useRef(onBalanceUpdate);
   const onNotificationRef = useRef(onNotification);
+  const onReconnectRef = useRef(onReconnect); // ← add this
 
   useEffect(() => {
     onBalanceUpdateRef.current = onBalanceUpdate;
   }, [onBalanceUpdate]);
+
   useEffect(() => {
     onNotificationRef.current = onNotification;
   }, [onNotification]);
+
+  useEffect(() => {
+    onReconnectRef.current = onReconnect; // ← add this
+  }, [onReconnect]);
 
   useEffect(() => {
     const token = getAccessToken();
@@ -41,7 +46,11 @@ export const useSocket = (
       console.log("WebSocket connected", data);
     });
 
-    // 👇 Calls through the ref — always latest handler, no re-registration needed
+    socket.on("connect", () => {
+      // Reconnected — might have missed events while offline
+      onReconnectRef.current?.(); // ← add this
+    });
+
     socket.on("balance:updated", (data: BalanceUpdatePayload) => {
       onBalanceUpdateRef.current(data);
     });
@@ -62,7 +71,7 @@ export const useSocket = (
       socket.disconnect();
       socketRef.current = null;
     };
-  }, []); // 👈 Empty deps — socket mounts ONCE, never reconnects due to handler changes
+  }, []);
 
   return socketRef;
 };

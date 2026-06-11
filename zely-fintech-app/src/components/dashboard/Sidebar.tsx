@@ -94,7 +94,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`fixed lg:static inset-y-0 left-0 flex flex-col w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 h-full p-6 justify-between shrink-0 z-50 transition-transform duration-300 lg:translate-x-0 ${isSidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}`}
+      className={`fixed lg:sticky inset-y-0 lg:top-0 left-0 flex flex-col w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 h-full lg:h-screen p-6 justify-between shrink-0 z-50 transition-transform duration-300 lg:translate-x-0 ${isSidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}`}
     >
       <div>
         <div className="flex items-center justify-between mb-8 px-2">

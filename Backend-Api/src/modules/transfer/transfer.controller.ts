@@ -36,7 +36,7 @@ class TransferController implements Controller {
       this.internalTransfer,
     );
     this.route.post(
-      `${this.path}/to-vault`,
+      `${this.path}/:vaultId/deposit`,
       requireConsumerReady,
       requireAuth,
       this.saveToVault,
@@ -140,6 +140,9 @@ class TransferController implements Controller {
       const { amount, currency, fromType, toType } = req.body;
       const { vaultId } = req.params;
       const senderId = req.user!.userId;
+
+      console.log(req.params);
+      console.log(req.body);
 
       const dto = {
         senderId,

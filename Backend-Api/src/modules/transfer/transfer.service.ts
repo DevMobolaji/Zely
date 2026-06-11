@@ -548,7 +548,8 @@ class TransferService {
       /** -------------------------
        * RESOLVE VAULT
        * ------------------------- */
-      vault = await findVault(dto.vaultId, dto.currency, dto.senderId, session);
+      vault = await findVault(dto.vaultId, dto.senderId, dto.currency, session);
+      console.log(vault);
 
       if (vault.userPublicId !== context.userId) {
         throw new BadRequestError("UNAUTHORIZED_TO_TRANSFER_TO_VAULT");
@@ -601,7 +602,6 @@ class TransferService {
         senderAccount.ledgerAccountId,
         vault.ledgerAccountId,
         dto.fromType,
-        dto.toType,
         session,
       );
 

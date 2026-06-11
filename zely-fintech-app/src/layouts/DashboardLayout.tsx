@@ -10,23 +10,23 @@ import {
   Shield,
   Sun,
 } from "lucide-react";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import Sidebar from "../components/dashboard/Sidebar";
 import { useToast } from "../context/ToastContext";
 import { authService } from "../services/auth.services";
 // import ChatAssistant from '../components/ChatAssistant';
-import {
-  DashboardDataProvider,
-  useDashboardData,
-} from "../context/DashboardDataContext";
+import { useDashboardData } from "../context/DashboardDataContext";
 
-import { useCallback } from "react";
 import {
   BalanceUpdatePayload,
   NotificationPayload,
   useSocket,
 } from "../hooks/useSockets";
+import { transactionService } from "../services/transactionService";
+import { useNotifications } from "@/context/notificationCOntext";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/utils/queryKey";
 
 const DashboardLayoutInner: React.FC = () => {
   const navigate = useNavigate();
@@ -37,58 +37,60 @@ const DashboardLayoutInner: React.FC = () => {
   const [showNotifications, setShowNotifications] = useState(false);
   const notificationRef = useRef<HTMLDivElement>(null);
 
-  const [notifications, setNotifications] = useState<NotificationPayload[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const {
-    wallets,
-    loadingWallets,
-    refreshWallets,
-    transactions,
-    loadingTransactions,
-    errorTransactions,
-    refreshTransactions,
-  } = useDashboardData();
+  const queryClient = useQueryClient();
 
-  // ✅ Fix: push credit/debit balance updates into notifications too
+  const { refreshWallets, refreshTransactions } = useDashboardData();
+  const {
+    notifications,
+    unreadCount,
+    markAsRead,
+    markAllAsRead,
+    addNotification,
+  } = useNotifications();
+
   const handleBalanceUpdate = useCallback(
     (data: BalanceUpdatePayload) => {
-      const isCredit = data.direction === "credit";
-
-      //   showToast(
-      //     "success",
-      //     isCredit
-      //       ? `You received ₦${data.amount.toLocaleString("en-NG")} in your ${data.walletType.replace("_", " ").toLowerCase()}`
-      //       : `You sent ₦${data.amount.toLocaleString("en-NG")} from your ${data.walletType.replace("_", " ").toLowerCase()}`,
-      //   );
-
-      refreshWallets();
-      refreshTransactions();
-      //   // 👇 Add to the notifications panel too
-      //   setNotifications((prev) => [
-      //     {
-      //       id: data.transactionId,
-      //       type: isCredit ? "credit" : "debit",
-      //       title: isCredit ? "Payment Received" : "Payment Sent",
-      //       message: isCredit
-      //         ? `You received ₦${data.amount.toLocaleString("en-NG")} in your ${data.walletType.replace("_", " ").toLowerCase()}`
-      //         : `You sent ₦${data.amount.toLocaleString("en-NG")} from your ${data.walletType.replace("_", " ").toLowerCase()}`,
-      //       amount: data.amount,
-      //       currency: data.currency,
-      //       occurredAt: new Date().toISOString(),
-      //     },
-      //     ...prev,
-      //   ]);
-      //   setUnreadCount((prev) => prev + 1);
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.wallets,
+        refetchType: "active", // ← immediately refetch active queries
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.transactions(),
+        refetchType: "active", // ← immediately refetch active queries
+      });
     },
-    [showToast],
+    [queryClient],
   );
-  const handleNotification = (data: NotificationPayload) => {
-    setNotifications((prev) => [data, ...prev]);
-    setUnreadCount((prev) => prev + 1);
-    showToast("success", data.message);
-  };
+  const handleNotification = useCallback(
+    (data: NotificationPayload) => {
+      addNotification({
+        id: data.id ?? Date.now().toString(),
+        type: data.type,
+        title: data.title,
+        message: data.message,
+        amount: data.amount,
+        currency: data.currency,
+        read: false,
+        occurredAt: data.occurredAt,
+        time: "Just now",
+      });
+      showToast("success", data.message);
+    },
+    [addNotification, showToast],
+  );
 
-  useSocket(handleBalanceUpdate, handleNotification);
+  const handleReconnect = useCallback(() => {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.wallets,
+      refetchType: "active",
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.transactions(),
+      refetchType: "active",
+    });
+  }, [queryClient]);
+
+  useSocket(handleBalanceUpdate, handleNotification, handleReconnect);
 
   useEffect(() => {
     const isDarkMode =
@@ -123,8 +125,9 @@ const DashboardLayoutInner: React.FC = () => {
     }
   };
 
-  const handleMarkAllRead = () => {
-    setUnreadCount(0);
+  // Update handleMarkAllRead
+  const handleMarkAllRead = async () => {
+    await markAllAsRead();
   };
 
   const handleLogout = async () => {
@@ -148,11 +151,12 @@ const DashboardLayoutInner: React.FC = () => {
     if (path.includes("/savings")) return "Savings Goals";
     if (path.includes("/profile")) return "My Profile";
     if (path.includes("/settings")) return "Settings";
+    if (path.includes("/notifications")) return "Notifications";
     return "Overview";
   };
 
   return (
-    <div className="flex h-[100dvh] bg-slate-50 dark:bg-black text-slate-900 dark:text-white overflow-hidden font-sans transition-colors duration-300 relative">
+    <div className="flex min-h-screen bg-slate-50 dark:bg-black text-slate-900 dark:text-white font-sans transition-colors duration-300 relative">
       {isSidebarOpen && (
         <div
           className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden animate-in fade-in duration-300"
@@ -167,8 +171,8 @@ const DashboardLayoutInner: React.FC = () => {
         handleLogout={handleLogout}
       />
 
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative animate-enter-fade">
-        <header className="h-20 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md flex items-center justify-between px-4 sm:px-8 z-40 gap-4 shrink-0 animate-enter-slide-down">
+      <main className="flex-1 flex flex-col min-h-screen relative animate-enter-fade">
+        <header className="sticky top-0 h-20 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md flex items-center justify-between px-4 sm:px-8 z-40 gap-4 shrink-0 animate-enter-slide-down">
           <div className="flex items-center gap-4 shrink-0">
             <button
               onClick={() => setIsSidebarOpen(true)}
@@ -214,12 +218,14 @@ const DashboardLayoutInner: React.FC = () => {
                     <h3 className="font-bold text-slate-900 dark:text-white text-sm">
                       Notifications
                     </h3>
-                    <button
-                      onClick={handleMarkAllRead}
-                      className="text-[10px] font-bold text-primary hover:text-primary-dark uppercase tracking-wider flex items-center gap-1"
-                    >
-                      <Check className="w-3 h-3" /> Mark all read
-                    </button>
+                    {notifications.length > 0 && (
+                      <button
+                        onClick={handleMarkAllRead}
+                        className="text-[10px] font-bold text-primary hover:text-primary-dark uppercase tracking-wider flex items-center gap-1"
+                      >
+                        <Check className="w-3 h-3" /> Mark all read
+                      </button>
+                    )}
                   </div>
                   <div className="max-h-[60vh] overflow-y-auto">
                     {notifications.length === 0 ? (
@@ -230,10 +236,19 @@ const DashboardLayoutInner: React.FC = () => {
                         </p>
                       </div>
                     ) : (
-                      notifications.map((note, index) => (
+                      notifications.slice(0, 5).map((note, index) => (
                         <div
-                          key={index}
-                          className="p-4 border-b border-slate-50 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors flex gap-4 cursor-pointer group"
+                          key={note.id ?? index}
+                          onClick={() => {
+                            if (!note.read) {
+                              markAsRead(note.id);
+                            }
+                            navigate("/notifications");
+                            setShowNotifications(false);
+                          }}
+                          className={`p-4 border-b border-slate-50 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors flex gap-4 cursor-pointer group ${
+                            !note.read ? "bg-primary/5 dark:bg-primary/10" : ""
+                          }`}
                         >
                           <div
                             className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1 ${
@@ -262,7 +277,14 @@ const DashboardLayoutInner: React.FC = () => {
                                 {note.title}
                               </h4>
                               <span className="text-[10px] font-medium text-slate-400 whitespace-nowrap ml-2">
-                                {new Date(note.occurredAt).toLocaleTimeString()}
+                                {note.occurredAt
+                                  ? new Date(
+                                      note.occurredAt,
+                                    ).toLocaleTimeString([], {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })
+                                  : note.time || "Just now"}
                               </span>
                             </div>
                             <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed line-clamp-2">
@@ -274,7 +296,10 @@ const DashboardLayoutInner: React.FC = () => {
                     )}
                   </div>
                   <div className="p-2 border-t border-slate-100 dark:border-slate-800 text-center">
-                    <button className="text-xs font-bold text-slate-500 hover:text-primary py-2 w-full transition-colors">
+                    <button
+                      onClick={() => navigate("/notifications")}
+                      className="text-xs font-bold text-slate-500 hover:text-primary py-2 w-full transition-colors"
+                    >
                       View All Notifications
                     </button>
                   </div>
@@ -294,7 +319,7 @@ const DashboardLayoutInner: React.FC = () => {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 pb-24 lg:pb-10 no-scrollbar">
+        <div className="flex-1 p-4 sm:p-6 lg:p-10 pb-24 lg:pb-10">
           <Outlet />
         </div>
 
@@ -309,6 +334,3 @@ const DashboardLayout: React.FC = () => {
 };
 
 export default DashboardLayout;
-
-// export default DashboardLayout;
-// The rule is simple — a component can only consume a context that wraps it from above, never one it renders itself.

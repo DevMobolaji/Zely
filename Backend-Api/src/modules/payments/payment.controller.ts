@@ -25,10 +25,12 @@ class PaymentController implements Controller {
   }
 
   private initializeRoutes(): void {
+    this.route.get(`${this.path}/callback`, this.handleCallback);
+
     this.route.post(
       `${this.path}/initialize`,
       requireAuth,
-      ...paymentInitLimiters, // ← add after auth, before validation
+      //...paymentInitLimiters, // ← add after auth, before validation
       validateRequest(paymentValidation.initialize, "body"),
       this.initializePayment,
     );
@@ -47,6 +49,15 @@ class PaymentController implements Controller {
       this.listMyPayments,
     );
   }
+
+  private handleCallback = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const { trxref, reference } = req.query;
+      return res.redirect(
+        `http://localhost:3002/?trxref=${trxref}&reference=${reference}#/dashboard`,
+      );
+    },
+  );
 
   private initializePayment = asyncWrapper(
     async (req: IAuthRequest, res: Response) => {

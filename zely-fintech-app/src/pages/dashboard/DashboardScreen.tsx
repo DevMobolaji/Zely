@@ -17,17 +17,32 @@ import {
   TransactionType,
 } from "../../utils/types";
 import { useDashboardData } from "@/context/DashboardDataContext";
+import { useToast } from "@/context/ToastContext";
 
 const DashboardScreen: React.FC = () => {
+  const { showToast } = useToast();
   const navigate = useNavigate();
   const {
     wallets,
     loadingWallets,
     transactions,
     loadingTransactions,
+    refreshWallets,
+
     errorTransactions,
     refreshTransactions,
   } = useDashboardData();
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const trxref = params.get("trxref");
+
+    if (trxref) {
+      refreshWallets();
+      refreshTransactions();
+      showToast("success", "Payment received. Wallet has been credited.");
+    }
+  }, [location.search]);
 
   const toTransactionModal = (tx: ApiTransaction): Transaction => ({
     id: tx.transactionId,
@@ -37,7 +52,7 @@ const DashboardScreen: React.FC = () => {
     date: tx.occurredAt,
     status:
       tx.direction === "debit"
-        ? ((tx.status === "TRANSFER_COMPLETED"
+        ? ((tx.status === "TRANSACTION_COMPLETED"
             ? "success"
             : "pending") as TransactionStatus)
         : ("success" as TransactionStatus),
@@ -356,6 +371,7 @@ const DashboardScreen: React.FC = () => {
               loading={loadingTransactions}
               error={errorTransactions}
               data={transactions}
+              isEmpty={!loadingTransactions && transactions.length === 0} // ← explicit empty check
               onRetry={refreshTransactions}
               emptyMessage="No recent transactions found."
             >
@@ -384,9 +400,13 @@ const DashboardScreen: React.FC = () => {
                       </div>
                       <div>
                         <h4 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-primary transition-colors line-clamp-1">
-                          {tx.direction === "debit"
-                            ? `Payment Sent to ${tx.counterpartyName || "Unknown"}`
-                            : `Payment Received from ${tx.counterpartyName || "Unknown"}`}
+                          {tx.category === "INTERNAL_TRANSFER"
+                            ? tx.direction === "debit"
+                              ? `Moved to ${tx.counterpartyWalletType === "SAVINGS" ? "Savings" : "Main Checking"}`
+                              : `Moved from ${tx.counterpartyWalletType === "SAVINGS" ? "Savings" : "Main Checking"}`
+                            : tx.direction === "debit"
+                              ? `Payment Sent to ${tx.counterpartyName ?? "Unknown"}`
+                              : `Payment Received from ${tx.counterpartyName ?? "Unknown"}`}
                         </h4>
                         <p className="text-xs text-slate-500 font-medium">
                           {formatDate(tx.occurredAt)} at{" "}
@@ -410,14 +430,14 @@ const DashboardScreen: React.FC = () => {
                       </span>
                       <span
                         className={`text-[10px] font-bold uppercase tracking-wider ${
-                          tx.status === "TRANSFER_COMPLETED"
+                          tx.status === "TRANSACTION_COMPLETED"
                             ? "text-green-500"
                             : tx.status === "PENDING"
                               ? "text-yellow-500"
                               : "text-red-500"
                         }`}
                       >
-                        {tx.status === "TRANSFER_COMPLETED"
+                        {tx.status === "TRANSACTION_COMPLETED"
                           ? "SUCCESS"
                           : tx.status}
                       </span>
