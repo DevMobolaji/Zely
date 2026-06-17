@@ -12,16 +12,16 @@
 //   throw new PermanentError(`Unsupported topic: ${topic}`);
 // }
 
-import { ClientSession } from "mongoose";
+import redis from "@/infrastructure/cache/redis.cli";
+import { socketRegistry } from "@/infrastructure/websockets/socket.registry";
+import NotificationService from "@/modules/notification/notification.service";
 import { logger } from "@/shared/utils/logger";
+import { ClientSession } from "mongoose";
 import {
   UserBalanceSummaryModel,
   UserTransactionModel,
   UserWalletModel,
-} from "../kafka/projections/models/projectionModels";
-import redis from "@/infrastructure/cache/redis.cli";
-import { socketRegistry } from "@/infrastructure/websockets/socket.registry";
-import NotificationService from "@/modules/notification/notification.service";
+} from "./models/projectionModels";
 // import notificationService from "@/modules/notifications/notification.service";
 import { NotificationType } from "@/modules/notification/notification.model";
 
@@ -38,7 +38,6 @@ export async function handleTransactionCompleted(
   envelope: any,
   session: ClientSession,
 ) {
-  console.log(envelope);
   const { payload, eventId, occurredAt, action } = envelope.event;
 
   const {
@@ -54,6 +53,12 @@ export async function handleTransactionCompleted(
   } = payload;
 
   const occurredAtDate = new Date(occurredAt);
+
+  const walletLabelMap: Record<string, string> = {
+    MAIN_CHECKINGS: "Main Checking",
+    SAVINGS: "Savings",
+    VAULT: "Vault",
+  };
 
   /** -------------------------
    * TRANSACTION PROJECTIONS
@@ -233,7 +238,9 @@ export async function handleTransactionCompleted(
       userId: sender.userId,
       type: NotificationType.INFO,
       title: "Internal Transfer",
-      message: `You moved ₦${amount.toLocaleString("en-NG")} from ${sender.accountType === "MAIN_CHECKINGS" ? "Main Checking" : "Savings"} to ${receiver.accountType === "SAVINGS" ? "Savings" : "Main Checking"}`,
+      message: `You moved ₦${amount.toLocaleString("en-NG")} from ${
+        walletLabelMap[sender.accountType] ?? sender.accountType
+      } to ${walletLabelMap[receiver.accountType] ?? receiver.accountType}`,
       amount,
       currency,
       referenceId: `${transactionRef}:internal`,
@@ -377,10 +384,5 @@ export async function handleTransactionCompleted(
     redis.delete(`transactions:${receiver.userId}`),
   ]);
 
-  logger.info("✅ Redis cache invalidated for both parties", {
-    senderUserId: sender.userId,
-    receiverUserId: receiver.userId,
-  });
-
-  logger.info("✅ WebSocket events emitted to both parties");
+  logger.info("✅ Redis cache invalidated for both parties");
 }

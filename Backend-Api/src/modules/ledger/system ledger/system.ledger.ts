@@ -172,7 +172,7 @@ class SystemLedger {
 
         await emitOutboxEvent(
           {
-            topic: "transaction.events",
+            topic: "transfer.events",
             eventId: txn.transactionRef,
             eventType: AuditAction.TRANSACTION_COMPLETED,
             action: AuditAction.TRANSACTION_COMPLETED,

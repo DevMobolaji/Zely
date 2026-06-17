@@ -16,8 +16,6 @@ export const socketRegistry = {
     sockets.set(socket.id, socket);
 
     logger.info("WebSocket client registered", {
-      userId,
-      socketId: socket.id,
       totalConnections: registry.get(userId)!.size,
     });
   },
@@ -29,10 +27,7 @@ export const socketRegistry = {
     }
     sockets.delete(socketId);
 
-    logger.info("WebSocket client unregistered", {
-      userId,
-      socketId,
-    });
+    logger.info("WebSocket client unregistered");
   },
 
   // Emit event to all sockets for a user (handles multiple tabs)
@@ -47,11 +42,7 @@ export const socketRegistry = {
       const socket = sockets.get(socketId);
       if (socket?.connected) {
         socket.emit(event, data);
-        logger.debug("WebSocket event emitted", {
-          userId,
-          socketId,
-          event,
-        });
+        logger.debug("WebSocket event emitted");
       }
     });
   },

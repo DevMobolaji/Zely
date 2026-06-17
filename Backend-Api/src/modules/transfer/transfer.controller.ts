@@ -141,9 +141,6 @@ class TransferController implements Controller {
       const { vaultId } = req.params;
       const senderId = req.user!.userId;
 
-      console.log(req.params);
-      console.log(req.body);
-
       const dto = {
         senderId,
         amount,

@@ -1,9 +1,4 @@
-/** -------------------------
- * PUBLISH TO CONFIRMED TOPIC
- * Retries inline with exponential backoff.
- * Only routes to DLQ after exhausting all attempts.
- * ------------------------- */
-
+// src/events/publishconfirm.event.ts
 import { withKafkaBreaker } from "@/infrastructure/resilience/breakers/kafka.breaker";
 import { kafkaMessagesProcessedTotal } from "@/infrastructure/resilience/metrics";
 import { producer } from "@/kafka/config";
@@ -11,8 +6,9 @@ import { TOPICS } from "@/kafka/config/kafka.topics";
 import { RetryEnvelope } from "@/kafka/retry.helpers/retry.envelope";
 import { logger } from "@/shared/utils/logger";
 
-export async function onTransferSuccess(
+export async function onEventConfirmed(
   envelope: RetryEnvelope,
+  sourceTopic: string,
   maxAttempts: number = 3,
   baseDelayMs: number = 300,
 ): Promise<void> {
@@ -23,13 +19,14 @@ export async function onTransferSuccess(
     try {
       await withKafkaBreaker(async () => {
         await producer.send({
-          topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
+          topic: TOPICS.CONFIRMED_EVENTS, // ← one generic topic
           messages: [
             {
               key,
               value,
               headers: {
-                "x-source-topic": TOPICS.TRANSACTION_EVENTS,
+                "x-source-topic": sourceTopic,
+                "x-aggregate-type": envelope.event.aggregateType ?? "UNKNOWN",
               },
             },
           ],
@@ -37,11 +34,15 @@ export async function onTransferSuccess(
       }, "publishConfirmedEvent");
 
       kafkaMessagesProcessedTotal.inc({
-        topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
-        consumer_group: "transfer-producer",
+        topic: TOPICS.CONFIRMED_EVENTS,
+        consumer_group: "event-producer",
       });
 
-      logger.info("Event published to confirmed.transfer.events");
+      logger.info("Event published to confirmed.events", {
+        eventId: envelope.event.eventId,
+        aggregateType: envelope.event.aggregateType,
+        sourceTopic,
+      });
       return;
     } catch (err: any) {
       const isLastAttempt = attempt === maxAttempts;
@@ -51,8 +52,6 @@ export async function onTransferSuccess(
           eventId: envelope.event.eventId,
           error: err.message,
         });
-        // Don't throw — outbox pattern guarantees eventual delivery
-        // Debezium will pick up the outbox record and route it when Kafka recovers
         return;
       }
 
@@ -65,3 +64,7 @@ export async function onTransferSuccess(
     }
   }
 }
+
+// Keep backward compat — existing transfer consumer still calls this
+// export const onTransferSuccess = (envelope: RetryEnvelope) =>
+//   onEventConfirmed(envelope, TOPICS.TRANSACTION_EVENTS);

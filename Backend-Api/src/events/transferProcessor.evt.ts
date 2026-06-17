@@ -34,7 +34,7 @@ export async function processTransferEvents(
       throw new PermanentError(`Unsupported event version: ${version}`);
     }
 
-    if (!topic.startsWith("transaction.")) {
+    if (!topic.startsWith("transfer.")) {
       throw new PermanentError(`Unsupported topic: ${topic}`);
     }
 
@@ -57,6 +57,10 @@ export async function processTransferEvents(
           await writeToEmailOutbox(
             {
               jobName: "transferCompleted",
+              jobId,
+              eventId,
+              transactionRef,
+              aggregateType: "TRANSFER",
               payload: {
                 email: receiver.email,
                 name: receiver.name,
@@ -79,10 +83,6 @@ export async function processTransferEvents(
                 type: "INTERNAL_TRANSFER",
                 transferType,
               },
-              jobId,
-              eventId,
-              transactionRef,
-              aggregateType: "TRANSFER",
               envelope,
             },
             session,
@@ -154,7 +154,9 @@ export async function processTransferEvents(
 
           logger.info("P2P transfer emails written to outbox");
         } else if (transferType === "INTERNAL_TRANSFER") {
-          logger.info("No email for internal system transfer yet");
+          logger.info("No email for INTERNAL system transfer yet");
+        } else if (transferType === "VAULT_TRANSFER") {
+          logger.info("No email for VAULT system transfer yet");
         } else {
           throw new PermanentError(`Unsupported transferType: ${transferType}`);
         }

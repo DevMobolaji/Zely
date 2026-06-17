@@ -1,14 +1,16 @@
-import { Router, Response } from "express";
 import Controller from "@/config/interfaces/controller.interfaces";
+import { IAuthRequest } from "@/config/interfaces/request.interface";
+import BadRequestError from "@/shared/errors/badRequest";
+import {
+  getIdempotencyKey,
+  getRequestContext,
+} from "@/shared/middleware/request.context";
+import { generateIdempotencyKey } from "@/shared/utils/id.generator";
+import { Response, Router } from "express";
+import { StatusCodes } from "http-status-codes";
 import asyncWrapper from "shared/middleware/async.wrapper";
 import { requireAuth } from "shared/middleware/auth.middleware";
-import { IAuthRequest } from "@/config/interfaces/request.interface";
-import { getRequestContext } from "@/shared/middleware/request.context";
-import { StatusCodes } from "http-status-codes";
-import BadRequestError from "@/shared/errors/badRequest";
 import vaultService from "./vault.service";
-import validateRequest from "@/shared/middleware/validation.middleware";
-import createVaultSchema from "./vault.validation";
 
 class VaultController implements Controller {
   public path = "/vault";
@@ -26,15 +28,19 @@ class VaultController implements Controller {
       //validateRequest(createVaultSchema, "body"),
       this.createVault,
     );
-    // this.route.post(`${this.path}/:vaultId/deposit`, requireAuth, this.deposit);
-    // this.route.post(
-    //   `${this.path}/:vaultId/withdraw`,
-    //   requireAuth,
-    //   this.withdraw,
-    // );
-    // this.route.get(`${this.path}`, requireAuth, this.listVaults);
-    // this.route.get(`${this.path}/:vaultId`, requireAuth, this.getVault);
-    // this.route.delete(`${this.path}/:vaultId`, requireAuth, this.closeVault);
+    this.route.get(
+      `${this.path}/:vaultId/withdrawal-preview`,
+      requireAuth,
+      this.getWithdrawalPreview,
+    );
+    this.route.post(
+      `${this.path}/:vaultId/withdraw`,
+      requireAuth,
+      this.withdraw,
+    );
+    this.route.get(`${this.path}`, requireAuth, this.listVaults);
+    this.route.get(`${this.path}/:vaultId`, requireAuth, this.getVault);
+    this.route.delete(`${this.path}/:vaultId`, requireAuth, this.closeVault);
   }
 
   private createVault = asyncWrapper(
@@ -43,15 +49,7 @@ class VaultController implements Controller {
       const userId = req.user?.userId;
       if (!userId) throw new BadRequestError("User not authenticated");
 
-      console.log(req.body);
-
-      const {
-        title,
-        vaultType,
-        targetAmountMinor,
-        lockedUntil,
-        penaltyBasisPoints,
-      } = req.body;
+      const { title, vaultType, targetAmountMinor, lockedUntil } = req.body;
 
       const vault = await this.vaultService.createVault({
         userId,
@@ -59,7 +57,6 @@ class VaultController implements Controller {
         vaultType,
         targetAmountMinor,
         lockedUntil,
-        penaltyBasisPoints,
         context,
       });
 
@@ -67,79 +64,84 @@ class VaultController implements Controller {
     },
   );
 
-  // private deposit = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-  //   const context = getRequestContext(req);
-  //   const userId = req.user?.userId;
-  //   const { vaultId } = req.params;
-  //   const { amount } = req.body;
+  private getWithdrawalPreview = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const userId = req.user?.userId;
+      const { vaultId } = req.params;
+      const amount = Number(req.query.amount);
 
-  //   if (!userId) throw new BadRequestError("User not authenticated");
+      if (!userId) throw new BadRequestError("User not authenticated");
+      if (!amount || amount <= 0) throw new BadRequestError("Invalid amount");
 
-  //   const result = await this.vaultService.depositIntoVault({
-  //     userId,
-  //     vaultId,
-  //     amount,
-  //     context,
-  //   });
+      const result = await this.vaultService.getWithdrawalPreview(
+        userId,
+        vaultId,
+        amount,
+      );
 
-  //   return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  // });
+      return res.status(StatusCodes.OK).json({ ok: true, data: result });
+    },
+  );
 
-  // private withdraw = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-  //   const context = getRequestContext(req);
-  //   const userId = req.user?.userId;
-  //   const { vaultId } = req.params;
-  //   const { amount } = req.body;
+  private withdraw = asyncWrapper(async (req: IAuthRequest, res: Response) => {
+    const context = getRequestContext(req);
+    const userId = req.user?.userId;
+    const { vaultId } = req.params;
+    const { amount, currency } = req.body;
 
-  //   if (!userId) throw new BadRequestError("User not authenticated");
+    if (!userId) throw new BadRequestError("User not authenticated");
 
-  //   const result = await this.vaultService.withdrawFromVault({
-  //     userId,
-  //     vaultId,
-  //     amount,
-  //     context,
-  //   });
+    const dto = {
+      userId,
+      amount,
+      currency,
+      vaultId,
+      idempotencyKey: getIdempotencyKey(req) || generateIdempotencyKey(),
+    };
 
-  //   return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  // });
+    const result = await this.vaultService.withdrawFromVault(dto, context);
 
-  // private listVaults = asyncWrapper(
-  //   async (req: IAuthRequest, res: Response) => {
-  //     const userId = req.user?.userId;
-  //     if (!userId) throw new BadRequestError("User not authenticated");
+    return res.status(StatusCodes.OK).json({ ok: true, data: result });
+  });
 
-  //     const vaults = await this.vaultService.getUserVaults(userId);
+  private listVaults = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const userId = req.user?.userId;
+      if (!userId) throw new BadRequestError("User not authenticated");
 
-  //     return res.status(StatusCodes.OK).json({ ok: true, data: vaults });
-  //   },
-  // );
+      const vaults = await this.vaultService.getUserVaults(userId);
 
-  // private getVault = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-  //   const userId = req.user?.userId;
-  //   const { vaultId } = req.params;
-  //   if (!userId) throw new BadRequestError("User not authenticated");
+      return res.status(StatusCodes.OK).json({ ok: true, data: vaults });
+    },
+  );
 
-  //   const vault = await this.vaultService.getVault(userId, vaultId);
+  private getVault = asyncWrapper(async (req: IAuthRequest, res: Response) => {
+    const userId = req.user?.userId;
+    const { vaultId } = req.params;
+    if (!userId) throw new BadRequestError("User not authenticated");
 
-  //   return res.status(StatusCodes.OK).json({ ok: true, data: vault });
-  // });
+    const vault = await this.vaultService.getVault(userId, vaultId);
 
-  // private closeVault = asyncWrapper(
-  //   async (req: IAuthRequest, res: Response) => {
-  //     const context = getRequestContext(req);
-  //     const userId = req.user?.userId;
-  //     const { vaultId } = req.params;
-  //     if (!userId) throw new BadRequestError("User not authenticated");
+    return res.status(StatusCodes.OK).json({ ok: true, data: vault });
+  });
 
-  //     const result = await this.vaultService.closeVault({
-  //       userId,
-  //       vaultId,
-  //       context,
-  //     });
+  private closeVault = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const context = getRequestContext(req);
+      const userId = req.user?.userId;
+      const { vaultId } = req.params;
+      if (!userId) throw new BadRequestError("User not authenticated");
 
-  //     return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  //   },
-  // );
+      const result = await this.vaultService.closeVault({
+        userId,
+        vaultId,
+        context,
+        idempotencyKey: getIdempotencyKey(req) || generateIdempotencyKey(),
+      });
+
+      return res.status(StatusCodes.OK).json({ ok: true, data: result });
+    },
+  );
 }
 
 export default VaultController;

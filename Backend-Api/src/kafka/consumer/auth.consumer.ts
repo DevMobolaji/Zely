@@ -6,7 +6,10 @@ import {
 } from "@/events/idempotency";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "../retry.helpers/retry.envelope";
-import { processAuthEvent } from "@/events/authProcessor.evt";
+import {
+  deriveOutboxEventId,
+  processAuthEvent,
+} from "@/events/authProcessor.evt";
 import { retryOrDLQ } from "../retry.helpers/retry.handler";
 import { validateWithSchema } from "../schema/zod.helper";
 import { AuthEventSchema } from "../schema/user.schema";
@@ -18,20 +21,53 @@ import {
   kafkaMessagesFailedTotal,
   kafkaProcessingDuration,
 } from "@/infrastructure/resilience/metrics";
+import { writeToEmailOutbox } from "@/kafka/emails/write.email";
+import mongoose from "mongoose";
 
 export const AUTH_CONSUMER_GROUP = "auth-consumer";
 
 const authConsumer = kafka.consumer({ groupId: AUTH_CONSUMER_GROUP });
 
 // authProcessor.evt.ts
-export async function onAuthSuccess(result: any): Promise<void> {
+export async function onAuthSuccess(
+  result: any,
+  envelope: RetryEnvelope,
+): Promise<void> {
   if (result?.email) {
-    await emailQueue.add("sendWelcomeEmail", {
-      email: result.email,
-      name: result.name,
-      type: "WELCOME",
-    });
-    logger.info(`[v1] Welcome email queued`);
+    const { eventId, version } = envelope.event;
+    const jobId = deriveOutboxEventId(result.email, "WELCOME_EMAIL", eventId);
+
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await writeToEmailOutbox(
+          {
+            jobName: "sendWelcomeEmail",
+            jobId,
+            eventId,
+            aggregateType: "AUTH",
+            envelope,
+            payload: {
+              email: result.email,
+              name: result.name,
+              type: "WELCOME",
+            },
+          },
+          session,
+        );
+      });
+
+      logger.info(`[v${version}] Welcome email queued`);
+    } catch (err: any) {
+      // Don't rethrow — account provisioning already succeeded.
+      // Poller has no doc to pick up, but this is recoverable manually.
+      logger.error("Failed to queue welcome email", {
+        email: result.email,
+        error: err.message,
+      });
+    } finally {
+      await session.endSession();
+    }
   }
 }
 
@@ -167,7 +203,10 @@ export async function runAuthConsumer() {
           return result;
         });
 
-        await onAuthSuccess(result); // ← trigger side effects on success
+        // TODO: Move welcome email to a USER_ACCOUNT_READY consumer (user.account.ready topic)
+        // Current approach works but the production pattern is choreography via Kafka:
+        // USER_VERIFY_EMAIL_SUCCESS → emitOutboxEvent(USER_ACCOUNT_READY) → consumer → writeToEmailOutbox
+        await onAuthSuccess(result, validatedEnvelope); // ← trigger side effects on success
 
         // ✅ Success metrics
         kafkaMessagesProcessedTotal.inc({

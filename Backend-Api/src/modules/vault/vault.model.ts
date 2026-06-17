@@ -39,6 +39,13 @@ export interface IUser {
   name: string;
 }
 
+export interface ILock {
+  state: "LOCKED" | "UNLOCKED" | "MATURED";
+  lockedAt?: Date;
+  lockedUntil?: Date;
+  penaltyBasisPoints?: number;
+}
+
 export interface VaultDocument extends Document {
   userId: Types.ObjectId;
   userPublicId: string;
@@ -48,7 +55,7 @@ export interface VaultDocument extends Document {
   targetAmountMinor: number;
   targetDeadline: Date;
   currentBalanceMinor: number;
-  lock: { type: typeof LockSchema; default: () => { state: "UNLOCKED" } };
+  lock: ILock;
   autoSave: { type: typeof AutoSaveSchema; default: () => { enabled: false } };
   currency: string;
   availableBalance: number;
@@ -128,6 +135,11 @@ const VaultSchema = new Schema(
     lock: { type: LockSchema, default: () => ({ state: "UNLOCKED" }) },
 
     autoSave: { type: AutoSaveSchema, default: () => ({ enabled: false }) },
+
+    version: {
+      type: Number,
+      default: 0,
+    },
 
     // Lifecycle
     status: {

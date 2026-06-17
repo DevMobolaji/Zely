@@ -324,6 +324,18 @@ services:
       - kafka
     networks:
       - zely_network
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: zely-kafka-exporter
+    restart: unless-stopped
+    command:
+      - "--kafka.server=kafka:9092"
+    ports:
+      - "9308:9308"
+    depends_on:
+      - kafka
+    networks:
+      - zely_network
 
 volumes:
   mongo1_data:

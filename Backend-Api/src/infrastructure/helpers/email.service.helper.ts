@@ -1,10 +1,10 @@
 import { config } from "@/config/index";
-import { Resend } from "resend";
-import { logger } from "@/shared/utils/logger";
-import BadRequestError from "@/shared/errors/badRequest";
-import redis from "../cache/redis.cli";
 import { withResendBreaker } from "@/infrastructure/resilience/breakers/resend.breaker";
 import { emailSendDuration, emailSendTotal } from "@/kafka/emails/email.poller";
+import BadRequestError from "@/shared/errors/badRequest";
+import { logger } from "@/shared/utils/logger";
+import { Resend } from "resend";
+import redis from "../cache/redis.cli";
 // import { emailSendTotal, emailSendDuration } from
 
 const resend = new Resend(config?.email?.apiKey);
@@ -58,6 +58,52 @@ export interface InternalTransferNotificationParams extends BaseTransferParams {
   toNewBalance: number;
   type: string;
 }
+
+const BASE_STYLES = `
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
+  body { font-family: 'JetBrains Mono', monospace; background-color: #f8fafc; margin: 0; padding: 0; letter-spacing: -0.02em; }
+  .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; color: #0f172a; border-radius: 4px; overflow: hidden; border: 1px solid #e2e8f0; }
+  .header { background-color: #ffffff; padding: 32px 40px; border-bottom: 1px solid #e2e8f0; text-align: center; }
+  .header h1 { color: #0f172a; margin: 0; font-size: 24px; font-weight: 700; text-transform: uppercase; letter-spacing: -0.5px; }
+  .content { padding: 40px; }
+  .content p { margin-top: 0; margin-bottom: 24px; font-size: 14px; color: #334155; line-height: 1.6; }
+  .receipt-date { font-size: 12px; color: #64748b; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 16px; display: block; }
+  .details-table { width: 100%; border-collapse: collapse; margin-bottom: 32px; }
+  .details-table th, .details-table td { padding: 16px 0; border-bottom: 1px solid #e2e8f0; text-align: left; }
+  .details-table th { color: #64748b; font-weight: 500; font-size: 12px; width: 40%; text-transform: uppercase; letter-spacing: 0.05em; }
+  .details-table td { color: #0f172a; font-weight: 500; font-size: 14px; text-align: right; }
+  .button-wrap { text-align: center; margin: 32px 0; }
+  .button { display: inline-block; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 4px; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .otp-box {
+  background-color: #f1f5f9;
+  border-radius: 4px;
+  padding: 24px 24px;
+  margin: 24px auto;
+  display: block;
+  width: fit-content;
+  border: 1px solid #e2e8f0;
+  text-align: center;
+  }
+  .otp-code {
+  font-size: 32px;
+  font-weight: 800;
+  color: #2563eb;
+  letter-spacing: 8px;
+  text-indent: 8px; /* compensates for letter-spacing on the left */
+  margin: 0;
+  }
+  .alert-box { padding: 20px 24px; border-radius: 4px; margin: 24px 0; border-left: 4px solid; }
+  .warning-text { font-size: 12px; color: #64748b; text-align: center; margin-top: 32px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .footer { background-color: #f8fafc; padding: 24px 40px; text-align: center; color: #64748b; font-size: 12px; border-top: 1px solid #e2e8f0; }
+  .footer p { margin: 0 0 8px 0; }
+`;
+
+const FOOTER = `
+  <div class="footer">
+    <p>&copy; 2024 Zely Inc. All rights reserved.</p>
+    <p>123 Finance Street, Suite 456, Money City</p>
+  </div>
+`;
 
 // ─── Email Service ────────────────────────────────────────────────────────────
 export class EmailService {
@@ -118,22 +164,25 @@ export class EmailService {
     email: string,
     name: string,
     otp: string,
+    formatedDate: string,
     options?: { idempotencyKey?: string },
   ) {
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2>Welcome to ${config?.app?.name}, ${name}!</h2>
-        <p>Thank you for registering. Please verify your email address to activate your account.</p>
-        <p>Your verification code is:</p>
-        <div style="background-color: #f5f5f5; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
-          <h1 style="margin: 0; color: #007bff; font-size: 36px; letter-spacing: 8px;">${otp}</h1>
-        </div>
-        <p>Enter this code in the app to verify your email.</p>
-        <p style="color: #999; font-size: 12px; margin-top: 24px;">
-          This code will expire in 10 minutes. If you didn't create an account, please ignore this email.
-        </p>
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Your Zely Verification Code</title>
+  <style>${BASE_STYLES}</style></head><body>
+  <div class="container">
+    <div class="header"><h1>Zely Verification</h1></div>
+    <div class="content" style="text-align: center;">
+      <p>Hi ${name},</p>
+      <p>Please use the verification code below to securely access your Zely account.</p>
+      <div class="otp-box">
+        <p class="otp-code">${otp}</p>
       </div>
-    `;
+      <p class="warning-text">This code expires in ${formatedDate ?? "10 minutes"}. Do not share it with anyone.</p>
+      <p style="font-size: 12px; color: #64748b; margin-top: 24px;">If you did not request this code, please ignore this email or contact support immediately.</p>
+    </div>
+    ${FOOTER}
+  </div>
+  </body></html>`;
 
     return this.sendEmail(
       email,
@@ -152,26 +201,32 @@ export class EmailService {
     expiryMinutes: number,
     options?: { idempotencyKey?: string },
   ) {
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2>Password Reset Request</h2>
-        <p>Hi ${name},</p>
-        <p>We received a request to reset your password. Use the code below to reset your password:</p>
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Password Reset Request</title>
+  <style>${BASE_STYLES}</style></head><body>
+  <div class="container">
+    <div class="header"><h1>Password Reset</h1></div>
+    <div class="content">
+      <p>Hi ${name},</p>
+      <p>We received a request to reset your password. Use the code below to reset your password:</p>
+      <div class="button-wrap">
         <div style="background-color: #f5f5f5; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
           <h1 style="margin: 0; color: #dc3545; font-size: 36px; letter-spacing: 8px;">${otp}</h1>
         </div>
-        <p>Enter this code in the app to reset your password.</p>
+      </div>
+      <p>Enter this code in the app to reset your password.</p>
         <p style="color: #999; font-size: 12px; margin-top: 24px;">
           This code will expire in ${expiryMinutes} minutes. If you didn't request this, please ignore this email.
         </p>
-      </div>
-    `;
+    </div>
+    ${FOOTER}
+  </div>
+  </body></html>`;
 
     return this.sendEmail(
       email,
-      "Reset Your Password",
+      "Password Reset Request — Zely",
       html,
-      "password_reset",
+      "password_reset_request",
       options,
     );
   }
@@ -215,19 +270,23 @@ export class EmailService {
     name: string,
     options?: { idempotencyKey?: string },
   ) {
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2>Welcome aboard, ${name}! 🎉</h2>
-        <p>Your email has been verified successfully. Your account is now active!</p>
-        <p>You can now:</p>
-        <ul>
-          <li>Create your first account</li>
-          <li>Make transactions</li>
-          <li>Manage your finances</li>
-        </ul>
-        <p>Thank you for choosing ${config?.app?.name}!</p>
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Welcome to Zely</title>
+  <style>${BASE_STYLES}</style></head><body>
+  <div class="container">
+    <div class="header"><h1>Welcome to Zely</h1></div>
+    <div class="content">
+      <p>Hi ${name} 🎉,</p>
+      <p>Welcome to Zely! We're thrilled to have you on board. Your account has been successfully created, and you're now ready to take full control of your finances.</p>
+      <p>With Zely, you can easily manage your wallets, track transfers, reach savings goals, and monitor your transactions seamlessly.</p>
+      <div class="button-wrap">
+        <a href="" class="button" style="background-color: #2563eb;">Log in to your account</a>
       </div>
-    `;
+      <p>If you have any questions, our support team is always ready to help.</p>
+      <p>Best,<br>The Zely Team</p>
+    </div>
+    ${FOOTER}
+  </div>
+  </body></html>`;
 
     return this.sendEmail(
       email,

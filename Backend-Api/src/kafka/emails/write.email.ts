@@ -1,7 +1,7 @@
-import { logger } from "@/shared/utils/logger"
-import { EmailOutboxModel } from "./email.Outbox"
-import { RetryEnvelope } from "../retry.helpers/retry.envelope"
-import mongoose from "mongoose"
+import { logger } from "@/shared/utils/logger";
+import { EmailOutboxModel } from "./email.Outbox";
+import { RetryEnvelope } from "../retry.helpers/retry.envelope";
+import mongoose from "mongoose";
 
 /** -------------------------
  * WRITE TO EMAIL OUTBOX
@@ -28,7 +28,7 @@ export async function writeToEmailOutbox(
     aggregateType: string;
     envelope: RetryEnvelope;
   },
-  session: mongoose.ClientSession
+  session: mongoose.ClientSession,
 ): Promise<void> {
   try {
     await EmailOutboxModel.create(
@@ -44,7 +44,7 @@ export async function writeToEmailOutbox(
           status: "PENDING",
         },
       ],
-      { session }
+      { session },
     );
   } catch (err: any) {
     // Duplicate jobId — outbox record already exists from a previous attempt

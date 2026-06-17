@@ -19,6 +19,8 @@ export enum LedgerEntryType {
   FEE = "FEE",
   REVERSAL = "REVERSAL",
   EXTERNAL_DEPOSIT = "EXTERNAL_DEPOSIT",
+  VAULT_WITHDRAWAL = "VAULT_WITHDRAWAL",
+  VAULT_PENALTY = "VAULT_PENALTY",
 }
 
 export interface LedgerEntryDocument extends Document {

@@ -267,7 +267,7 @@ class PaymentService {
       // Emit failure event for audit trail
       await emitOutboxEvent({
         topic: "payment.events",
-        eventId: generateEventId(),
+        eventId: initialization.reference,
         eventType: AuditAction.PAYMENT_FAILED,
         action: AuditAction.PAYMENT_FAILED,
         status: AuditStatus.FAILED,
@@ -307,7 +307,7 @@ class PaymentService {
     // ─── 9. Emit outbox event ─────────────────────────────────────────────
     await emitOutboxEvent({
       topic: "payment.events",
-      eventId: generateEventId(),
+      eventId: initialization.reference,
       eventType: AuditAction.PAYMENT_INITIATED,
       action: AuditAction.PAYMENT_INITIATED,
       status: AuditStatus.PENDING,

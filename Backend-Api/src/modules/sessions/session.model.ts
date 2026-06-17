@@ -56,10 +56,10 @@ const SessionSchema = new Schema<SessionDocument>(
   { timestamps: true },
 );
 
-// Compound index for session lookup
-SessionSchema.index({
-  refreshTokenHash: 1,
-});
+// // Compound index for session lookup
+// SessionSchema.index({
+//   refreshTokenHash: 1,
+// });
 SessionSchema.index({ userId: 1, deviceId: 1, isActive: 1, expiresAt: 1 });
 
 // Auto-delete expired sessions

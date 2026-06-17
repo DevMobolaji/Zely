@@ -1,18 +1,16 @@
-import { handleTransactionCompleted } from "@/events/projectionEvt";
+import { completeIdempotency, initIdempotency } from "@/events/idempotency";
+import { withMongoTransaction } from "@/events/mongo.wrapper";
+import {
+  kafkaMessagesFailedTotal,
+  kafkaMessagesProcessedTotal,
+  kafkaProcessingDuration,
+} from "@/infrastructure/resilience/metrics";
+import { logger } from "@/shared/utils/logger";
 import { kafka } from "../config/kafka.config";
 import { TOPICS } from "../config/kafka.topics";
 import { RetryEnvelope } from "../retry.helpers/retry.envelope";
-import { withMongoTransaction } from "@/events/mongo.wrapper";
-import { completeIdempotency, initIdempotency } from "@/events/idempotency";
-import { logger } from "@/shared/utils/logger";
 import { retryOrDLQ } from "../retry.helpers/retry.handler";
-import { validateWithSchema } from "../schema/zod.helper";
-import { TransferEventSchema } from "../schema/transfer.schema";
-import {
-  kafkaMessagesProcessedTotal,
-  kafkaMessagesFailedTotal,
-  kafkaProcessingDuration,
-} from "@/infrastructure/resilience/metrics";
+import { routeToProjectionHandler } from "@/kafka/projections/route.projection";
 
 const PROJECTION_CONSUMER_GROUP = "projection-consumer";
 
@@ -23,27 +21,16 @@ const ProjectionConsumer = kafka.consumer({
 export async function runProjectionConsumer() {
   await ProjectionConsumer.connect();
 
-  // ✅ Now only listens to confirmed events — projections only run
-  // after the transfer consumer has successfully processed and published
   await ProjectionConsumer.subscribe({
-    topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
+    topic: TOPICS.CONFIRMED_EVENTS,
     fromBeginning: false,
   });
 
   await ProjectionConsumer.run({
-    autoCommit: false, // ✅ manual offset control
-    eachMessage: async ({
-      topic,
-      partition,
-      message,
-    }: {
-      topic: string;
-      partition: number;
-      message: any;
-    }) => {
+    autoCommit: false,
+    eachMessage: async ({ topic, partition, message }: any) => {
       if (!message.value) return;
 
-      // ✅ Start processing timer
       const timer = kafkaProcessingDuration.startTimer({
         topic,
         consumer_group: PROJECTION_CONSUMER_GROUP,
@@ -67,39 +54,18 @@ export async function runProjectionConsumer() {
         event: rawEvent.event ?? rawEvent,
       };
 
+      const aggregateType =
+        envelope.event.aggregateType ??
+        message.headers?.["x-aggregate-type"]?.toString() ??
+        "UNKNOWN";
+
       logger.info("Received confirmed event for projection");
-
-      let validatedEvent;
-      try {
-        validatedEvent = validateWithSchema(
-          TransferEventSchema,
-          envelope.event,
-        );
-      } catch (err: any) {
-        logger.warn("Skipping non-transfer event on projection topic");
-        await ProjectionConsumer.commitOffsets([
-          {
-            topic,
-            partition,
-            offset: (parseInt(message.offset) + 1).toString(),
-          },
-        ]);
-        return;
-      }
-
-      const validatedEnvelope: RetryEnvelope = {
-        meta: envelope.meta,
-        event: validatedEvent,
-      };
-
-      /** -------------------------
-       * IDEMPOTENCY CHECK
-       * ------------------------- */
 
       const IdkChks = await initIdempotency(
         envelope.event.eventId,
         topic,
         PROJECTION_CONSUMER_GROUP,
+        envelope.meta.retryCount,
       );
 
       if (IdkChks.decision === "SKIP") {
@@ -108,7 +74,6 @@ export async function runProjectionConsumer() {
           consumer_group: PROJECTION_CONSUMER_GROUP,
         });
         timer();
-
         await ProjectionConsumer.commitOffsets([
           {
             topic,
@@ -121,29 +86,30 @@ export async function runProjectionConsumer() {
 
       try {
         await withMongoTransaction(async (session) => {
-          /** -------------------------
-           * PROJECTION HANDLER
-           * ------------------------- */
-          await handleTransactionCompleted(topic, validatedEnvelope, session);
+          // Route by aggregateType
+          await routeToProjectionHandler(
+            aggregateType,
+            topic,
+            envelope,
+            session,
+          );
 
           await completeIdempotency(
             envelope.event.eventId,
             PROJECTION_CONSUMER_GROUP,
             IdkChks.version,
             session,
+            topic,
+            envelope.meta.retryCount,
           );
         });
 
-        // ✅ Success metrics
         kafkaMessagesProcessedTotal.inc({
           topic,
           consumer_group: PROJECTION_CONSUMER_GROUP,
         });
         timer();
 
-        /** -------------------------
-         * COMMIT OFFSET ON SUCCESS
-         * ------------------------- */
         await ProjectionConsumer.commitOffsets([
           {
             topic,
@@ -152,27 +118,16 @@ export async function runProjectionConsumer() {
           },
         ]);
       } catch (error: any) {
-        logger.error("Projection event processing failed", {
-          topic,
-          eventId: envelope.event.eventId,
-          error: error.message,
-        });
+        logger.error("Projection event processing failed");
 
-        // ✅ Failure metrics
         kafkaMessagesFailedTotal.inc({
           topic,
           consumer_group: PROJECTION_CONSUMER_GROUP,
         });
         timer();
 
-        /** -------------------------
-         * RETRY OR DLQ ON FAILURE
-         * ------------------------- */
         await retryOrDLQ({ topic, message: envelope, error });
 
-        /** -------------------------
-         * COMMIT OFFSET AFTER ROUTING
-         * ------------------------- */
         await ProjectionConsumer.commitOffsets([
           {
             topic,

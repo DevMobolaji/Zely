@@ -33,7 +33,6 @@ import {
 import {
   isTransferConsumerReady,
   runTransferConsumer,
-  stopTransferConsumer,
 } from "@/kafka/consumer/transfer.consumer";
 //import { reconciliationQueue } from '@/workers/reconcileLedger.worker';
 import { kafka } from "@/kafka/config/kafka.config";
@@ -45,7 +44,7 @@ import { runAuthConsumer } from "@/kafka/consumer/auth.consumer";
 // Config
 import { config } from "@/config/index";
 import { startDLQSink } from "@/kafka/consumer/dlq.consumer";
-import { runProjectionConsumer } from "@/kafka/consumer/projectConsumer";
+import { runProjectionConsumer } from "@/kafka/consumer/projection.consumer";
 import { runPasswordConsumer } from "@/kafka/consumer/resetPassword.consumer";
 
 import { runVaultConsumer } from "@/kafka/consumer/vault.consumer";
@@ -56,7 +55,13 @@ import emailQueue from "./queues/email.queue";
 
 import { seedFeeConfig } from "@/infrastructure/seeder/fee.seeder";
 import { initializeSocketServer } from "@/infrastructure/websockets/socket.server";
+import { runFundingConsumer } from "@/kafka/consumer/funding.consumer";
 import { runKycConsumer } from "@/kafka/consumer/kyc.consumer";
+import { runPaymentConsumer } from "@/kafka/consumer/payment.consumer";
+import {
+  runRetryConsumer,
+  signalRetryReady,
+} from "@/kafka/consumer/retry.consumer";
 import ensureSystemLedger from "@/modules/ledger/system ledger/create.system.ledger";
 import { paymentReaperQueue } from "@/modules/payments/payments.reaper";
 import { reconciliationQueue } from "@/modules/reconciliation/reconciliation.scheduler";
@@ -65,9 +70,9 @@ import { Server } from "socket.io";
 import { registry } from "./resilience";
 import { ensureTransactionLimits } from "./seeder/transactionLimits.seeder";
 import {
-  runRetryConsumer,
-  signalRetryReady,
-} from "@/kafka/consumer/retryConsumer";
+  ReconciliationReport,
+  ReconciliationStatus,
+} from "@/modules/reconciliation/reconciliation.model";
 
 class App {
   public express: Application;
@@ -155,7 +160,9 @@ class App {
       await runTransferConsumer();
       await runProjectionConsumer();
       await runVaultConsumer();
+      await runPaymentConsumer();
       await runKycConsumer();
+      await runFundingConsumer();
       await startDLQSink();
 
       // Retry consumer starts and connects, but blocks on retryReadySignal
@@ -290,7 +297,7 @@ class App {
    * ================================================
    */
 
-  private initializeCustomMiddleware(): void {
+  private async initializeCustomMiddleware(): Promise<void> {
     // in initializeCustomMiddleware()
     this.express.use((req, res, next) => {
       if (!this.isReady && req.path !== "/health") {
@@ -308,6 +315,18 @@ class App {
     this.express.use(deviceMiddleware);
     this.express.use(attachRequestContext);
     this.express.use(requestLogger);
+
+    // On app startup
+    await ReconciliationReport.updateMany(
+      { status: ReconciliationStatus.RUNNING },
+      {
+        $set: {
+          status: ReconciliationStatus.FAILED,
+          errorMessage: "Server restarted while reconciliation was running",
+          finishedAt: new Date(),
+        },
+      },
+    );
   }
 
   /**

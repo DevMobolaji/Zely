@@ -15,22 +15,41 @@ export interface TransferRequestInput {
 }
 
 export interface internalTransferRequest {
-  senderId: string,
-  amount: number,
-  currency: string,
-  fromType: string,
-  toType: string,
-  idempotencyKey: string
+  senderId: string;
+  amount: number;
+  currency: string;
+  fromType: string;
+  toType: string;
+  idempotencyKey: string;
 }
 
 export interface vaultTransferRequest {
-  senderId: string,
-  amount: number,
-  currency: string,
-  fromType: string,
-  toType: string,
-  vaultId: string,
-  idempotencyKey: string
+  senderId: string;
+  amount: number;
+  currency: string;
+  fromType: string;
+  toType: string;
+  vaultId: string;
+  idempotencyKey: string;
 }
 
-export type transferType = "INTERNAL_TRANSFER" | "P2P_TRANSFER" | "VAULT_TRANSFER";
+export interface vaultWithrawalRequest {
+  userId: string;
+  vaultId: string;
+  amount: number;
+  currency: string;
+  idempotencyKey: string;
+}
+
+export interface vaultCloseRequest {
+  userId: string;
+  vaultId: string;
+  amount: number;
+  currency: string;
+  idempotencyKey: string;
+}
+
+export type transferType =
+  | "INTERNAL_TRANSFER"
+  | "P2P_TRANSFER"
+  | "VAULT_TRANSFER";

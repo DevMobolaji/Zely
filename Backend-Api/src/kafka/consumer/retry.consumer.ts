@@ -6,16 +6,18 @@ import {
 } from "@/events/idempotency";
 import { kycEvent } from "@/events/kyc.events";
 import { withMongoTransaction } from "@/events/mongo.wrapper";
-import { handleTransactionCompleted } from "@/events/projectionEvt";
+import { processPaymentEvents } from "@/events/payment.events";
 import { processTransferEvents } from "@/events/transferProcessor.evt";
 import {
   kafkaMessagesFailedTotal,
   kafkaMessagesProcessedTotal,
   kafkaProcessingDuration,
 } from "@/infrastructure/resilience/metrics";
+import { onAuthSuccess } from "@/kafka/consumer/auth.consumer";
+import { onEventConfirmed } from "@/kafka/producer/event.producer";
+import { handleTransactionCompleted } from "@/kafka/projections/transfer.projection";
 import { logger } from "@/shared/utils/logger";
 import { ClientSession } from "mongoose";
-import z from "zod";
 import { kafka } from "../config/kafka.config";
 import { sendToRetry } from "../producer/retry.producer";
 import { sendToDLQ } from "../producer/sendToDlq";
@@ -23,17 +25,21 @@ import { ProcessorType, RetryEnvelope } from "../retry.helpers/retry.envelope";
 import {
   AUTH_MAX_RETRIES,
   AUTH_RETRY_LEVELS,
+  FUNDING_MAX_RETRIES,
+  FUNDING_RETRY_LEVELS,
   KYC_MAX_RETRIES,
   KYC_RETRY_LEVELS,
+  PAYMENT_MAX_RETRIES,
+  PAYMENT_RETRY_LEVELS,
   TRANSFER_MAX_RETRIES,
   TRANSFER_RETRY_LEVELS,
+  VAULT_MAX_RETRIES,
+  VAULT_RETRY_LEVELS,
 } from "../retry.helpers/retry.policy";
-import { KycEventSchema } from "../schema/kyc.schema";
-import { TransferEventSchema } from "../schema/transfer.schema";
-import { AuthEventSchema } from "../schema/user.schema";
 import { validateWithSchema } from "../schema/zod.helper";
-import { onAuthSuccess } from "@/kafka/consumer/auth.consumer";
-import { onTransferSuccess } from "@/events/publishconfirm.event";
+import { processFundingEvents } from "@/events/fundingProcessor.evt";
+import { RetryEnvelopeSchema } from "@/kafka/schema/retry.schema";
+import { processVaultEvents } from "@/events/vaultProcessor.evt";
 
 // retry.ready.ts
 let markReady: () => void;
@@ -45,18 +51,6 @@ export const retryReadySignal = new Promise<void>((resolve) => {
 export function signalRetryReady() {
   markReady();
 }
-
-export const RetryEnvelopeSchema = z.object({
-  meta: z.object({
-    retryCount: z.number(),
-    createdAt: z.string(),
-    lastError: z.string().optional(),
-    originalConsumerGroup: z.string().optional(),
-    originalTopic: z.string(),
-    processor: z.enum(["transfer", "projection", "auth", "kyc"]),
-  }),
-  event: z.union([AuthEventSchema, TransferEventSchema, KycEventSchema]),
-});
 
 /** -------------------------
  * PROCESSOR REGISTRY
@@ -75,23 +69,13 @@ interface ProcessorConfig {
   maxRetries: number;
   onSuccess?: (result: any, envelope: RetryEnvelope) => Promise<void>; // ← optional success callback for side effects
 }
-
-// Thin wrapper so handleTransactionCompleted matches ProcessorFn signature
-async function processProjectionEvents(
-  topic: string,
-  envelope: RetryEnvelope,
-  session: ClientSession,
-): Promise<void> {
-  await handleTransactionCompleted(topic, envelope, session);
-}
-
 const PROCESSOR_REGISTRY: Record<ProcessorType, ProcessorConfig> = {
   auth: {
     processor: processAuthEvent,
     retryLevels: AUTH_RETRY_LEVELS,
     maxRetries: AUTH_MAX_RETRIES,
     onSuccess: async (result: any, _envelope: RetryEnvelope) => {
-      await onAuthSuccess(result); // needs result, not envelope
+      await onAuthSuccess(result, _envelope);
     },
   },
   transfer: {
@@ -99,11 +83,11 @@ const PROCESSOR_REGISTRY: Record<ProcessorType, ProcessorConfig> = {
     retryLevels: TRANSFER_RETRY_LEVELS,
     maxRetries: TRANSFER_MAX_RETRIES,
     onSuccess: async (_result: any, envelope: RetryEnvelope) => {
-      await onTransferSuccess(envelope); // needs result, not envelope
+      await onEventConfirmed(envelope, envelope.meta.originalTopic);
     },
   },
   projection: {
-    processor: processProjectionEvents,
+    processor: handleTransactionCompleted,
     retryLevels: TRANSFER_RETRY_LEVELS,
     maxRetries: TRANSFER_MAX_RETRIES,
   },
@@ -111,6 +95,29 @@ const PROCESSOR_REGISTRY: Record<ProcessorType, ProcessorConfig> = {
     processor: kycEvent,
     retryLevels: KYC_RETRY_LEVELS,
     maxRetries: KYC_MAX_RETRIES,
+  },
+  payment: {
+    processor: processPaymentEvents,
+    retryLevels: PAYMENT_RETRY_LEVELS,
+    maxRetries: PAYMENT_MAX_RETRIES,
+  },
+
+  funding: {
+    processor: processFundingEvents,
+    retryLevels: FUNDING_RETRY_LEVELS,
+    maxRetries: FUNDING_MAX_RETRIES,
+    onSuccess: async (_result: any, envelope: RetryEnvelope) => {
+      await onEventConfirmed(envelope, envelope.meta.originalTopic);
+    },
+  },
+
+  vault: {
+    processor: processVaultEvents,
+    retryLevels: VAULT_RETRY_LEVELS,
+    maxRetries: VAULT_MAX_RETRIES,
+    onSuccess: async (_result: any, envelope: RetryEnvelope) => {
+      await onEventConfirmed(envelope, envelope.meta.originalTopic);
+    },
   },
 };
 
@@ -121,6 +128,8 @@ const ALL_RETRY_TOPICS = [
   ...AUTH_RETRY_LEVELS.map((l) => l.topic),
   ...TRANSFER_RETRY_LEVELS.map((l) => l.topic),
   ...KYC_RETRY_LEVELS.map((l) => l.topic),
+  ...PAYMENT_RETRY_LEVELS.map((l) => l.topic),
+  ...FUNDING_RETRY_LEVELS.map((l) => l.topic),
 ];
 
 export async function runRetryConsumer() {
@@ -301,7 +310,7 @@ export async function runRetryConsumer() {
             IdmChks.version,
             session,
             topic,
-            nextRetryCount, // 🔥 ADD THIS
+            nextRetryCount,
           );
 
           return result;
@@ -323,16 +332,9 @@ export async function runRetryConsumer() {
           },
         ]);
 
-        logger.info("Retry processed successfully", {
-          eventId: envelope.event.eventId,
-          retryCount: nextRetryCount,
-        });
+        logger.info("Retry processed successfully");
       } catch (error: any) {
-        logger.error("Retry processing failed", {
-          eventId: envelope.event.eventId,
-          processorType,
-          error: error.message,
-        });
+        logger.error("Retry processing failed");
 
         kafkaMessagesFailedTotal.inc({
           topic,

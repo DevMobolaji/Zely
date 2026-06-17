@@ -133,12 +133,7 @@ async function pollOnce(): Promise<void> {
         },
       );
 
-      logger.info("Email outbox job dispatched", {
-        jobId: job.jobId,
-        jobName: job.jobName,
-        eventId: job.eventId,
-        transactionRef: job.transactionRef,
-      });
+      logger.info("Email outbox job dispatched");
     } catch (err: any) {
       const nextAttempts = job.attempts + 1;
       const exhausted = nextAttempts >= MAX_ATTEMPTS;

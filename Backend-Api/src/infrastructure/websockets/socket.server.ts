@@ -49,26 +49,17 @@ export function initializeSocketServer(httpServer: HttpServer): Server {
     // Send confirmation to client
     socket.emit("connected", {
       message: "WebSocket connected successfully",
-      userId,
     });
 
     // Handle disconnection
     socket.on("disconnect", (reason) => {
       socketRegistry.unregister(userId, socket.id);
-      logger.info("WebSocket client disconnected", {
-        userId,
-        socketId: socket.id,
-        reason,
-      });
+      logger.info("WebSocket client disconnected");
     });
 
     // Handle errors
     socket.on("error", (err) => {
-      logger.error("WebSocket error", {
-        userId,
-        socketId: socket.id,
-        error: err.message,
-      });
+      logger.error("WebSocket error");
     });
   });
 

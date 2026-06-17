@@ -172,6 +172,7 @@ export interface IUserTransaction extends Document {
   action: string;
   fee: number;
   category: string;
+  penaltyReason?: string;
   occurredAt: Date;
 }
 
@@ -194,6 +195,7 @@ const UserTransactionSchema = new Schema<IUserTransaction>(
     action: { type: String, required: true, index: true },
     category: { type: String, required: true, index: true },
     occurredAt: { type: Date, required: true, index: true },
+    penaltyReason: { type: String, required: true, index: true },
   },
   { timestamps: true },
 );

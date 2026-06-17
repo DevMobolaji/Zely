@@ -37,7 +37,7 @@ export const TransferCompletedV1Schema = BaseEventSchema.extend({
     referenceId: z.string(),
     transactionRef: z.string(),
     transferType: z.string(),
-    limit: z.number(),
+    limit: z.number().optional(),
     amount: z.number(),
     currency: z.string(),
   }),

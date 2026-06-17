@@ -1,31 +1,44 @@
-// src/modules/reconciliation/reconciliation.service.ts
 import mongoose, { Types } from "mongoose";
-import { LedgerAccount } from "@/modules/ledger/ledger.account.model"
+import {
+  LedgerAccount,
+  LedgerAccountType,
+  LedgerOwnerType,
+} from "@/modules/ledger/ledger.account.model";
 import {
   ReconciliationReport,
   ReconciliationStatus,
   DriftSeverity,
   IDriftRecord,
+  DriftResolutionType,
 } from "./reconciliation.model";
 import { logger } from "@/shared/utils/logger";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import { generateEventId } from "@/shared/utils/id.generator";
 import { IRequestContext } from "@/config/interfaces/request.interface";
-import { reconcileLedgerAccount } from "./reconciliation.helper";
+import {
+  checkSystemBalanceInvariant,
+  reconcileLedgerAccount,
+  reconcilePaystackSettlements,
+} from "./reconciliation.helpers";
+import { Wallet, WalletStatus } from "@/modules/wallet/wallet.model";
+import TransactionBuilder from "@/modules/ledger/ledger.transaction.builder";
+import { LedgerEntryNature } from "@/modules/ledger/ledger.entry.model";
+import { config } from "@/config/index";
+import BadRequestError from "@/shared/errors/badRequest";
+import redis from "@/infrastructure/cache/redis.cli";
 
 const BATCH_SIZE = 100;
 
-
 class ReconciliationService {
-
+  // Public API: reconcile a single account
   public async reconcileSingleAccount(
     ledgerAccountId: string,
     context: IRequestContext,
-    options: { freezeOnDrift?: boolean; triggeredByUserId?: string } = {}
+    options: { freezeOnDrift?: boolean; triggeredByUserId?: string } = {},
   ) {
     const ledgerAccount = await LedgerAccount.findById(ledgerAccountId).lean();
-    if (!ledgerAccount) throw new Error("LEDGER_ACCOUNT_NOT_FOUND");
+    if (!ledgerAccount) throw new Error("ledger account not found");
 
     const report = await ReconciliationReport.create({
       status: ReconciliationStatus.RUNNING,
@@ -35,7 +48,9 @@ class ReconciliationService {
       drifts: [],
       triggeredBy: "MANUAL",
       triggeredByUserId: options.triggeredByUserId
-        ? mongoose.Types.ObjectId.createFromHexString(options.triggeredByUserId) as any
+        ? (mongoose.Types.ObjectId.createFromHexString(
+            options.triggeredByUserId,
+          ) as any)
         : undefined,
     });
 
@@ -44,7 +59,8 @@ class ReconciliationService {
         freezeOnDrift: options.freezeOnDrift ?? true,
       });
 
-      const driftsFound = driftRecord.severity !== DriftSeverity.IN_SYNC ? 1 : 0;
+      const driftsFound =
+        driftRecord.severity !== DriftSeverity.IN_SYNC ? 1 : 0;
       const finishedAt = new Date();
 
       report.status = ReconciliationStatus.COMPLETED;
@@ -65,13 +81,16 @@ class ReconciliationService {
     }
   }
 
-  // ─── Public API: reconcile every active ledger account ───────────────
+  // ─── Public API: reconcile every active ledger account
   public async reconcileAllAccounts(
     context: IRequestContext,
-    options: { freezeOnDrift?: boolean; triggeredBy?: "SCHEDULED" | "MANUAL", triggeredByUserId?: string } = {}
+    options: {
+      freezeOnDrift?: boolean;
+      triggeredBy?: "SCHEDULED" | "MANUAL";
+      triggeredByUserId?: string;
+    } = {},
   ) {
     const triggeredBy = options.triggeredBy ?? "SCHEDULED";
-
 
     const report = await ReconciliationReport.create({
       status: ReconciliationStatus.RUNNING,
@@ -81,11 +100,47 @@ class ReconciliationService {
       drifts: [],
       triggeredBy,
       triggeredByUserId: options.triggeredByUserId
-        ? mongoose.Types.ObjectId.createFromHexString(options.triggeredByUserId) as any
+        ? (mongoose.Types.ObjectId.createFromHexString(
+            options.triggeredByUserId,
+          ) as any)
         : undefined,
     });
 
-    logger.info("🔍 Reconciliation run started", { runId: report.runId, triggeredBy });
+    logger.info("🔍 Reconciliation run started", {
+      runId: report.runId,
+      triggeredBy,
+    });
+
+    const lockKey = "reconciliation:global:lock";
+    const lockTtl = 60 * 60; // 1 hour max
+
+    const acquired = await redis.getClient().set(
+      lockKey,
+      report.runId,
+      "EX",
+      lockTtl,
+      "NX", // only set if not exists
+    );
+
+    if (!acquired) {
+      const currentLock = await redis.get(lockKey);
+      logger.warn("Reconciliation already running, skipping", {
+        runningRunId: currentLock,
+      });
+
+      // Mark this report as skipped
+      await ReconciliationReport.updateOne(
+        { _id: report._id },
+        {
+          $set: {
+            status: ReconciliationStatus.FAILED,
+            errorMessage: `Skipped — another run (${currentLock}) is already in progress`,
+            finishedAt: new Date(),
+          },
+        },
+      );
+      return;
+    }
 
     try {
       //const totalAccounts = await LedgerAccount.countDocuments({});
@@ -106,8 +161,8 @@ class ReconciliationService {
             batch.map((acc) =>
               reconcileLedgerAccount(acc, context, {
                 freezeOnDrift: options.freezeOnDrift ?? true,
-              })
-            )
+              }),
+            ),
           );
 
           for (const d of batchDrifts) {
@@ -128,8 +183,8 @@ class ReconciliationService {
           batch.map((acc) =>
             reconcileLedgerAccount(acc, context, {
               freezeOnDrift: options.freezeOnDrift ?? true,
-            })
-          )
+            }),
+          ),
         );
 
         for (const d of batchDrifts) {
@@ -188,19 +243,22 @@ class ReconciliationService {
         runId: report.runId,
         error: err.message,
       });
-
       throw err;
+    } finally {
+      await redis.delete(lockKey);
     }
   }
 
-  // ─── Public API: list past reports (admin dashboard) ─────────────────
-  public async getReports(filters: {
-    status?: ReconciliationStatus;
-    triggeredBy?: "SCHEDULED" | "MANUAL";
-    onlyWithDrifts?: boolean;
-    limit?: number;
-    skip?: number;
-  } = {}) {
+  // ─── Public API: list past reports (admin dashboard)
+  public async getReports(
+    filters: {
+      status?: ReconciliationStatus;
+      triggeredBy?: "SCHEDULED" | "MANUAL";
+      onlyWithDrifts?: boolean;
+      limit?: number;
+      skip?: number;
+    } = {},
+  ) {
     const query: any = {};
     if (filters.status) query.status = filters.status;
     if (filters.triggeredBy) query.triggeredBy = filters.triggeredBy;
@@ -213,11 +271,311 @@ class ReconciliationService {
       .lean();
   }
 
-  // ─── Public API: get one report by runId ─────────────────────────────
+  // ─── Public API: get one report by runId
   public async getReportById(runId: string) {
     const report = await ReconciliationReport.findOne({ runId }).lean();
-    if (!report) throw new Error("REPORT_NOT_FOUND");
+    if (!report) throw new BadRequestError("Report not found");
     return report;
+  }
+
+  public async resolveDrift(params: {
+    runId: string;
+    ledgerAccountPublicId: string;
+    resolutionType: DriftResolutionType;
+    notes: string;
+    adminId: string;
+    adminPublicId: string;
+    applyCorrection: boolean; // write compensating ledger entry?
+    context: IRequestContext;
+  }) {
+    const {
+      runId,
+      ledgerAccountPublicId,
+      resolutionType,
+      notes,
+      adminId,
+      adminPublicId,
+      applyCorrection,
+      context,
+    } = params;
+
+    // Find the report
+    const report = await ReconciliationReport.findOne({ runId });
+    if (!report) throw new BadRequestError("Report not found");
+
+    // Find the specific drift
+    const driftIndex = report.drifts.findIndex(
+      (d) => d.ledgerAccountPublicId === ledgerAccountPublicId,
+    );
+
+    if (driftIndex === -1)
+      throw new BadRequestError("Drift not found in report");
+
+    const drift = report.drifts[driftIndex];
+
+    if (drift.resolvedAt) {
+      throw new BadRequestError("Drift already resolved");
+    }
+
+    let compensatingEntryRef: string | undefined;
+
+    // Apply correction if requested
+    if (applyCorrection && resolutionType === DriftResolutionType.CORRECTED) {
+      compensatingEntryRef = await this.applyCompensatingEntry(
+        drift,
+        adminPublicId,
+        context,
+      );
+    }
+
+    // Mark drift as resolved
+    report.drifts[driftIndex] = {
+      ...drift,
+      resolvedAt: new Date(),
+      resolvedBy: adminPublicId,
+      resolutionType,
+      resolutionNotes: notes,
+      compensatingEntryRef,
+    };
+
+    report.markModified("drifts");
+    await report.save();
+
+    // Unfreeze wallet if it was frozen due to this drift
+    if (resolutionType !== DriftResolutionType.ESCALATED) {
+      const ledgerAccount = await LedgerAccount.findOne({
+        ledgerAccountId: ledgerAccountPublicId,
+      }).lean();
+
+      if (ledgerAccount) {
+        const wallet = await Wallet.findOne({
+          ledgerAccountId: ledgerAccount._id,
+        });
+
+        if (wallet && wallet.status === WalletStatus.RECONCILING) {
+          await Wallet.updateOne(
+            { _id: wallet._id },
+            {
+              $set: {
+                status: WalletStatus.ACTIVE,
+                freezeReason: null,
+                freezeUntil: null,
+              },
+            },
+          );
+
+          logger.info("Wallet unfrozen after drift resolution", {
+            walletId: wallet.walletId,
+            resolvedBy: adminPublicId,
+            resolutionType,
+          });
+        }
+      }
+    }
+
+    // Emit audit event
+    await emitOutboxEvent({
+      topic: "reconciliation.events",
+      eventId: generateEventId(),
+      eventType: AuditAction.RECONCILIATION_DRIFT_RESOLVED,
+      action: AuditAction.RECONCILIATION_DRIFT_RESOLVED,
+      status: AuditStatus.PENDING,
+      payload: {
+        runId,
+        ledgerAccountPublicId,
+        resolutionType,
+        notes,
+        resolvedBy: adminPublicId,
+        compensatingEntryRef,
+      },
+      aggregateType: "RECONCILIATION_RESOLUTION",
+      aggregateId: runId,
+      version: 1,
+      context,
+    });
+
+    return report.drifts[driftIndex];
+  }
+
+  // ─── Write compensating ledger entry
+  private async applyCompensatingEntry(
+    drift: IDriftRecord,
+    adminPublicId: string,
+    context: IRequestContext,
+  ): Promise<string> {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const compensatingRef = `RECON_CORRECTION_${generateEventId()}`;
+      const correctionAmount = Math.abs(drift.drift);
+
+      const builder = new TransactionBuilder("RECONCILIATION_CORRECTION");
+
+      if (drift.severity === DriftSeverity.OVERSTATED) {
+        // Wallet shows more than ledger → debit wallet to correct
+        builder.addDebit({
+          ledgerAccountId: drift.ledgerAccountId,
+          amount: correctionAmount,
+          currency: drift.currency,
+          nature: LedgerEntryNature.DEBIT,
+          transactionRef: compensatingRef,
+          referenceId: compensatingRef,
+          referenceType: "RECONCILIATION_CORRECTION",
+        });
+
+        // Credit system treasury (where does the corrected amount go?)
+        const treasuryLedger = await LedgerAccount.findOne({
+          ownerType: LedgerOwnerType.SYSTEM,
+          type: LedgerAccountType.SYSTEM_TREASURY,
+          currency: drift.currency,
+        }).session(session);
+
+        if (!treasuryLedger)
+          throw new BadRequestError("Treasury ledger not found");
+
+        builder.addCredit({
+          ledgerAccountId: treasuryLedger._id,
+          amount: correctionAmount,
+          currency: drift.currency,
+          nature: LedgerEntryNature.CREDIT,
+          transactionRef: compensatingRef,
+          referenceId: compensatingRef,
+          referenceType: "RECONCILIATION_CORRECTION",
+        });
+      } else {
+        // UNDERSTATED — ledger shows more than wallet → credit wallet
+        builder.addCredit({
+          ledgerAccountId: drift.ledgerAccountId,
+          amount: correctionAmount,
+          currency: drift.currency,
+          nature: LedgerEntryNature.CREDIT,
+          transactionRef: compensatingRef,
+          referenceId: compensatingRef,
+          referenceType: "RECONCILIATION_CORRECTION",
+        });
+
+        // Debit treasury (system absorbs the correction)
+        const treasuryLedger = await LedgerAccount.findOne({
+          ownerType: LedgerOwnerType.SYSTEM,
+          type: LedgerAccountType.SYSTEM_TREASURY,
+          currency: drift.currency,
+        }).session(session);
+
+        if (!treasuryLedger)
+          throw new BadRequestError("Treasury ledger not found");
+
+        builder.addDebit({
+          ledgerAccountId: treasuryLedger._id,
+          amount: correctionAmount,
+          currency: drift.currency,
+          nature: LedgerEntryNature.DEBIT,
+          transactionRef: compensatingRef,
+          referenceId: compensatingRef,
+          referenceType: "RECONCILIATION_CORRECTION",
+        });
+      }
+
+      await builder.commit(session);
+
+      // Update wallet balance to match true balance
+      await Wallet.findOneAndUpdate(
+        { ledgerAccountId: drift.ledgerAccountId },
+        { $set: { availableBalance: drift.trueBalance } },
+        { session },
+      );
+
+      await session.commitTransaction();
+
+      logger.info("Compensating ledger entry written", {
+        compensatingRef,
+        drift: drift.drift,
+        severity: drift.severity,
+        adminPublicId,
+      });
+
+      return compensatingRef;
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      session.endSession();
+    }
+  }
+
+  // ─── Paystack settlement reconciliation
+  public async reconcilePaystackSettlementsForDate(
+    date: Date,
+    context: IRequestContext,
+  ) {
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const result = await reconcilePaystackSettlements(
+      startOfDay,
+      endOfDay,
+      config.payment.paystack.secretKey as string,
+    );
+
+    logger.info("Paystack settlement reconciliation complete", {
+      date: date.toISOString().split("T")[0],
+      totalChecked: result.totalChecked,
+      driftsFound: result.driftsFound,
+    });
+
+    if (result.driftsFound > 0) {
+      await emitOutboxEvent({
+        topic: "reconciliation.events",
+        eventId: generateEventId(),
+        eventType: AuditAction.RECONCILIATION_DRIFT_DETECTED,
+        action: AuditAction.RECONCILIATION_DRIFT_DETECTED,
+        status: AuditStatus.PENDING,
+        payload: {
+          type: "PAYMENT_SETTLEMENT",
+          date: date.toISOString().split("T")[0],
+          totalChecked: result.totalChecked,
+          driftsFound: result.driftsFound,
+          drifts: result.drifts,
+        },
+        aggregateType: "RECONCILIATION_SETTLEMENT",
+        aggregateId: generateEventId(),
+        version: 1,
+        context,
+      });
+    }
+
+    return result;
+  }
+
+  // ─── System balance invariant check
+  public async checkSystemInvariant(context: IRequestContext) {
+    const result = await checkSystemBalanceInvariant();
+
+    if (!result.isBalanced) {
+      await emitOutboxEvent({
+        topic: "reconciliation.events",
+        eventId: generateEventId(),
+        eventType: AuditAction.RECONCILIATION_DRIFT_DETECTED,
+        action: AuditAction.RECONCILIATION_DRIFT_DETECTED,
+        status: AuditStatus.PENDING,
+        payload: {
+          type: "SYSTEM_INVARIANT_BREACH",
+          totalWalletBalance: result.totalWalletBalance,
+          totalLedgerNet: result.totalLedgerNet,
+          invariantDrift: result.invariantDrift,
+          severity: "CRITICAL",
+        },
+        aggregateType: "RECONCILIATION_INVARIANT",
+        aggregateId: "SYSTEM",
+        version: 1,
+        context,
+      });
+    }
+
+    return result;
   }
 }
 

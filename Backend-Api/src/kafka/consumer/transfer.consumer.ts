@@ -4,13 +4,13 @@ import {
   initIdempotency,
 } from "@/events/idempotency";
 import { withMongoTransaction } from "@/events/mongo.wrapper";
-import { onTransferSuccess } from "@/events/publishconfirm.event";
 import { processTransferEvents } from "@/events/transferProcessor.evt";
 import {
   kafkaMessagesFailedTotal,
   kafkaMessagesProcessedTotal,
   kafkaProcessingDuration,
 } from "@/infrastructure/resilience/metrics";
+import { onEventConfirmed } from "@/kafka/producer/event.producer";
 import { logger } from "@/shared/utils/logger";
 import { admin, connectAdmin, kafka } from "../config/kafka.config";
 import { TOPICS } from "../config/kafka.topics";
@@ -25,7 +25,7 @@ export function isTransferConsumerReady() {
   return isConsumerReady;
 }
 
-const TRANSFER_CONSUMER_GROUP = "transfer-consumers";
+const TRANSFER_CONSUMER_GROUP = "transfer-consumer";
 
 const transferConsumer = kafka.consumer({
   groupId: TRANSFER_CONSUMER_GROUP,
@@ -39,7 +39,7 @@ export async function runTransferConsumer() {
     try {
       const committed = await admin.fetchOffsets({
         groupId: TRANSFER_CONSUMER_GROUP,
-        topic: TOPICS.TRANSACTION_EVENTS,
+        topic: TOPICS.TRANSFER_EVENTS,
       });
 
       const hasNoCommits = committed.every(
@@ -49,12 +49,12 @@ export async function runTransferConsumer() {
       if (hasNoCommits) {
         logger.info("Fresh consumer group — seeking all partitions to latest");
         const topicOffsets = await admin.fetchTopicOffsets(
-          TOPICS.TRANSACTION_EVENTS,
+          TOPICS.TRANSFER_EVENTS,
         );
 
         for (const { partition, high } of topicOffsets) {
           transferConsumer.seek({
-            topic: TOPICS.TRANSACTION_EVENTS,
+            topic: TOPICS.TRANSFER_EVENTS,
             partition,
             offset: high,
           });
@@ -77,7 +77,7 @@ export async function runTransferConsumer() {
   });
 
   await transferConsumer.subscribe({
-    topic: TOPICS.TRANSACTION_EVENTS,
+    topic: TOPICS.TRANSFER_EVENTS,
     fromBeginning: false,
   });
 
@@ -178,12 +178,8 @@ export async function runTransferConsumer() {
       }
 
       try {
-        const result = await withMongoTransaction(async (session) => {
-          const result = await processTransferEvents(
-            topic,
-            validatedEnvelope,
-            session,
-          );
+        await withMongoTransaction(async (session) => {
+          await processTransferEvents(topic, validatedEnvelope, session);
 
           await completeIdempotency(
             envelope.event.eventId,
@@ -191,10 +187,8 @@ export async function runTransferConsumer() {
             IdmChks.version,
             session,
             topic,
-            envelope.meta.retryCount, // 🔥 ADD THIS
+            envelope.meta.retryCount,
           );
-
-          return result;
         });
 
         // ✅ Success metrics
@@ -212,9 +206,9 @@ export async function runTransferConsumer() {
           },
         ]);
 
-        logger.info("Transaction committed successfully");
+        logger.info("Transfer committed successfully");
 
-        await onTransferSuccess(validatedEnvelope);
+        await onEventConfirmed(validatedEnvelope, TOPICS.TRANSFER_EVENTS);
       } catch (error: any) {
         // ✅ Failure metrics
         kafkaMessagesFailedTotal.inc({
@@ -223,11 +217,7 @@ export async function runTransferConsumer() {
         });
         timer();
 
-        logger.error("Transfer event processing failed", {
-          topic,
-          eventId: envelope.event?.eventId,
-          error: error.message,
-        });
+        logger.error("Transfer event processing failed");
         await failIdempotency(
           envelope.event.eventId,
           TRANSFER_CONSUMER_GROUP,

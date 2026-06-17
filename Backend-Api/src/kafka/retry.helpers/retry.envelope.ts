@@ -1,24 +1,11 @@
-// export interface RetryEnvelope<T = any> {
-//   meta: {
-//     originalTopic: string;
-//     originalConsumerGroup: string;
-//     retryCount: number;
-//     lastError?: string;
-//     createdAt: string;
-//   };
-//   event: {
-//     eventId: string;
-//     eventType: string;
-//     version: number;
-//     aggregateType: string;
-//     aggregateId: string;
-//     payload: T;
-//     occurredAt?: string;
-//   };
-// }
-
-
-export type ProcessorType = "transfer" | "projection" | "auth" | "kyc";
+export type ProcessorType =
+  | "transfer"
+  | "projection"
+  | "auth"
+  | "kyc"
+  | "payment"
+  | "funding"
+  | "vault";
 
 export interface RetryEnvelopeMeta {
   retryCount: number;

@@ -414,6 +414,7 @@ class userService {
         counterpartyWalletType: t.counterpartyWalletType,
         name: t.name,
         fee: t.fee,
+        penaltyReason: t.penaltyReason,
         occurredAt: t.occurredAt,
       })),
       pagination: {

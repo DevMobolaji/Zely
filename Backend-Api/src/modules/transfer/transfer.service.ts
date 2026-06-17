@@ -42,6 +42,7 @@ import {
   internalTransferRequest,
   TransferRequestInput,
   vaultTransferRequest,
+  vaultWithrawalRequest,
 } from "./transfer.interface";
 
 class TransferService {
@@ -73,11 +74,11 @@ class TransferService {
       );
 
       if (!senderAccount || !receiverAccount) {
-        throw new NotFoundError("ACCOUNTS_NOT_FOUND");
+        throw new NotFoundError("Account not found");
       }
 
       if (senderAccount.userId.equals(receiverAccount.userId)) {
-        throw new BadRequestError("USE_INTERNAL_TRANSFER");
+        throw new BadRequestError("Use internal transfer");
       }
 
       if (
@@ -85,7 +86,7 @@ class TransferService {
         typeof dto.amount !== "number" ||
         dto.amount <= 0
       ) {
-        throw new BadRequestError("INVALID_TRANSFER_REQUEST");
+        throw new BadRequestError("Invalid transfer request");
       }
 
       /** -------------------------
@@ -103,7 +104,7 @@ class TransferService {
       );
 
       if (!senderWallet || !receiverWallet) {
-        throw new NotFoundError("WALLETS_NOT_FOUND");
+        throw new NotFoundError("Wallets not found");
       }
 
       /** -------------------------
@@ -227,7 +228,7 @@ class TransferService {
        * ------------------------- */
       await emitOutboxEvent(
         {
-          topic: "transaction.events",
+          topic: "transfer.events",
           eventId: result.transactionRef,
           eventType: AuditAction.TRANSACTION_COMPLETED,
           action: AuditAction.TRANSACTION_COMPLETED,
@@ -442,7 +443,7 @@ class TransferService {
        * ------------------------- */
       await emitOutboxEvent(
         {
-          topic: "transaction.events",
+          topic: "transfer.events",
           eventId: result.transactionRef,
           eventType: AuditAction.TRANSACTION_COMPLETED,
           action: AuditAction.TRANSACTION_COMPLETED,
@@ -538,29 +539,28 @@ class TransferService {
       );
 
       if (!senderAccount) {
-        throw new BadRequestError("ACCOUNT_NOT_FOUND");
+        throw new BadRequestError("Account not found");
       }
 
       if (senderAccount.userPublicId !== dto.senderId) {
-        throw new BadRequestError("UNAUTHORIZED_TO_TRANSFER_FROM_ACCOUNT");
+        throw new BadRequestError("Unauthorized transfer from account");
       }
 
       /** -------------------------
        * RESOLVE VAULT
        * ------------------------- */
       vault = await findVault(dto.vaultId, dto.senderId, dto.currency, session);
-      console.log(vault);
 
       if (vault.userPublicId !== context.userId) {
-        throw new BadRequestError("UNAUTHORIZED_TO_TRANSFER_TO_VAULT");
+        throw new BadRequestError("Unauthorized transfer to vault");
       }
 
       if (vault.currency !== dto.currency) {
-        throw new BadRequestError("VAULT_CURRENCY_MISMATCH");
+        throw new BadRequestError("Vault currenct mismatch");
       }
 
       if (dto.amount <= 0) {
-        throw new BadRequestError("INVALID_AMOUNT");
+        throw new BadRequestError("Invalid amount");
       }
 
       /** -------------------------
@@ -572,7 +572,7 @@ class TransferService {
       );
 
       if (!vaultLocked) {
-        throw new BadRequestError("VAULT_LOCK_FAILED");
+        throw new BadRequestError("Vault locked failed");
       }
 
       /** -------------------------
@@ -592,7 +592,7 @@ class TransferService {
       );
 
       if (!senderWalletLocked) {
-        throw new BadRequestError("SENDER_WALLET_LOCK_FAILED");
+        throw new BadRequestError("Sender wallet lock failed");
       }
 
       /** -------------------------
@@ -637,7 +637,7 @@ class TransferService {
         {
           $inc: {
             currentBalanceMinor: dto.amount,
-            version: (vault as any).version + 1,
+            version: 1,
           },
         },
         { session, new: true },
@@ -662,50 +662,44 @@ class TransferService {
           { session },
         );
 
-        logger.info("Target vault goal reached", {
-          vault,
-          targetAmountMinor: vault.targetAmountMinor,
-          currentBalance: updatedVault.currentBalanceMinor,
-        });
+        logger.info("Target vault goal reached");
       }
 
       /** -------------------------
-       * OUTBOX / EVENT EMISSION
+       * OUTBOX / EVENT EMISSION``
        * ------------------------- */
       await emitOutboxEvent(
         {
           topic: "vault.events",
           eventId: result.transactionRef,
-          eventType: AuditAction.VAULT_TRANSFER_COMPLETED,
+          eventType: "VAULT_TRANSFER_COMPLETED",
           action: AuditAction.VAULT_TRANSFER_COMPLETED,
           status: AuditStatus.PENDING,
+          aggregateType: "VAULT_TRANSFER",
+          aggregateId: result.transactionRef,
+          version: 1,
           payload: {
             sender: {
-              walletId: senderWallet.walletId,
               userId: senderWallet.userPublicId,
               name: senderWallet.userId.name,
-              accountType: senderAccount.type,
-              accountNumber: senderAccount.accountNumber,
               previousBalance: senderWallet.availableBalance,
               currentBalance: updatedSenderWallet?.availableBalance,
+              accountNumber: senderAccount.accountNumber,
+              accountType: senderAccount.type,
             },
             receiver: {
-              accountType: "VAULT",
-              walletId: vault.vaultId,
               userId: vault.userPublicId,
               vaultId: vault.vaultId,
               previousBalance: vault.currentBalanceMinor,
               currentBalance: updatedVault?.currentBalanceMinor,
+              title: vault.title,
             },
-            amount: dto.amount,
-            currency: dto.currency,
             referenceId: result.referenceId,
             transactionRef: result.transactionRef,
             transferType: "VAULT_TRANSFER",
+            amount: dto.amount,
+            currency: dto.currency,
           },
-          aggregateType: "VAULT_TRANSFER",
-          aggregateId: result.transactionRef,
-          version: 1,
           context,
         },
         { session },
@@ -754,7 +748,7 @@ class TransferService {
       .lean();
 
     if (!account) {
-      throw new NotFoundError("ACCOUNT_NOT_FOUND");
+      throw new NotFoundError("Account not found");
     }
 
     const user = await UserModel.findOne({ userId: account.userPublicId })
@@ -762,7 +756,7 @@ class TransferService {
       .lean();
 
     if (!user) {
-      throw new NotFoundError("USER_NOT_FOUND");
+      throw new NotFoundError("User not found");
     }
 
     return {

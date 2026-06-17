@@ -115,7 +115,7 @@ export const lockWalletFunds = async (
   );
 
   if (!res) {
-    throw new BadRequestError("INSUFFICIENT_BALANCE");
+    throw new BadRequestError("Insufficient Balance");
   }
 
   return res;
@@ -138,7 +138,7 @@ export const deductWalletFunds = async (
   );
 
   if (!res) {
-    throw new BadRequestError("INSUFFICIENT_BALANCE");
+    throw new BadRequestError("Insufficient Balance");
   }
 
   return res;
@@ -523,30 +523,30 @@ export const lookupVaultLedger = async (
   session: ClientSession,
 ) => {
   const vault = await vaultModel.findById(vaultId).session(session);
-  if (!vault) throw new BadRequestError("VAULT_NOT_FOUND");
+  if (!vault) throw new BadRequestError("Vault not found");
 
   if (!vault.ledgerAccountId)
-    throw new BadRequestError("VAULT_LEDGER_NOT_ASSIGNED");
+    throw new BadRequestError("Vault ledger not assigned");
 
   const receiverLedger = await LedgerAccount.findById(
     vault.ledgerAccountId,
   ).session(session);
 
-  if (!receiverLedger) throw new BadRequestError("RECEIVER_LEDGER_NOT_FOUND");
+  if (!receiverLedger) throw new BadRequestError("Reciever ledger not found");
 
   return receiverLedger;
 };
 
 //VAULT USAGE
 
-export const mainChecking = async (
-  userPublicId: string,
+export const mainWallet = async (
+  userId: string,
   currency: string,
   type: string,
   session: ClientSession,
 ) => {
   const wallet = await Wallet.findOne({
-    userPublicId,
+    userPublicId: userId,
     type,
     currency,
   }).session(session);
@@ -575,14 +575,20 @@ export const findVault = async (
     .populate("userId", "email name -_id")
     .session(session);
 
-  console.log(vault);
-
   if (!vault) {
-    throw new BadRequestError(`vault not found for ${currency}`);
+    throw new NotFoundError(`vault not found for ${currency}`);
   }
 
-  if (vault.status !== "ACTIVE") {
-    throw new BadRequestError("VAULT_NOT_ACTIVE");
+  const canWithdraw =
+    vault.status === "ACTIVE" ||
+    (vault.status === "COMPLETED" && vault.lock.state === "MATURED");
+
+  if (!canWithdraw) {
+    throw new BadRequestError("Vault not active");
+  }
+
+  if (vault.currency !== currency) {
+    throw new BadRequestError("Vault currenct mismatch");
   }
 
   return vault;

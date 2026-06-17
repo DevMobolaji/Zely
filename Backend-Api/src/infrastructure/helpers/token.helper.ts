@@ -202,7 +202,6 @@ export async function issueTokensForUser(user: {
 
   // Store hashed refresh token and latest payload
   const hashRf = await storeRefreshToken(refreshTokenRaw, payload);
-  console.log("this is the hash refresh from the token helper", hashRf);
 
   return {
     accTk,

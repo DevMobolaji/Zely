@@ -5,7 +5,10 @@ import BadRequestError from "@/shared/errors/badRequest";
 import { WalletDocument } from "../wallet/wallet.model";
 import { ClientSession } from "mongoose";
 import { logger } from "@/shared/utils/logger";
-import { CHECK_AND_INCREMENT_SCRIPT, CHECK_AND_INCREMENT_VELOCITY_SCRIPT } from "./transaction.limit.lua";
+import {
+  CHECK_AND_INCREMENT_SCRIPT,
+  CHECK_AND_INCREMENT_VELOCITY_SCRIPT,
+} from "./transaction.limit.lua";
 
 const CACHE_TTL_SECONDS = 300;
 
@@ -22,8 +25,7 @@ function coalesce(key: string, fn: () => Promise<number>): Promise<number> {
     return inflightRequests.get(key)!;
   }
 
-  const promise = fn()
-    .finally(() => inflightRequests.delete(key));
+  const promise = fn().finally(() => inflightRequests.delete(key));
 
   inflightRequests.set(key, promise);
   return promise;
@@ -59,17 +61,11 @@ async function getLimitsForTier(tier: KycTier, currency: string) {
   }).lean();
 
   if (!config) {
-    throw new BadRequestError(
-      `TRANSACTION_LIMIT_CONFIG_NOT_FOUND_FOR_${tier}`
-    );
+    throw new BadRequestError(`TRANSACTION_LIMIT_CONFIG_NOT_FOUND_FOR_${tier}`);
   }
 
   // ─── 3. Best-effort cache write ─────────────────────
-  await redis.set(
-    cacheKey,
-    JSON.stringify(config),
-    CACHE_TTL_SECONDS
-  );
+  await redis.set(cacheKey, JSON.stringify(config), CACHE_TTL_SECONDS);
 
   return config;
 }
@@ -103,13 +99,13 @@ function secondsUntilMidnight(): number {
 
 async function getDailyTotalWithRehydration(
   userPublicId: string,
-  currency: string
+  currency: string,
 ): Promise<number> {
   const dailyKey = getDailyKey(userPublicId, currency);
   const cached = await redis.get<number>(dailyKey);
 
   if (cached !== null) {
-    return typeof cached === 'number' ? cached : Number(cached);
+    return typeof cached === "number" ? cached : Number(cached);
   }
 
   // Coalesce concurrent requests for the same user
@@ -131,13 +127,13 @@ async function getDailyTotalWithRehydration(
 }
 
 async function getVelocityCountWithRehydration(
-  userPublicId: string
+  userPublicId: string,
 ): Promise<number> {
   const velocityKey = getVelocityKey(userPublicId);
   const cached = await redis.get<number>(velocityKey);
 
   if (cached !== null) {
-    return typeof cached === 'number' ? cached : Number(cached);
+    return typeof cached === "number" ? cached : Number(cached);
   }
 
   return coalesce(`velocity:${userPublicId}`, async () => {
@@ -176,7 +172,7 @@ async function atomicIncrementDailyTotal(
   userPublicId: string,
   currency: string,
   amount: number,
-  limit: number
+  limit: number,
 ): Promise<boolean> {
   const today = getToday();
 
@@ -187,13 +183,11 @@ async function atomicIncrementDailyTotal(
       userPublicId,
       currency,
       date: today,
-      $expr: { $lte: [{ $add: ["$dailyTotal", amount] }, limit] }
+      $expr: { $lte: [{ $add: ["$dailyTotal", amount] }, limit] },
     },
     { $inc: { dailyTotal: amount } },
-    { new: true }
+    { new: true },
   );
-
-  console.log("This is the result of atomicIncrementDailyTotal", result);
 
   if (!result) {
     // Document might not exist yet (first transaction of the day)
@@ -217,10 +211,10 @@ async function atomicIncrementDailyTotal(
             userPublicId,
             currency,
             date: today,
-            $expr: { $lte: [{ $add: ["$dailyTotal", amount] }, limit] }
+            $expr: { $lte: [{ $add: ["$dailyTotal", amount] }, limit] },
           },
           { $inc: { dailyTotal: amount } },
-          { new: true }
+          { new: true },
         );
         return retry !== null;
       }
@@ -233,7 +227,7 @@ async function atomicIncrementDailyTotal(
 
 async function atomicIncrementVelocity(
   userPublicId: string,
-  limit: number
+  limit: number,
 ): Promise<boolean> {
   const today = getToday();
   const now = new Date();
@@ -244,17 +238,16 @@ async function atomicIncrementVelocity(
     date: today,
   }).lean();
 
-  console.log("This is the existing usage record for velocity check", existing);
-
   if (existing) {
-    const secondsElapsed = (now.getTime() - new Date(existing.hourWindowStart).getTime()) / 1000;
+    const secondsElapsed =
+      (now.getTime() - new Date(existing.hourWindowStart).getTime()) / 1000;
 
     if (secondsElapsed > 3600) {
       // Window expired — reset count and allow
       await TransactionUsage.findOneAndUpdate(
         { userPublicId, date: today },
         { $set: { hourlyCount: 1, hourWindowStart: now } },
-        { new: true }
+        { new: true },
       );
       return true;
     }
@@ -265,13 +258,11 @@ async function atomicIncrementVelocity(
     {
       userPublicId,
       date: today,
-      $expr: { $lt: ["$hourlyCount", limit] }
+      $expr: { $lt: ["$hourlyCount", limit] },
     },
     { $inc: { hourlyCount: 1 } },
-    { new: true }
+    { new: true },
   );
-
-  console.log("This is the result of atomicIncrementVelocity", result);
 
   if (!result) {
     // Document doesn't exist yet — first transaction of the day
@@ -290,10 +281,10 @@ async function atomicIncrementVelocity(
           {
             userPublicId,
             date: today,
-            $expr: { $lt: ["$hourlyCount", limit] }
+            $expr: { $lt: ["$hourlyCount", limit] },
           },
           { $inc: { hourlyCount: 1 } },
-          { new: true }
+          { new: true },
         );
         return retry !== null;
       }
@@ -313,7 +304,7 @@ async function atomicIncrementVelocity(
 async function commitToDatabase(
   userPublicId: string,
   amount: number,
-  currency: string
+  currency: string,
 ): Promise<void> {
   const now = new Date();
   const today = getToday();
@@ -333,12 +324,12 @@ async function commitToDatabase(
               if: {
                 $gt: [
                   { $subtract: [now, { $ifNull: ["$hourWindowStart", now] }] },
-                  3600000
-                ]
+                  3600000,
+                ],
               },
               then: 1,
-              else: { $add: [{ $ifNull: ["$hourlyCount", 0] }, 1] }
-            }
+              else: { $add: [{ $ifNull: ["$hourlyCount", 0] }, 1] },
+            },
           },
 
           hourWindowStart: {
@@ -346,17 +337,17 @@ async function commitToDatabase(
               if: {
                 $gt: [
                   { $subtract: [now, { $ifNull: ["$hourWindowStart", now] }] },
-                  3600000
-                ]
+                  3600000,
+                ],
               },
               then: now,
-              else: { $ifNull: ["$hourWindowStart", now] }
-            }
-          }
-        }
-      }
+              else: { $ifNull: ["$hourWindowStart", now] },
+            },
+          },
+        },
+      },
     ],
-    { upsert: true, new: true, updatePipeline: true }
+    { upsert: true, new: true, updatePipeline: true },
   );
 }
 
@@ -462,9 +453,6 @@ async function commitToDatabase(
 
 //     console.log("This is the velocity result", result);
 
-
-
-
 //     if (result === -1) {
 //       throw new BadRequestError(
 //         `TRANSFER_VELOCITY_LIMIT_EXCEEDED_MAX_${limits.maxTransfersPerHour}_PER_HOUR`
@@ -490,17 +478,16 @@ export async function enforceTransactionLimits({
   senderWallet: WalletDocument;
   session: ClientSession;
 }): Promise<KycTier> {
-
-  const DAILY_TX_TTL = 48 * 60 * 60;       // 2 days
+  const DAILY_TX_TTL = 48 * 60 * 60; // 2 days
   const VELOCITY_TTL = 60 * 60; // 1 hour
 
-
   const limits = await getLimitsForTier(kycTier, currency);
-  logger.info('Limits loaded', { limits, userPublicId, amount });
 
   // 1. per-transaction
   if (limits.maxPerTransaction > 0 && amount > limits.maxPerTransaction) {
-    throw new BadRequestError(`TRANSFER_EXCEEDS_PER_TRANSACTION_LIMIT_OF_${limits.maxPerTransaction}`);
+    throw new BadRequestError(
+      `TRANSFER_EXCEEDS_PER_TRANSACTION_LIMIT_OF_${limits.maxPerTransaction}`,
+    );
   }
 
   // 2. daily
@@ -512,34 +499,45 @@ export async function enforceTransactionLimits({
       async () => {
         await getDailyTotalWithRehydration(userPublicId, currency);
       },
-      async () => { }, // Redis still down — rehydration skipped, fallback handles it
-      `rehydrate:daily:${userPublicId}`
+      async () => {}, // Redis still down — rehydration skipped, fallback handles it
+      `rehydrate:daily:${userPublicId}`,
     );
 
     const result = await redis.execute(
       async () => {
         const client = redis.getClient();
         const raw = await client.eval(
-          CHECK_AND_INCREMENT_SCRIPT, 1,
+          CHECK_AND_INCREMENT_SCRIPT,
+          1,
           dailyKey,
           limits.maxPerDay.toString(),
           amount.toString(),
           DAILY_TX_TTL.toString(),
         );
-        logger.info('Daily Lua result', { raw, type: typeof raw, userPublicId });
+        logger.info("Daily Lua result", {
+          raw,
+          type: typeof raw,
+          userPublicId,
+        });
         return raw as number;
       },
       async () => {
-        logger.warn('Daily limit — Redis down, using DB fallback', { userPublicId });
-        const passed = await atomicIncrementDailyTotal(userPublicId, currency, amount, limits.maxPerDay);
-        logger.info('Daily DB fallback result', { passed, userPublicId });
+        const passed = await atomicIncrementDailyTotal(
+          userPublicId,
+          currency,
+          amount,
+          limits.maxPerDay,
+        );
         return passed ? 1 : -1;
       },
-      `enforce:daily:${userPublicId}`
+      `enforce:daily:${userPublicId}`,
     );
 
-    logger.info('Daily check final result', { result, userPublicId });
-    if (result === -1) throw new BadRequestError(`TRANSFER_EXCEEDS_DAILY_LIMIT_OF_${limits.maxPerDay}`);
+    logger.info("Daily check final result", { result, userPublicId });
+    if (result === -1)
+      throw new BadRequestError(
+        `TRANSFER_EXCEEDS_DAILY_LIMIT_OF_${limits.maxPerDay}`,
+      );
   }
 
   // 3. velocity
@@ -551,36 +549,41 @@ export async function enforceTransactionLimits({
       async () => {
         await getVelocityCountWithRehydration(userPublicId);
       },
-      async () => { }, // Redis still down — rehydration skipped, fallback handles it
-      `rehydrate:velocity:${userPublicId}`
+      async () => {}, // Redis still down — rehydration skipped, fallback handles it
+      `rehydrate:velocity:${userPublicId}`,
     );
 
     const result = await redis.execute(
       async () => {
         const client = redis.getClient();
         const raw = await client.eval(
-          CHECK_AND_INCREMENT_VELOCITY_SCRIPT, 1,
+          CHECK_AND_INCREMENT_VELOCITY_SCRIPT,
+          1,
           velocityKey,
           limits.maxTransfersPerHour.toString(),
           VELOCITY_TTL.toString(),
         );
-        logger.info('Velocity Lua result', { raw, type: typeof raw, userPublicId });
+        logger.info("Velocity Lua result");
         return raw as number;
       },
       async () => {
-        logger.warn('Velocity — Redis down, using DB fallback', { userPublicId });
-        const passed = await atomicIncrementVelocity(userPublicId, limits.maxTransfersPerHour);
-        logger.info('Velocity DB fallback result', { passed, userPublicId });
+        const passed = await atomicIncrementVelocity(
+          userPublicId,
+          limits.maxTransfersPerHour,
+        );
         return passed ? 1 : -1;
       },
-      `enforce:velocity:${userPublicId}`
+      `enforce:velocity:${userPublicId}`,
     );
 
-    logger.info('Velocity check final result', { result, userPublicId });
-    if (result === -1) throw new BadRequestError(`TRANSFER_VELOCITY_LIMIT_EXCEEDED_MAX_${limits.maxTransfersPerHour}_PER_HOUR`);
+    logger.info("Velocity check final result", { result, userPublicId });
+    if (result === -1)
+      throw new BadRequestError(
+        `TRANSFER_VELOCITY_LIMIT_EXCEEDED_MAX_${limits.maxTransfersPerHour}_PER_HOUR`,
+      );
   }
 
-  logger.info('All limit checks passed', { userPublicId, amount, currency });
+  logger.info("All limit checks passed");
   return kycTier;
 }
 
@@ -622,18 +625,18 @@ export async function rollbackTransactionLimits({
   await redis.execute(
     async () => {
       const client = redis.getClient();
-      await client.multi()
+      await client
+        .multi()
         .incrby(dailyKey, -amount) // undo daily reservation
-        .incrby(velocityKey, -1)   // undo velocity reservation
+        .incrby(velocityKey, -1) // undo velocity reservation
         .exec();
     },
     async () => {
-      logger.warn('Redis down during rollback — will self-correct on rehydration', {
-        userPublicId,
-        currency,
-      });
+      logger.warn(
+        "Redis down during rollback — will self-correct on rehydration",
+      );
     },
-    `rollback:${userPublicId}`
+    `rollback:${userPublicId}`,
   );
 }
 
@@ -659,7 +662,7 @@ export async function enforceReceiverBalanceCap({
   const projectedBalance = receiverWallet.availableBalance + amount;
   if (projectedBalance > limits.maxWalletBalance) {
     throw new BadRequestError(
-      `RECEIVER_WALLET_BALANCE_WOULD_EXCEED_TIER_LIMIT_OF_${limits.maxWalletBalance}`
+      `RECEIVER_WALLET_BALANCE_WOULD_EXCEED_TIER_LIMIT_OF_${limits.maxWalletBalance}`,
     );
   }
 }
