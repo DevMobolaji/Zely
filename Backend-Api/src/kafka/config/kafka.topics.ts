@@ -12,8 +12,9 @@ export const TOPICS = {
   // ======================
   TRANSFER_EVENTS: "transfer.events",
   TRANSFER_EVENTS_DLQ: "transfer.events.dlq",
+
   CONFIRMED_TRANSFER_EVENTS: "confirmed.transfer.events",
-  CONFIRMED_EVENTS: "confirmed.events",
+  CONFIRMED_TRANSFER_DLQ: "confirmed.transfer.dlq",
 
   // ======================
   // AUDIT DOMAIN

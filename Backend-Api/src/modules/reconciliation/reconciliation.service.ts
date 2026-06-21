@@ -1,32 +1,37 @@
-import mongoose, { Types } from "mongoose";
+import { config } from "@/config/index";
+import { IRequestContext } from "@/config/interfaces/request.interface";
+import redis from "@/infrastructure/cache/redis.cli";
+import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import {
   LedgerAccount,
   LedgerAccountType,
   LedgerOwnerType,
 } from "@/modules/ledger/ledger.account.model";
 import {
-  ReconciliationReport,
-  ReconciliationStatus,
-  DriftSeverity,
-  IDriftRecord,
-  DriftResolutionType,
-} from "./reconciliation.model";
-import { logger } from "@/shared/utils/logger";
-import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
-import { AuditAction, AuditStatus } from "../audit/audit.interface";
+  LedgerEntryNature,
+  LedgerEntryType,
+} from "@/modules/ledger/ledger.entry.model";
+import TransactionBuilder from "@/modules/ledger/ledger.transaction.builder";
+import { Wallet, WalletStatus } from "@/modules/wallet/wallet.model";
+import BadRequestError from "@/shared/errors/badRequest";
 import { generateEventId } from "@/shared/utils/id.generator";
-import { IRequestContext } from "@/config/interfaces/request.interface";
+import { logger } from "@/shared/utils/logger";
+import mongoose, { ClientSession } from "mongoose";
+import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import {
   checkSystemBalanceInvariant,
+  computeTrueBalance,
   reconcileLedgerAccount,
   reconcilePaystackSettlements,
 } from "./reconciliation.helpers";
-import { Wallet, WalletStatus } from "@/modules/wallet/wallet.model";
-import TransactionBuilder from "@/modules/ledger/ledger.transaction.builder";
-import { LedgerEntryNature } from "@/modules/ledger/ledger.entry.model";
-import { config } from "@/config/index";
-import BadRequestError from "@/shared/errors/badRequest";
-import redis from "@/infrastructure/cache/redis.cli";
+import {
+  CorrectionMethod,
+  DriftResolutionType,
+  DriftSeverity,
+  IDriftRecord,
+  ReconciliationReport,
+  ReconciliationStatus,
+} from "./reconciliation.model";
 
 const BATCH_SIZE = 100;
 
@@ -81,7 +86,7 @@ class ReconciliationService {
     }
   }
 
-  // ─── Public API: reconcile every active ledger account
+  // ─── Public API: reconcile every active ledger account //Checked
   public async reconcileAllAccounts(
     context: IRequestContext,
     options: {
@@ -278,6 +283,7 @@ class ReconciliationService {
     return report;
   }
 
+  //Checked
   public async resolveDrift(params: {
     runId: string;
     ledgerAccountPublicId: string;
@@ -285,7 +291,8 @@ class ReconciliationService {
     notes: string;
     adminId: string;
     adminPublicId: string;
-    applyCorrection: boolean; // write compensating ledger entry?
+    applyCorrection: boolean;
+    correctionMethod?: CorrectionMethod;
     context: IRequestContext;
   }) {
     const {
@@ -293,127 +300,173 @@ class ReconciliationService {
       ledgerAccountPublicId,
       resolutionType,
       notes,
-      adminId,
       adminPublicId,
       applyCorrection,
       context,
     } = params;
 
-    // Find the report
-    const report = await ReconciliationReport.findOne({ runId });
-    if (!report) throw new BadRequestError("Report not found");
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    let committed = false;
 
-    // Find the specific drift
-    const driftIndex = report.drifts.findIndex(
-      (d) => d.ledgerAccountPublicId === ledgerAccountPublicId,
-    );
-
-    if (driftIndex === -1)
-      throw new BadRequestError("Drift not found in report");
-
-    const drift = report.drifts[driftIndex];
-
-    if (drift.resolvedAt) {
-      throw new BadRequestError("Drift already resolved");
-    }
-
-    let compensatingEntryRef: string | undefined;
-
-    // Apply correction if requested
-    if (applyCorrection && resolutionType === DriftResolutionType.CORRECTED) {
-      compensatingEntryRef = await this.applyCompensatingEntry(
-        drift,
-        adminPublicId,
-        context,
+    try {
+      const report = await ReconciliationReport.findOne({ runId }).session(
+        session,
       );
-    }
 
-    // Mark drift as resolved
-    report.drifts[driftIndex] = {
-      ...drift,
-      resolvedAt: new Date(),
-      resolvedBy: adminPublicId,
-      resolutionType,
-      resolutionNotes: notes,
-      compensatingEntryRef,
-    };
+      if (!report) {
+        throw new BadRequestError("Report not found");
+      }
 
-    report.markModified("drifts");
-    await report.save();
+      const driftIndex = report.drifts.findIndex(
+        (d) => d.ledgerAccountPublicId === ledgerAccountPublicId,
+      );
 
-    // Unfreeze wallet if it was frozen due to this drift
-    if (resolutionType !== DriftResolutionType.ESCALATED) {
-      const ledgerAccount = await LedgerAccount.findOne({
-        ledgerAccountId: ledgerAccountPublicId,
-      }).lean();
+      if (driftIndex === -1) {
+        throw new BadRequestError("Drift not found");
+      }
 
-      if (ledgerAccount) {
-        const wallet = await Wallet.findOne({
-          ledgerAccountId: ledgerAccount._id,
-        });
+      const driftDoc = report.drifts[driftIndex];
 
-        if (wallet && wallet.status === WalletStatus.RECONCILING) {
-          await Wallet.updateOne(
-            { _id: wallet._id },
-            {
-              $set: {
-                status: WalletStatus.ACTIVE,
-                freezeReason: null,
-                freezeUntil: null,
-              },
-            },
-          );
+      if (driftDoc.resolvedAt) {
+        throw new BadRequestError("Drift already resolved");
+      }
 
-          logger.info("Wallet unfrozen after drift resolution", {
-            walletId: wallet.walletId,
-            resolvedBy: adminPublicId,
-            resolutionType,
-          });
+      let compensatingEntryRef: string | undefined;
+
+      if (applyCorrection && resolutionType === DriftResolutionType.CORRECTED) {
+        switch (params.correctionMethod) {
+          case "DIRECT_CACHE_SYNC":
+            await this.applyDirectCacheCorrection(
+              driftDoc,
+              adminPublicId,
+              session,
+            );
+            break;
+
+          case "LEDGER_ENTRY":
+            compensatingEntryRef = await this.applyCompensatingEntry(
+              driftDoc,
+              adminPublicId,
+              context,
+              session,
+            );
+            break;
+
+          default:
+            throw new BadRequestError("Correction method is required");
         }
       }
-    }
 
-    // Emit audit event
-    await emitOutboxEvent({
-      topic: "reconciliation.events",
-      eventId: generateEventId(),
-      eventType: AuditAction.RECONCILIATION_DRIFT_RESOLVED,
-      action: AuditAction.RECONCILIATION_DRIFT_RESOLVED,
-      status: AuditStatus.PENDING,
-      payload: {
+      driftDoc.resolvedAt = new Date();
+      driftDoc.resolvedBy = adminPublicId;
+      driftDoc.resolutionType = resolutionType;
+      driftDoc.resolutionNotes = notes;
+      driftDoc.correctionMethod = params.correctionMethod;
+      driftDoc.compensatingEntryRef = compensatingEntryRef;
+
+      await report.save({ session });
+
+      if (resolutionType !== DriftResolutionType.ESCALATED) {
+        const ledgerAccount = await LedgerAccount.findOne({
+          ledgerAccountId: ledgerAccountPublicId,
+        }).session(session);
+
+        if (ledgerAccount) {
+          const wallet = await Wallet.findOne({
+            ledgerAccountId: ledgerAccount._id,
+          }).session(session);
+
+          if (wallet?.status === WalletStatus.RECONCILING) {
+            await Wallet.updateOne(
+              { _id: wallet._id, "freezeHistory.unfrozenAt": null },
+              {
+                $set: {
+                  status: WalletStatus.ACTIVE,
+                  freezeReason: null,
+                  freezeUntil: null,
+                  "freezeHistory.$.unfrozenAt": new Date(),
+                  "freezeHistory.$.unfrozenBy": adminPublicId,
+                  "freezeHistory.$.unfreezeReason": `DRIFT_RESOLVED:${resolutionType}`,
+                },
+              },
+              { session },
+            );
+          }
+        }
+      }
+
+      await emitOutboxEvent(
+        {
+          topic: "reconciliation.events",
+          eventId: generateEventId(),
+          eventType: AuditAction.RECONCILIATION_DRIFT_RESOLVED,
+          action: AuditAction.RECONCILIATION_DRIFT_RESOLVED,
+          status: AuditStatus.PENDING,
+          payload: {
+            runId,
+            ledgerAccountPublicId,
+            resolutionType,
+            notes,
+            resolvedBy: adminPublicId,
+            correctionMethod: params.correctionMethod,
+            compensatingEntryRef,
+          },
+          aggregateType: "RECONCILIATION_RESOLUTION",
+          aggregateId: runId,
+          version: 1,
+          context,
+        },
+        { session },
+      );
+
+      await session.commitTransaction();
+      committed = true;
+
+      logger.info("Drift resolution transaction committed successfully", {
         runId,
         ledgerAccountPublicId,
-        resolutionType,
-        notes,
-        resolvedBy: adminPublicId,
-        compensatingEntryRef,
-      },
-      aggregateType: "RECONCILIATION_RESOLUTION",
-      aggregateId: runId,
-      version: 1,
-      context,
-    });
+      });
 
-    return report.drifts[driftIndex];
+      return driftDoc;
+    } catch (err) {
+      if (!committed) {
+        await session.abortTransaction();
+      }
+      throw err;
+    } finally {
+      session.endSession();
+    }
   }
 
-  // ─── Write compensating ledger entry
+  // ─── Write compensating ledger entry //Checked
   private async applyCompensatingEntry(
     drift: IDriftRecord,
     adminPublicId: string,
     context: IRequestContext,
+    session: ClientSession,
   ): Promise<string> {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
       const compensatingRef = `RECON_CORRECTION_${generateEventId()}`;
       const correctionAmount = Math.abs(drift.drift);
+      const isOverstated = drift.severity === DriftSeverity.OVERSTATED;
+
+      const adjustmentLedger = await LedgerAccount.findOne({
+        ownerType: LedgerOwnerType.SYSTEM,
+        type: LedgerAccountType.RECONCILIATION_ADJUSTMENTS,
+        currency: drift.currency,
+      }).session(session);
+
+      if (!adjustmentLedger)
+        throw new BadRequestError(
+          "Reconciliation adjustments ledger not found",
+        );
 
       const builder = new TransactionBuilder("RECONCILIATION_CORRECTION");
 
-      if (drift.severity === DriftSeverity.OVERSTATED) {
-        // Wallet shows more than ledger → debit wallet to correct
+      if (isOverstated) {
+        // Cache shows more than the ledger backs — debit the drifted account
+        // back down to truth, credit the adjustments account as counterparty.
         builder.addDebit({
           ledgerAccountId: drift.ledgerAccountId,
           amount: correctionAmount,
@@ -421,30 +474,21 @@ class ReconciliationService {
           nature: LedgerEntryNature.DEBIT,
           transactionRef: compensatingRef,
           referenceId: compensatingRef,
-          referenceType: "RECONCILIATION_CORRECTION",
+          referenceType: LedgerEntryType.ADJUSTMENT,
         });
 
-        // Credit system treasury (where does the corrected amount go?)
-        const treasuryLedger = await LedgerAccount.findOne({
-          ownerType: LedgerOwnerType.SYSTEM,
-          type: LedgerAccountType.SYSTEM_TREASURY,
-          currency: drift.currency,
-        }).session(session);
-
-        if (!treasuryLedger)
-          throw new BadRequestError("Treasury ledger not found");
-
         builder.addCredit({
-          ledgerAccountId: treasuryLedger._id,
+          ledgerAccountId: adjustmentLedger._id,
           amount: correctionAmount,
           currency: drift.currency,
           nature: LedgerEntryNature.CREDIT,
           transactionRef: compensatingRef,
           referenceId: compensatingRef,
-          referenceType: "RECONCILIATION_CORRECTION",
+          referenceType: LedgerEntryType.ADJUSTMENT,
         });
       } else {
-        // UNDERSTATED — ledger shows more than wallet → credit wallet
+        // UNDERSTATED — ledger backs more than the cache shows — credit the
+        // drifted account up to truth, debit the adjustments account.
         builder.addCredit({
           ledgerAccountId: drift.ledgerAccountId,
           amount: correctionAmount,
@@ -452,43 +496,42 @@ class ReconciliationService {
           nature: LedgerEntryNature.CREDIT,
           transactionRef: compensatingRef,
           referenceId: compensatingRef,
-          referenceType: "RECONCILIATION_CORRECTION",
+          referenceType: LedgerEntryType.ADJUSTMENT,
         });
 
-        // Debit treasury (system absorbs the correction)
-        const treasuryLedger = await LedgerAccount.findOne({
-          ownerType: LedgerOwnerType.SYSTEM,
-          type: LedgerAccountType.SYSTEM_TREASURY,
-          currency: drift.currency,
-        }).session(session);
-
-        if (!treasuryLedger)
-          throw new BadRequestError("Treasury ledger not found");
-
         builder.addDebit({
-          ledgerAccountId: treasuryLedger._id,
+          ledgerAccountId: adjustmentLedger._id,
           amount: correctionAmount,
           currency: drift.currency,
           nature: LedgerEntryNature.DEBIT,
           transactionRef: compensatingRef,
           referenceId: compensatingRef,
-          referenceType: "RECONCILIATION_CORRECTION",
+          referenceType: LedgerEntryType.ADJUSTMENT,
         });
       }
 
       await builder.commit(session);
 
-      // Update wallet balance to match true balance
-      await Wallet.findOneAndUpdate(
-        { ledgerAccountId: drift.ledgerAccountId },
-        { $set: { availableBalance: drift.trueBalance } },
+      const trueBalance = await computeTrueBalance(
+        drift.ledgerAccountId,
+        session,
+      );
+
+      await Wallet.updateOne(
+        {
+          ledgerAccountId: drift.ledgerAccountId,
+        },
+        {
+          $set: {
+            availableBalance: trueBalance,
+          },
+        },
         { session },
       );
 
-      await session.commitTransaction();
-
-      logger.info("Compensating ledger entry written", {
+      logger.info("Compensating adjustment entry written", {
         compensatingRef,
+        ledgerAccountId: drift.ledgerAccountId,
         drift: drift.drift,
         severity: drift.severity,
         adminPublicId,
@@ -496,10 +539,7 @@ class ReconciliationService {
 
       return compensatingRef;
     } catch (err) {
-      await session.abortTransaction();
       throw err;
-    } finally {
-      session.endSession();
     }
   }
 
@@ -550,7 +590,7 @@ class ReconciliationService {
     return result;
   }
 
-  // ─── System balance invariant check
+  // ─── System balance invariant check //Checked
   public async checkSystemInvariant(context: IRequestContext) {
     const result = await checkSystemBalanceInvariant();
 
@@ -577,6 +617,34 @@ class ReconciliationService {
 
     return result;
   }
-}
 
+  private async applyDirectCacheCorrection(
+    drift: IDriftRecord,
+    adminPublicId: string,
+    session: ClientSession,
+  ): Promise<void> {
+    const trueBalance = await computeTrueBalance(
+      drift.ledgerAccountId,
+      session,
+    );
+
+    await Wallet.updateOne(
+      {
+        ledgerAccountId: drift.ledgerAccountId,
+      },
+      {
+        $set: {
+          availableBalance: trueBalance,
+        },
+      },
+      { session },
+    );
+
+    logger.info("Direct cache correction applied", {
+      ledgerAccountId: drift.ledgerAccountId,
+      trueBalance,
+      adminPublicId,
+    });
+  }
+}
 export default ReconciliationService;

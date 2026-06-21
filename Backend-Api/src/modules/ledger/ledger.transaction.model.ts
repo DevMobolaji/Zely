@@ -10,7 +10,8 @@ export interface ILedgerTransactionDocument extends Document {
     | "VAULT_TRANSFER"
     | "DEPOSIT"
     | "VAULT_WITHDRAWAL"
-    | "VAULT_PENALTY";
+    | "VAULT_PENALTY"
+    | "RECONCILIATION_CORRECTION";
 
   status: "INITIATED" | "POSTED";
   currency: string;
@@ -38,6 +39,7 @@ const LedgerTransactionSchema = new Schema(
         "DEPOSIT",
         "VAULT_WITHDRAWAL",
         "VAULT_PENALTY",
+        "RECONCILIATION_CORRECTION",
       ],
       required: true,
     },

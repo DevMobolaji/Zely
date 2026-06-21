@@ -159,7 +159,7 @@ class TransferEngine {
       }).session(session);
 
       if (!treasuryLedgerAccount) {
-        throw new BadRequestError("TREASURY_ACCOUNT_NOT_FOUND");
+        throw new BadRequestError("Treasury wallet not found");
       }
 
       const feeBuilder = new TransactionBuilder("FEE");
@@ -185,6 +185,7 @@ class TransferEngine {
       });
 
       await feeBuilder.commit(session);
+      console.log(feeBuilder);
 
       await Wallet.findOneAndUpdate(
         {

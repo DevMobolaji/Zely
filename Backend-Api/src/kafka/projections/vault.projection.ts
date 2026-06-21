@@ -1,9 +1,5 @@
 import redis from "@/infrastructure/cache/redis.cli";
-import { socketRegistry } from "@/infrastructure/websockets/socket.registry";
-import {
-  UserTransactionModel,
-  UserBalanceSummaryModel,
-} from "@/kafka/projections/models/projectionModels";
+import { UserTransactionModel } from "@/kafka/projections/models/projectionModels";
 import { NotificationType } from "@/modules/notification/notification.model";
 import NotificationService from "@/modules/notification/notification.service";
 import { logger } from "@/shared/utils/logger";
@@ -15,127 +11,79 @@ export async function handleVaultTransferCompleted(
   session: ClientSession,
 ) {
   const { payload, eventId, occurredAt, action } = envelope.event;
-  const { sender, receiver, amount, currency, transactionRef, referenceId } =
-    payload;
+  const {
+    userId,
+    amount,
+    userReceives,
+    penaltyAmount,
+    penaltyApplied,
+    penaltyReason,
+    previousBalance,
+    newBalance,
+    currency,
+    transactionRef,
+    type, // vault type, e.g. "TARGET"
+  } = payload;
   const occurredAtDate = new Date(occurredAt);
 
-  const notification = new NotificationService();
+  const direction = action === "VAULT_WITHDRAWAL" ? "credit" : "debit";
+  // withdrawal = money leaving vault, landing back in main wallet → credit to user's main wallet view
+  // deposit = money leaving main wallet, entering vault → debit from main wallet view
+  // (confirm this matches your existing direction convention elsewhere)
 
-  /** -------------------------
-   * TRANSACTION PROJECTIONS
-   * ------------------------- */
-
-  // Debit side: money leaving sender's wallet into the vault
-  await UserTransactionModel.updateOne(
-    { eventId, userId: sender.userId, walletType: sender.accountType },
-    {
-      $setOnInsert: {
-        userId: sender.userId,
-        name: sender.name,
-        transactionRef,
-        category: "VAULT_TRANSFER",
-        direction: "debit",
-        amount,
-        currency,
-        walletType: sender.accountType,
-        status: "TRANSACTION_COMPLETED",
-        referenceId,
-        counterpartyName: receiver.title,
-        occurredAt: occurredAtDate,
-        counterpartyWalletType: "VAULT",
+  try {
+    await UserTransactionModel.updateOne(
+      { eventId, userId, walletType: "VAULT" },
+      {
+        $setOnInsert: {
+          userId,
+          transactionRef,
+          category:
+            action === "VAULT_WITHDRAWAL"
+              ? "VAULT_WITHDRAWAL"
+              : "VAULT_DEPOSIT",
+          direction,
+          amount: action === "VAULT_WITHDRAWAL" ? userReceives : amount,
+          currency,
+          walletType: "VAULT",
+          status: "TRANSACTION_COMPLETED",
+          occurredAt: occurredAtDate,
+          ...(penaltyApplied && { penaltyAmount, penaltyReason }),
+        },
       },
-    },
-    { upsert: true, session },
-  );
+      { upsert: true, session },
+    );
 
-  // Credit side: vault's own ledger row (only if vaults get a visible per-vault history —
-  // see the same open question flagged for VAULT_DEPOSIT last message)
-  await UserTransactionModel.updateOne(
-    { eventId, userId: receiver.userId, walletType: "VAULT" },
-    {
-      $setOnInsert: {
-        userId: receiver.userId,
-        name: receiver.title,
-        transactionRef,
-        category: "VAULT_TRANSFER",
-        direction: "credit",
-        amount,
-        currency,
-        walletType: "VAULT",
-        status: "TRANSACTION_COMPLETED",
-        referenceId,
-        counterpartyName: sender.name,
-        occurredAt: occurredAtDate,
-        counterpartyWalletType: sender.accountType,
-      },
-    },
-    { upsert: true, session },
-  );
+    const notification = new NotificationService();
+    await notification.createAndEmit({
+      userId,
+      type: NotificationType.INFO,
+      title:
+        action === "VAULT_WITHDRAWAL" ? "Vault withdrawal" : "Vault deposit",
+      message:
+        action === "VAULT_WITHDRAWAL"
+          ? `₦${userReceives.toLocaleString("en-NG")} withdrawn from your vault${penaltyApplied ? ` (₦${penaltyAmount} early-withdrawal penalty applied)` : ""}.`
+          : `₦${amount.toLocaleString("en-NG")} added to your vault.`,
+      amount: action === "VAULT_WITHDRAWAL" ? userReceives : amount,
+      currency,
+      referenceId: transactionRef,
+    });
 
-  /** -------------------------
-   * BALANCE SUMMARY — always treated as internal
-   * ------------------------- */
+    await Promise.all([
+      redis.delete(`wallets:${userId}`),
+      redis.delete(`balance:summary:${userId}`),
+      redis.delete(`transactions:${userId}`),
+    ]);
 
-  await UserBalanceSummaryModel.updateOne(
-    { userId: sender.userId },
-    {
-      $set: {
-        mainBalance: sender.currentBalance,
-        vaultBalance: receiver.currentBalance,
-      },
-    },
-    { upsert: true, session },
-  );
-
-  /** -------------------------
-   * REAL-TIME PUSH
-   * ------------------------- */
-
-  socketRegistry.emitToUser(sender.userId, "balance:updated", {
-    id: eventId,
-    walletType: sender.accountType,
-    newBalance: sender.currentBalance,
-    direction: "debit",
-    amount,
-    currency,
-    transactionRef,
-    occurredAt: occurredAtDate,
-  });
-
-  socketRegistry.emitToUser(sender.userId, "balance:updated", {
-    id: eventId,
-    walletType: "VAULT",
-    newBalance: receiver.currentBalance,
-    direction: "credit",
-    amount,
-    currency,
-    transactionRef,
-    occurredAt: occurredAtDate,
-  });
-
-  /** -------------------------
-   * NOTIFICATION
-   * ------------------------- */
-
-  await notification.createAndEmit({
-    userId: sender.userId,
-    type: NotificationType.INFO,
-    title: "Vault Deposit",
-    message: `₦${amount.toLocaleString("en-NG")} moved to ${receiver.title}.`,
-    amount,
-    currency,
-    referenceId: `${transactionRef}:vault`,
-  });
-
-  /** -------------------------
-   * CACHE INVALIDATION
-   * ------------------------- */
-
-  await Promise.all([
-    redis.delete(`wallets:${sender.userId}`),
-    redis.delete(`balance:summary:${sender.userId}`),
-    redis.delete(`transactions:${sender.userId}`),
-  ]);
-
-  logger.info("✅ Vault transfer projection complete", { transactionRef });
+    logger.info("✅ Vault withdrawal/deposit projection complete", {
+      transactionRef,
+      newBalance,
+    });
+  } catch (error: any) {
+    logger.error("vault Projection event processing failed", {
+      error: error?.message,
+      stack: error?.stack,
+    });
+    throw error;
+  }
 }

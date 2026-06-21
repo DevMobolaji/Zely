@@ -14,6 +14,7 @@
 
 import redis from "@/infrastructure/cache/redis.cli";
 import { socketRegistry } from "@/infrastructure/websockets/socket.registry";
+import { NotificationType } from "@/modules/notification/notification.model";
 import NotificationService from "@/modules/notification/notification.service";
 import { logger } from "@/shared/utils/logger";
 import { ClientSession } from "mongoose";
@@ -22,16 +23,24 @@ import {
   UserTransactionModel,
   UserWalletModel,
 } from "./models/projectionModels";
-// import notificationService from "@/modules/notifications/notification.service";
-import { NotificationType } from "@/modules/notification/notification.model";
+
+const notification = new NotificationService();
 
 const accountFieldMap: Record<string, string> = {
   MAIN_CHECKINGS: "mainBalance",
   SAVINGS: "savingsBalance",
-  VAULT: "vaultBalance",
+  FLEXIBLE: "vaultBalance",
+  LOCKED: "vaultBalance",
+  TARGET: "vaultBalance",
 };
 
-const notification = new NotificationService();
+const walletLabelMap: Record<string, string> = {
+  MAIN_CHECKINGS: "Main Checking",
+  SAVINGS: "Savings",
+  FLEXIBLE: "Vault",
+  LOCKED: "Vault",
+  TARGET: "Vault",
+};
 
 export async function handleTransactionCompleted(
   topic: string,
@@ -53,12 +62,6 @@ export async function handleTransactionCompleted(
   } = payload;
 
   const occurredAtDate = new Date(occurredAt);
-
-  const walletLabelMap: Record<string, string> = {
-    MAIN_CHECKINGS: "Main Checking",
-    SAVINGS: "Savings",
-    VAULT: "Vault",
-  };
 
   /** -------------------------
    * TRANSACTION PROJECTIONS
@@ -121,7 +124,7 @@ export async function handleTransactionCompleted(
     [
       {
         updateOne: {
-          filter: { walletId: sender.walletId, walletType: sender.accountType },
+          filter: { walletId: sender.walletId },
           update: {
             $set: {
               walletId: sender.walletId,
@@ -141,7 +144,6 @@ export async function handleTransactionCompleted(
         updateOne: {
           filter: {
             walletId: receiver.walletId,
-            walletType: receiver.accountType,
           },
           update: {
             $set: {

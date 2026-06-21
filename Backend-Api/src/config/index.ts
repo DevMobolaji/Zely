@@ -38,12 +38,12 @@ const envSchema = z.object({
   REDIS_DB_1: z.coerce.number().default(1),
   REDIS_DB_2: z.coerce.number().default(2),
   REDIS_DB_3: z.coerce.number().default(3),
-  HASH_PREFIX: z.string().min(1),
-  LATEST_PREFIX: z.string().min(1),
+  REFRESH_TOKEN_HASH_PREFIX: z.string().min(1),
   DEVICES_PREFIX: z.string().min(1),
   BLACKLIST_PREFIX: z.string().min(1),
   PWDVER_PREFIX: z.string().min(1),
   LASTUSED_PREFIX: z.string().min(1),
+  SESSION_LATEST_PREFIX: z.string().min(1),
 
   // Kafka (events)
   KAFKA_BROKERS: z.string().min(1),
@@ -119,12 +119,12 @@ export const config = {
     maxRetriesPerRequest: env.REDIS_MAX_RETRIES_PER_REQUEST,
     enableReadyCheck: env.REDIS_ENABLE_READY_CHECK,
     enableOfflineQueue: env.REDIS_ENABLE_OFFLINE_QUEUE,
-    hashPrefix: env.HASH_PREFIX,
-    latestPrefix: env.LATEST_PREFIX,
+    refreshTokenHashPrefix: env.REFRESH_TOKEN_HASH_PREFIX,
     userDevicesPrefix: env.DEVICES_PREFIX,
     blacklistPrefix: env.BLACKLIST_PREFIX,
     pwdverPrefix: env.PWDVER_PREFIX,
     lastusedPrefix: env.LASTUSED_PREFIX,
+    sessionLatestPrefix: env.SESSION_LATEST_PREFIX,
   },
 
   kafka: {

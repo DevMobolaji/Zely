@@ -1,5 +1,13 @@
 import { PaymentDriftCategory } from "@/modules/reconciliation/reconciliation.model";
 
+export interface WalletDrift {
+  walletId: string;
+  storedBalance: number;
+  ledgerNet: number;
+  drift: number;
+  isBalanced: boolean;
+}
+
 export interface SystemInvariantResult {
   totalWalletBalance: number;
   totalLedgerNet: number;
@@ -8,6 +16,7 @@ export interface SystemInvariantResult {
   invariantDrift: number;
   isBalanced: boolean;
   checkedAt: Date;
+  driftedWallets: WalletDrift[];
 }
 
 export interface PaystackTransactionResponse {

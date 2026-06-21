@@ -19,7 +19,7 @@ export async function onEventConfirmed(
     try {
       await withKafkaBreaker(async () => {
         await producer.send({
-          topic: TOPICS.CONFIRMED_EVENTS, // ← one generic topic
+          topic: TOPICS.CONFIRMED_TRANSFER_EVENTS, // ← one generic topic
           messages: [
             {
               key,
@@ -34,7 +34,7 @@ export async function onEventConfirmed(
       }, "publishConfirmedEvent");
 
       kafkaMessagesProcessedTotal.inc({
-        topic: TOPICS.CONFIRMED_EVENTS,
+        topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
         consumer_group: "event-producer",
       });
 

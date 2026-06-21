@@ -89,7 +89,7 @@ export const VaultWithdrawalV1Schema = BaseEventSchema.extend({
   aggregateId: z.string(),
 
   payload: z.object({
-    vaultId: z.string(),
+    transactionRef: z.string(),
     userId: z.string(),
 
     amount: z.number(),
@@ -99,6 +99,7 @@ export const VaultWithdrawalV1Schema = BaseEventSchema.extend({
     penaltyApplied: z.boolean(),
     penaltyReason: z.string(),
 
+    previousBalance: z.number(),
     newBalance: z.number(),
     currency: z.string(),
     type: z.string(),

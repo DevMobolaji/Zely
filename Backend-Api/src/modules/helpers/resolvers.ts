@@ -221,7 +221,7 @@ export const ensureWalletsAreActive = async (
 
   if (!senderWallet || senderWallet.status !== "ACTIVE") {
     throw new BadRequestError(
-      `Wallet ${senderWallet?.walletId} is frozen or inactive (Reason: ${senderWallet?.freezeReason})`,
+      `Wallet is frozen or inactive (Reason: ${senderWallet?.freezeReason})`,
     );
   }
 
@@ -399,7 +399,7 @@ export const findWalletByType = async (
     .session(session);
 
   if (!wallet) {
-    throw new BadRequestError(`${type} wallet not found for ${currency}`);
+    throw new BadRequestError(`wallet not found for ${currency}`);
   }
 
   return wallet;

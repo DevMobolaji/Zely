@@ -26,7 +26,7 @@ import {
 import { Response, Router } from "express";
 import { StatusCodes } from "http-status-codes";
 import asyncWrapper from "shared/middleware/async.wrapper";
-import { requireAuth } from "shared/middleware/auth.middleware";
+import { isAdmin, requireAuth } from "shared/middleware/auth.middleware";
 import validateRequest from "shared/middleware/validation.middleware";
 import { UserRole } from "./authinterface";
 import authService from "./authservice";
@@ -66,12 +66,7 @@ class AuthController implements Controller {
       validateRequest(validationSchema.login, "body"),
       this.login,
     );
-    this.route.get(
-      `${this.path}/me`,
-      ...meLimiters,
-      requireAuth,
-      this.getUserById,
-    );
+    this.route.get(`${this.path}/me`, ...meLimiters, requireAuth, this.getMe);
     this.route.post(
       `${this.path}/refresh-token`,
       ...refreshTokenLimiters,
@@ -219,22 +214,22 @@ class AuthController implements Controller {
     },
   );
 
-  private getUserById = asyncWrapper(
-    async (req: IAuthRequest, res: Response) => {
-      const context = getRequestContext(req);
-      console.log(context);
+  private getMe = asyncWrapper(async (req: IAuthRequest, res: Response) => {
+    const userId = (req as any).user?.userId;
+    const context = getRequestContext(req);
 
-      if (!context.userId) {
-        return res.status(StatusCodes.UNAUTHORIZED).json({
-          error: "User not authenticated",
-        });
-      }
+    console.log(req.user);
 
-      const user = await this.authService.getUser();
+    if (!context.userId) {
+      return res.status(StatusCodes.UNAUTHORIZED).json({
+        error: "User not authenticated",
+      });
+    }
 
-      res.status(200).send({ user });
-    },
-  );
+    const user = await this.authService.getUser(userId);
+
+    res.status(200).send({ user });
+  });
 
   private verify = asyncWrapper(async (req: IAuthRequest, res: Response) => {
     const { email, otp } = req.body;

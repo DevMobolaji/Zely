@@ -1,19 +1,18 @@
-import { Request, Response, NextFunction } from "express";
-import { verifyAccessToken } from "@/infrastructure/helpers/token.helper";
-import UnauthenticatedError from "@/shared/errors/unaunthenticated";
-import User from "modules/auth/authmodel";
-import { extractRequestContext } from "./request.context";
+import { config } from "@/config/index";
+import redis from "@/infrastructure/cache/redis.cli";
 import {
   getLatestHashForDevice,
   isJtiBlacklisted,
 } from "@/infrastructure/helpers/session.helper";
-import Unauthorized from "../errors/unauthorized";
+import { verifyAccessToken } from "@/infrastructure/helpers/token.helper";
 import { UserRole } from "@/modules/auth/authinterface";
-import { StatusCodes } from "http-status-codes";
 import { SessionModel } from "@/modules/sessions/session.model";
+import UnauthenticatedError from "@/shared/errors/unaunthenticated";
 import { logger } from "@/shared/utils/logger";
-import redis from "@/infrastructure/cache/redis.cli";
-import { config } from "@/config/index";
+import { NextFunction, Request, Response } from "express";
+import { StatusCodes } from "http-status-codes";
+import User from "modules/auth/authmodel";
+import { extractRequestContext } from "./request.context";
 
 export interface AccessPayload {
   userId: string;
@@ -82,7 +81,17 @@ export const requireAuth = async (
             new UnauthenticatedError("Password changed — please login again"),
           );
         }
-        sessionValidated = true;
+
+        // ─── Throttled verification against MongoDB ──────────────────────
+        // Redis says valid, but Redis is a cache — confirm against source
+        // of truth periodically rather than trusting indefinitely.
+        const stillActive = await SessionModel.exists({
+          userId: payload.sub,
+          deviceId: payload.deviceId,
+          isActive: true,
+        });
+
+        sessionValidated = !!stillActive;
       }
     } catch (redisErr) {
       redisAvailable = false;
@@ -90,6 +99,14 @@ export const requireAuth = async (
         "Redis unavailable in auth middleware — falling back to MongoDB",
       );
     }
+
+    // ADD THIS LINE
+    logger.info("SESSION CHECK STATE", {
+      sessionValidated,
+      redisAvailable,
+      sub: payload.sub,
+      deviceId: payload.deviceId,
+    });
 
     // ─── 4. MongoDB fallback if Redis missed or is down ──────────────────
     // Keeps users authenticated during Redis outages.
@@ -116,6 +133,44 @@ export const requireAuth = async (
       if ((user.passwordVersion ?? 0) !== expectedPasswordVersion) {
         return next(
           new UnauthenticatedError("Password changed — please login again"),
+        );
+      }
+
+      // ─── Rehydrate Redis — heal the cache for next request ────────────────
+      // Best-effort only. If this fails, MongoDB fallback just runs again
+      // next time. Never let rehydration failure block the actual request.
+      try {
+        const ttlSeconds = Math.max(
+          Math.floor((session.expiresAt.getTime() - Date.now()) / 1000),
+          0,
+        );
+
+        if (ttlSeconds > 0) {
+          const latestKey = `${config.redis.sessionLatestPrefix}${payload.sub}:${payload.deviceId}`;
+          await redis.getClient().set(latestKey, "1", "EX", ttlSeconds);
+
+          const pwdVerKey = `${config.redis.pwdverPrefix}${payload.sub}`;
+          await redis
+            .getClient()
+            .set(
+              pwdVerKey,
+              String(user.passwordVersion ?? 0),
+              "EX",
+              ttlSeconds,
+            );
+
+          logger.info("Redis rehydrated after MongoDB fallback", {
+            sub: payload.sub,
+            deviceId: payload.deviceId,
+            ttlSeconds,
+          });
+        }
+      } catch (rehydrateErr) {
+        logger.warn(
+          "Redis rehydration failed — non-fatal, will retry next request",
+          {
+            sub: payload.sub,
+          },
         );
       }
     }

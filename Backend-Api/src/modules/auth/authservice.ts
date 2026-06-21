@@ -345,7 +345,7 @@ class authService {
         AuditStatus.FAILED,
         { email },
       );
-      throw new BadRequestError("User not found");
+      throw new BadRequestError("Invalid credentials");
     }
 
     if (user.security.lockedUntil && user.security.lockedUntil > new Date()) {
@@ -501,7 +501,7 @@ class authService {
       redis
         .getClient()
         .set(
-          `${config.redis.latestPrefix}${user._id}:${context.deviceId}`,
+          `${config.redis.sessionLatestPrefix}${user._id}:${context.deviceId}`,
           hashRf.toString(),
           "EX",
           60 * 60 * 24 * 7,
@@ -564,6 +564,15 @@ class authService {
 
       // Was legitimately rotated — reject gracefully without revoking
       throw new Unauthorized("Token already rotated, use new token");
+    }
+
+    const session = await SessionModel.findOne({
+      userId: jwtPayload.sub,
+      deviceId: jwtPayload.deviceId,
+    }).lean();
+
+    if (!session || !session.isActive) {
+      throw new Unauthorized("Session has been revoked");
     }
 
     const user = await this.userModel.findById(jwtPayload.sub).exec();
@@ -1008,8 +1017,12 @@ class authService {
     return { ok: true };
   }
 
-  public async getUser() {
-    const user = await this.userModel.find();
+  public async getUser(userId: string) {
+    const user = await this.userModel.findOne({ userId }).select("-password");
+    console.log(user);
+
+    // const user = await User.findOne({ userId }).select("-password");
+
     if (!user) throw new BadRequestError("Users not found");
     return user;
   }

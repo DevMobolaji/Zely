@@ -5,26 +5,27 @@ import mongoose, { Schema, Document, Types } from "mongoose";
 export enum LedgerAccountType {
   MAIN_CHECKINGS = "MAIN_CHECKINGS",
   SAVINGS = "SAVINGS",
-  ESCROW = "ESCROW",                     // ← add
-  SETTLEMENT = "SETTLEMENT",             // ← add
+  ESCROW = "ESCROW", // ← add
+  SETTLEMENT = "SETTLEMENT", // ← add
   SYSTEM_TREASURY = "SYSTEM_TREASURY",
   SYSTEM_REVENUE = "SYSTEM_REVENUE",
   VAULT = "VAULT",
   EXTERNAL_FUNDING = "EXTERNAL_FUNDING",
+  RECONCILIATION_ADJUSTMENTS = "RECONCILIATION_ADJUSTMENTS",
 }
 
 export enum LedgerOwnerType {
   WALLET = "WALLET",
   SYSTEM = "SYSTEM",
   USER = "USER",
-  VAULT = "VAULT"
+  VAULT = "VAULT",
 }
 
 export interface LedgerAccountDocument extends Document {
   userId: Types.ObjectId;
   userPublicId: string;
-  ownerId: Types.ObjectId;        // walletId or vaultId
-  ownerType: LedgerOwnerType;     // WALLET | VAULT | SYSTEM
+  ownerId: Types.ObjectId; // walletId or vaultId
+  ownerType: LedgerOwnerType; // WALLET | VAULT | SYSTEM
   ledgerAccountId: string;
   type: LedgerAccountType;
   currency: string;
@@ -41,26 +42,26 @@ const LedgerAccountSchema = new Schema(
     ownerId: {
       type: Types.ObjectId,
       required: true,
-      index: true
+      index: true,
     },
     ownerPublicId: {
       type: String,
       index: true,
-      require: true
+      require: true,
     },
 
     ownerType: {
       type: String,
       enum: Object.values(LedgerOwnerType),
       required: true,
-      index: true
+      index: true,
     },
     ledgerAccountId: {
       type: String,
       required: true,
       unique: true,
       immutable: true,
-      default: generateLedgerAccountId
+      default: generateLedgerAccountId,
     },
     type: {
       type: String,
@@ -70,10 +71,10 @@ const LedgerAccountSchema = new Schema(
     currency: {
       type: String,
       required: true,
-      uppercase: true
+      uppercase: true,
     },
   },
-  { timestamps: { createdAt: true, updatedAt: false } }
+  { timestamps: { createdAt: true, updatedAt: false } },
 );
 
 LedgerAccountSchema.pre("validate", async function () {
@@ -84,13 +85,12 @@ LedgerAccountSchema.pre("validate", async function () {
       LedgerAccountType.ESCROW,
       LedgerAccountType.SETTLEMENT,
     ],
-    [LedgerOwnerType.VAULT]: [
-      LedgerAccountType.VAULT,
-    ],
+    [LedgerOwnerType.VAULT]: [LedgerAccountType.VAULT],
     [LedgerOwnerType.SYSTEM]: [
       LedgerAccountType.SYSTEM_TREASURY,
       LedgerAccountType.SYSTEM_REVENUE,
       LedgerAccountType.EXTERNAL_FUNDING,
+      LedgerAccountType.RECONCILIATION_ADJUSTMENTS,
     ],
     [LedgerOwnerType.USER]: [
       LedgerAccountType.MAIN_CHECKINGS,
@@ -104,17 +104,17 @@ LedgerAccountSchema.pre("validate", async function () {
 
   if (!allowedTypes.includes(this.type)) {
     throw new Error(
-      `Invalid ledger type ${this.type} for ownerType ${this.ownerType}`
+      `Invalid ledger type ${this.type} for ownerType ${this.ownerType}`,
     );
   }
 });
 // Prevent duplicate ledger accounts for same owner/type
 LedgerAccountSchema.index(
   { ownerId: 1, ownerType: 1, type: 1, currency: 1 },
-  { unique: true }
+  { unique: true },
 );
 
 export const LedgerAccount = mongoose.model<LedgerAccountDocument>(
   "LedgerAccount",
-  LedgerAccountSchema
+  LedgerAccountSchema,
 );

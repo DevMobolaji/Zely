@@ -27,9 +27,27 @@ export async function routeToProjectionHandler(
       await handleFundingProjection(topic, envelope, session);
       break;
 
-    case "VAULT_TRANSFER":
-      await handleVaultTransferCompleted(topic, envelope, session);
-      break;
+    case "VAULT":
+      switch (envelope.event.eventType) {
+        case "VAULT_DEPOSIT":
+        case "VAULT_WITHDRAWAL":
+          await handleVaultTransferCompleted(topic, envelope, session);
+          break;
+
+        case "VAULT_CREATED":
+        case "VAULT_CLOSED":
+          // No projection needed yet — skip silently
+          logger.info("Skipping unhandled VAULT event", {
+            eventType: envelope.event.eventType,
+            aggregateId: envelope.event.aggregateId,
+          });
+          break;
+
+        default:
+          logger.warn("Unknown VAULT eventType", {
+            eventType: envelope.event.eventType,
+          });
+      }
 
     default:
       logger.warn("No projection handler for aggregateType", {

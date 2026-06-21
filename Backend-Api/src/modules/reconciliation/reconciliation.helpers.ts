@@ -2,6 +2,7 @@ import { IRequestContext } from "@/config/interfaces/request.interface";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
 import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
 import {
+  LedgerAccount,
   LedgerAccountType,
   LedgerOwnerType,
 } from "@/modules/ledger/ledger.account.model";
@@ -15,6 +16,7 @@ import {
   PaystackTransaction,
   PaystackTransactionResponse,
   SystemInvariantResult,
+  WalletDrift,
 } from "@/modules/reconciliation/interfaces";
 import {
   DriftAction,
@@ -33,6 +35,7 @@ import {
 } from "@/modules/wallet/wallet.model";
 import { generateEventId } from "@/shared/utils/id.generator";
 import { logger } from "@/shared/utils/logger";
+import { ClientSession } from "mongoose";
 import { Types } from "mongoose";
 
 const DRIFT_THRESHOLD = 0;
@@ -156,9 +159,14 @@ export function decideAction(
 // ─── Compute true balance from ledger entries
 export async function computeTrueBalance(
   ledgerAccountId: Types.ObjectId,
+  session?: ClientSession,
 ): Promise<number> {
   const result = await LedgerEntry.aggregate([
-    { $match: { ledgerAccountId } },
+    {
+      $match: {
+        ledgerAccountId,
+      },
+    },
     {
       $group: {
         _id: null,
@@ -174,13 +182,16 @@ export async function computeTrueBalance(
         },
       },
     },
-  ]);
+  ]).session(session);
 
-  if (result.length === 0) return 0; // no entries, balance is 0
+  if (result.length === 0) {
+    return 0;
+  }
+
   const { totalCredits, totalDebits } = result[0];
+
   return totalCredits - totalDebits;
 }
-
 //Reconcile ledger account
 export async function reconcileLedgerAccount(
   ledgerAccount: any,
@@ -189,7 +200,10 @@ export async function reconcileLedgerAccount(
 ): Promise<IDriftRecord> {
   const ledgerAccountId = ledgerAccount._id;
 
-  const VIRTUAL_LEDGER_TYPES = [LedgerAccountType.EXTERNAL_FUNDING];
+  const VIRTUAL_LEDGER_TYPES = [
+    LedgerAccountType.EXTERNAL_FUNDING,
+    LedgerAccountType.RECONCILIATION_ADJUSTMENTS,
+  ];
   if (VIRTUAL_LEDGER_TYPES.includes(ledgerAccount.type)) {
     const trueBalance = await computeTrueBalance(ledgerAccountId);
     return {
@@ -223,8 +237,6 @@ export async function reconcileLedgerAccount(
     ledgerAccount.ownerType,
     ledgerAccountId,
   );
-
-  console.log(ownerPublicId, sourceDoc);
 
   // 3. Classify drift
   const { drift, severity } = classifyDrift(cachedBalance, trueBalance);
@@ -336,15 +348,16 @@ export async function reconcileLedgerAccount(
   return driftRecord;
 }
 
-//Reconcile the whole system Balance
 export async function checkSystemBalanceInvariant(): Promise<SystemInvariantResult> {
   const checkedAt = new Date();
 
-  // Sum of ALL user wallet balances
-  const walletAgg = await Wallet.aggregate([
+  // 1. Stored balance per wallet, keyed by the wallet's ledgerAccountId
+  const wallets = await Wallet.aggregate([
     {
-      $addFields: {
-        totalBalance: {
+      $project: {
+        walletId: "$_id",
+        ledgerAccountId: 1,
+        storedBalance: {
           $add: [
             { $ifNull: ["$availableBalance", 0] },
             { $ifNull: ["$lockedBalance", 0] },
@@ -352,18 +365,56 @@ export async function checkSystemBalanceInvariant(): Promise<SystemInvariantResu
         },
       },
     },
+  ]);
+
+  // 2. Net credits/debits per LedgerAccount (this is the direct join key)
+  const ledgerNetByAccount = await LedgerEntry.aggregate([
     {
       $group: {
-        _id: null,
-        total: { $sum: "$totalBalance" },
+        _id: "$ledgerAccountId",
+        net: {
+          $sum: {
+            $cond: [
+              { $eq: ["$type", LedgerEntryNature.CREDIT] },
+              "$amount",
+              { $multiply: ["$amount", -1] },
+            ],
+          },
+        },
       },
     },
   ]);
 
-  const totalWalletBalance = walletAgg[0]?.total ?? 0;
+  const ledgerNetMap = new Map(
+    ledgerNetByAccount.map((row) => [String(row._id), row.net]),
+  );
 
-  // Sum of ALL ledger entries
-  const ledgerAgg = await LedgerEntry.aggregate([
+  // 3. Diff each wallet's stored balance vs its own ledger account's net
+  const driftedWallets: WalletDrift[] = wallets
+    .map((w) => {
+      const walletId = String(w.walletId);
+      const ledgerNet = ledgerNetMap.get(String(w.ledgerAccountId)) ?? 0;
+      const drift = w.storedBalance - ledgerNet;
+      return {
+        walletId,
+        storedBalance: w.storedBalance,
+        ledgerNet,
+        drift,
+        isBalanced: Math.abs(drift) <= 0,
+      };
+    })
+    .filter((w) => !w.isBalanced);
+
+  const isBalanced = driftedWallets.length === 0;
+
+  const totalWalletBalance = wallets.reduce((s, w) => s + w.storedBalance, 0);
+  const totalLedgerNet = wallets.reduce(
+    (s, w) => s + (ledgerNetMap.get(String(w.ledgerAccountId)) ?? 0),
+    0,
+  );
+  const invariantDrift = totalWalletBalance - totalLedgerNet;
+
+  const globalAgg = await LedgerEntry.aggregate([
     {
       $group: {
         _id: null,
@@ -380,19 +431,13 @@ export async function checkSystemBalanceInvariant(): Promise<SystemInvariantResu
       },
     },
   ]);
-
-  const ledgerMap = new Map(ledgerAgg.map((l) => [l._id, l.total]));
-
-  const totalLedgerCredits = ledgerMap.get(LedgerEntryNature.CREDIT) ?? 0;
-
-  const totalLedgerDebits = ledgerMap.get(LedgerEntryNature.DEBIT) ?? 0;
-
-  const totalLedgerNet = totalLedgerCredits - totalLedgerDebits;
-  const invariantDrift = totalWalletBalance - totalLedgerNet;
-  const isBalanced = Math.abs(invariantDrift) <= 0;
+  const totalLedgerCredits = globalAgg[0]?.totalCredits ?? 0;
+  const totalLedgerDebits = globalAgg[0]?.totalDebits ?? 0;
 
   if (!isBalanced) {
     logger.error("🚨 CRITICAL — System balance invariant violated", {
+      driftedWalletCount: driftedWallets.length,
+      driftedWallets,
       totalWalletBalance,
       totalLedgerNet,
       invariantDrift,
@@ -400,6 +445,7 @@ export async function checkSystemBalanceInvariant(): Promise<SystemInvariantResu
     });
   } else {
     logger.info("✅ System balance invariant holds", {
+      walletsChecked: wallets.length,
       totalWalletBalance,
       totalLedgerNet,
       checkedAt,
@@ -413,6 +459,7 @@ export async function checkSystemBalanceInvariant(): Promise<SystemInvariantResu
     totalLedgerDebits,
     invariantDrift,
     isBalanced,
+    driftedWallets,
     checkedAt,
   };
 }

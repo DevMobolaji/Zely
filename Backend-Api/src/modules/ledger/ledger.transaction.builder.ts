@@ -1,7 +1,11 @@
 import BadRequestError from "@/shared/errors/badRequest";
 import { ClientSession, Types } from "mongoose";
 import { LedgerTransactionModel } from "./ledger.transaction.model";
-import { LedgerAccount } from "./ledger.account.model";
+import {
+  LedgerAccount,
+  LedgerAccountDocument,
+  LedgerAccountType,
+} from "./ledger.account.model";
 import {
   AddCreditInput,
   AddDebitInput,
@@ -20,6 +24,16 @@ export type LedgerTransactionType =
   | "VAULT_PENALTY"
   | "VAULT_WITHDRAWAL"
   | "RECONCILIATION_CORRECTION";
+
+const NON_SPENDABLE_LEDGER_TYPES = [
+  LedgerAccountType.RECONCILIATION_ADJUSTMENTS,
+];
+
+// Transaction types allowed to touch a non-spendable account.
+// Only the reconciliation correction flow itself should ever be allowed in.
+const ALLOWED_TRANSACTION_TYPES_FOR_NON_SPENDABLE: LedgerTransactionType[] = [
+  "RECONCILIATION_CORRECTION",
+];
 
 class TransactionBuilder {
   private entries: LedgerEntryInput[] = [];
@@ -68,6 +82,25 @@ class TransactionBuilder {
     ];
   }
 
+  private guardNonSpendableAccounts(ledgerAccounts: LedgerAccountDocument[]) {
+    const accountsById = new Map(ledgerAccounts.map((a) => [String(a._id), a]));
+
+    for (const entry of this.entries) {
+      const account = accountsById.get(String(entry.ledgerAccountId));
+      if (!account) continue; // missing-account case already handled elsewhere in commit
+
+      const isNonSpendable = NON_SPENDABLE_LEDGER_TYPES.includes(account.type);
+      const isAllowedTxnType =
+        ALLOWED_TRANSACTION_TYPES_FOR_NON_SPENDABLE.includes(this.type);
+
+      if (isNonSpendable && !isAllowedTxnType) {
+        throw new BadRequestError(
+          `Ledger account type ${account.type} cannot be used outside of: ${ALLOWED_TRANSACTION_TYPES_FOR_NON_SPENDABLE.join(", ")}`,
+        );
+      }
+    }
+  }
+
   private validate() {
     if (this.entries.length < 2) {
       throw new BadRequestError("ledger entries must have 2 entries");
@@ -108,6 +141,8 @@ class TransactionBuilder {
     })
       .session(session)
       .setOptions({ maxTimeMS: 5000 });
+
+    this.guardNonSpendableAccounts(ledgerAccounts);
 
     if (
       ledgerAccounts.length !==

@@ -124,7 +124,8 @@ class ReconciliationController implements Controller {
       const adminId = req.user!.sub;
       const adminPublicId = req.user!.userId;
       const { runId, ledgerAccountPublicId } = req.params;
-      const { resolutionType, notes, applyCorrection } = req.body;
+      const { resolutionType, notes, applyCorrection, correctionMethod } =
+        req.body;
 
       const result = await this.reconciliationService.resolveDrift({
         runId,
@@ -134,6 +135,7 @@ class ReconciliationController implements Controller {
         adminId,
         adminPublicId,
         applyCorrection: applyCorrection ?? false,
+        correctionMethod,
         context: ctx,
       });
 

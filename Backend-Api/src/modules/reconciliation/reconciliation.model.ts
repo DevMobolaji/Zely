@@ -48,6 +48,11 @@ export enum PaymentDriftCategory {
   IN_SYNC = "IN_SYNC",
 }
 
+export enum CorrectionMethod {
+  LEDGER_ENTRY = "LEDGER_ENTRY",
+  DIRECT_CACHE_SYNC = "DIRECT_CACHE_SYNC",
+}
+
 export interface IDriftRecord {
   ledgerAccountId: Types.ObjectId;
   ledgerAccountPublicId: string;
@@ -66,6 +71,7 @@ export interface IDriftRecord {
   resolvedAt?: Date;
   resolvedBy?: string;
   resolutionType?: DriftResolutionType;
+  correctionMethod?: CorrectionMethod;
   resolutionNotes?: string;
   compensatingEntryRef?: string;
 }
@@ -124,6 +130,11 @@ const DriftRecordSchema = new Schema<IDriftRecord>(
       type: String,
       enum: Object.values(DriftResolutionType),
     },
+    correctionMethod: {
+      type: String,
+      enum: ["LEDGER_ENTRY", "DIRECT_CACHE_SYNC"],
+      required: false,
+    },
     resolutionNotes: { type: String },
     compensatingEntryRef: { type: String },
   },
@@ -165,8 +176,11 @@ const ReconciliationReportSchema = new Schema<ReconciliationReportDocument>(
 );
 
 // Index for "show me runs in the last X days where drift was found"
-ReconciliationReportSchema.index({ createdAt: -1, driftsFound: 1 });
-
+// Add a unique compound index that makes a true double-write impossible at the DB level
+ReconciliationReportSchema.index(
+  { runId: 1, "drifts.ledgerAccountPublicId": 1, "drifts.resolvedAt": 1 },
+  { partialFilterExpression: { "drifts.resolvedAt": { $exists: true } } },
+);
 export const ReconciliationReport =
   mongoose.model<ReconciliationReportDocument>(
     "ReconciliationReport",

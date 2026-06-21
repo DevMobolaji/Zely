@@ -666,40 +666,47 @@ class TransferService {
       }
 
       /** -------------------------
-       * OUTBOX / EVENT EMISSION``
+       * OUTBOX / EVENT EMISSION
        * ------------------------- */
       await emitOutboxEvent(
         {
-          topic: "vault.events",
+          topic: "transfer.events", // ← same topic as internal transfer, not vault.events
           eventId: result.transactionRef,
-          eventType: "VAULT_TRANSFER_COMPLETED",
-          action: AuditAction.VAULT_TRANSFER_COMPLETED,
+          eventType: AuditAction.TRANSACTION_COMPLETED, // ← reuse, not VAULT_TRANSFER_COMPLETED
+          action: AuditAction.TRANSACTION_COMPLETED,
           status: AuditStatus.PENDING,
-          aggregateType: "VAULT_TRANSFER",
-          aggregateId: result.transactionRef,
-          version: 1,
           payload: {
             sender: {
+              walletId: senderWallet.walletId,
               userId: senderWallet.userPublicId,
               name: senderWallet.userId.name,
+              email: senderWallet.userId.email,
+              accountType: senderAccount.type,
+              accountNumber: senderAccount.accountNumber,
               previousBalance: senderWallet.availableBalance,
               currentBalance: updatedSenderWallet?.availableBalance,
-              accountNumber: senderAccount.accountNumber,
-              accountType: senderAccount.type,
+              version: updatedSenderWallet.version,
             },
             receiver: {
+              walletId: vault.vaultId,
               userId: vault.userPublicId,
-              vaultId: vault.vaultId,
+              name: vault.title,
+              email: senderWallet.userId.email,
+              accountType: vault.vaultType,
+              accountNumber: vault.vaultId,
               previousBalance: vault.currentBalanceMinor,
               currentBalance: updatedVault?.currentBalanceMinor,
-              title: vault.title,
+              version: updatedVault?.version,
             },
+            amount: dto.amount,
+            currency: dto.currency,
             referenceId: result.referenceId,
             transactionRef: result.transactionRef,
             transferType: "VAULT_TRANSFER",
-            amount: dto.amount,
-            currency: dto.currency,
           },
+          aggregateType: "TRANSFER", // ← matches your existing router case
+          aggregateId: result.transactionRef,
+          version: 1,
           context,
         },
         { session },

@@ -179,6 +179,8 @@ class userService {
       userId: userPublicId,
     }).lean();
 
+    console.log(summary);
+
     if (summary) {
       const result = {
         totalBalance: summary.totalBalance,

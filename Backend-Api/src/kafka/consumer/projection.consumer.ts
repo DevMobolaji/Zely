@@ -22,7 +22,7 @@ export async function runProjectionConsumer() {
   await ProjectionConsumer.connect();
 
   await ProjectionConsumer.subscribe({
-    topic: TOPICS.CONFIRMED_EVENTS,
+    topic: TOPICS.CONFIRMED_TRANSFER_EVENTS,
     fromBeginning: false,
   });
 
@@ -104,6 +104,13 @@ export async function runProjectionConsumer() {
           );
         });
 
+        logger.info("Projection event", {
+          topic,
+          aggregateType,
+          eventType: envelope.event.eventType,
+          aggregateId: envelope.event.aggregateId,
+        });
+
         kafkaMessagesProcessedTotal.inc({
           topic,
           consumer_group: PROJECTION_CONSUMER_GROUP,
@@ -118,7 +125,10 @@ export async function runProjectionConsumer() {
           },
         ]);
       } catch (error: any) {
-        logger.error("Projection event processing failed");
+        logger.error("Projection event processing failed", {
+          error: error?.message,
+          stack: error?.stack,
+        });
 
         kafkaMessagesFailedTotal.inc({
           topic,

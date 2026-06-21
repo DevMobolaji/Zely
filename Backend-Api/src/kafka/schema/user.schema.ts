@@ -29,10 +29,24 @@ export const AuthEmailVerifySuccessV1Schema = BaseEventSchema.extend({
 });
 
 // Auth Email Verify Success Event
-export const resendVerificationEmailV1Schema = BaseEventSchema.extend({
+export const resendPasswordVerificationEmailV1Schema = BaseEventSchema.extend({
   eventType: z.literal("PASSWORD_RESET_REQUESTED"),
   version: z.literal(1),
   aggregateType: z.literal("PASSWORD_RESET_REQUESTED"),
+  aggregateId: z.string(),
+  eventId: z.string(),
+  payload: z.object({
+    email: z.string().email().optional(),
+    name: z.string().optional(),
+    code: z.string().optional(),
+    expiryMinutes: z.number().optional(),
+  }),
+});
+
+export const resendVerificationEmailV1Schema = BaseEventSchema.extend({
+  eventType: z.literal("USER_EMAIL_RESEND_SUCCESS"),
+  version: z.literal(1),
+  aggregateType: z.literal("EMAIL_RESEND"),
   aggregateId: z.string(),
   eventId: z.string(),
   payload: z.object({
@@ -71,6 +85,7 @@ export const AuthEventSchema = z.union([
   UserRegisterSuccessV1Schema,
   AuthEmailVerifySuccessV1Schema,
   resendVerificationEmailV1Schema,
+  resendPasswordVerificationEmailV1Schema,
   verifyResetCodeV1Schema,
   resetPasswordSuccessV1Schema,
 ]);

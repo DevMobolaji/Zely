@@ -1,4 +1,3 @@
-// src/modules/payments/payment.service.ts
 import mongoose, { Types } from "mongoose";
 import {
   PaymentInitialization,

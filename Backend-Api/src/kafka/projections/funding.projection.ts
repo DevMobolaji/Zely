@@ -21,6 +21,8 @@ export async function handleFundingProjection(
 ) {
   const { payload, eventId, occurredAt } = envelope.event as any;
 
+  console.log("This is from funding ", envelope);
+
   function formatSource(source: string): string {
     switch (source) {
       case "PAYSTACK_WEBHOOK":

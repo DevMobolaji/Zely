@@ -76,6 +76,12 @@ class VaultService {
         );
       }
 
+      const lockedUntilDate = lockedUntil ? new Date(lockedUntil) : undefined;
+
+      if (lockedUntilDate && lockedUntilDate <= new Date()) {
+        throw new BadRequestError("lockedUntil must be in the future");
+      }
+
       // Resolve penalty rate
       const resolvedPenalty = DEFAULT_PENALTY_BASIS_POINTS[vaultType];
 
@@ -156,7 +162,7 @@ class VaultService {
       await session.commitTransaction();
 
       return vault;
-    } catch (err) {
+    } catch (err: any) {
       if (session.inTransaction()) await session.abortTransaction();
       throw err;
     } finally {
@@ -227,7 +233,7 @@ class VaultService {
       const userReceives = amount - penaltyInfo.penaltyAmount;
       const treasuryReceives = penaltyInfo.penaltyAmount;
 
-      const transactionRef = `VAULT_WITHDRAW_${vaultId}_${generateEventId()}`;
+      const transactionRef = `VAULT_WITHDRAW_${generateEventId()}`;
 
       const builder = new TransactionBuilder("VAULT_WITHDRAWAL");
 
@@ -327,7 +333,7 @@ class VaultService {
           action: AuditAction.VAULT_WITHDRAWAL,
           status: AuditStatus.PENDING,
           payload: {
-            vaultId,
+            transactionRef,
             userId: user.userId,
             amount,
             userReceives,
@@ -335,6 +341,7 @@ class VaultService {
             penaltyApplied: penaltyInfo.penaltyApplied,
             penaltyReason: penaltyInfo.reason,
             newBalance: vault.currentBalanceMinor - amount,
+            previousBalance: vault.currentBalanceMinor,
             currency: vault.currency,
             type: vault.vaultType,
           },

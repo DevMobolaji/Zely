@@ -70,6 +70,8 @@ export async function processVaultEvents(
           ],
           { session },
         );
+
+        logger.info("The vault has been marked closed");
         break;
       }
 

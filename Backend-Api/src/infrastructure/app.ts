@@ -2,7 +2,7 @@
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import express, { Application, Request, Response } from "express";
+import express, { Application, NextFunction, Request, Response } from "express";
 import helmet from "helmet";
 
 // Interfaces
@@ -334,6 +334,24 @@ class App {
    * ROUTES
    * ================================================
    */
+
+  // in App, registered before your controllers' routes
+  private notReadyGuard = (req: Request, res: Response, next: NextFunction) => {
+    // allow health checks through unconditionally, e.g. load balancer pings
+    if (req.path === "/health" || req.path === "/healthz") {
+      return next();
+    }
+
+    if (!this.isReady) {
+      return res.status(503).json({
+        error: "SERVICE_NOT_READY",
+        message: "Server is still initializing, please retry shortly",
+      });
+    }
+
+    next();
+  };
+
   private initializeRoutes(controllers: Controller[]): void {
     this.express.get("/", (req: Request, res: Response) => {
       res.json({
@@ -346,6 +364,9 @@ class App {
         metric: "/metric",
       });
     });
+
+    //GUARD
+    this.express.use(`/api/${config.app.apiVersion}/`, this.notReadyGuard);
 
     // API routes
     controllers.forEach((controller) => {
