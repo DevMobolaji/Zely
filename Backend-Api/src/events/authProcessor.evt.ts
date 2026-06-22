@@ -102,6 +102,42 @@ export async function processAuthEvent(
           },
           session,
         );
+        // ↑ OTP hash stored in DB — plaintext discarded intentionally
+        // Worker will call otpManager.create() again with bypassThrottle
+        // which invalidates this one and issues a fresh code at send time
+
+        // await EmailOutboxModel.create({
+        //   jobName: "sendVerification",
+        //   jobId: generateEventId(),
+        //   eventId,
+        //   payload: {
+        //     email: payload.email,
+        //     name: payload.name,
+        //     type: "VERIFICATION",
+        //   },
+        //   status: "PENDING",
+        //   attempts: 0,
+        // });
+
+        // logger.info(`[v${version}] Verification email intent stored`, {
+        //   email: payload.email,
+        // });
+        // break;
+
+       await emailQueue.add(
+  "sendVerification",
+  {
+    email: payload.email,
+    name: payload.name,
+    otpRef: userId,          // ← reference, not the OTP itself
+    type: "VERIFICATION",
+  },
+  {
+    jobId: `VERIFY_${userId}_${Math.floor(Date.now() / 60000)}`, // ← 1-min bucket
+    attempts: 2,             // only retry once — OTP is time-sensitive
+    backoff: { type: "fixed", delay: 3000 },
+  }
+);
 
         logger.info(`[v${version}] Verification email queued`);
 
