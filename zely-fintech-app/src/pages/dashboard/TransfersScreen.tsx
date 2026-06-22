@@ -46,22 +46,6 @@ const parseCurrency = (value: string) => {
   return value.replace(/,/g, "");
 };
 
-// Load Paystack Script Dynamically
-const loadPaystackScript = (): Promise<boolean> => {
-  return new Promise((resolve) => {
-    if ((window as any).PaystackPop) {
-      resolve(true);
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://js.paystack.co/v1/inline.js";
-    script.async = true;
-    script.onload = () => resolve(true);
-    script.onerror = () => resolve(false);
-    document.body.appendChild(script);
-  });
-};
-
 interface AccountSelectProps {
   label: string;
   accounts: Account[];
@@ -80,15 +64,6 @@ const AccountSelect: React.FC<AccountSelectProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const selectedAccount = accounts.find((a) => a.id === selectedId);
-
-  const {
-    wallets,
-    loadingWallets,
-    transactions,
-    loadingTransactions,
-    errorTransactions,
-    refreshTransactions,
-  } = useDashboardData();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {

@@ -24,6 +24,7 @@ interface AuthContextType {
   setAuth: React.Dispatch<React.SetStateAction<AuthState>>;
   setAuthFromUser: (user: AuthUser) => void;
   logout: () => Promise<void>;
+  isLoading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -92,7 +93,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   return (
-    <AuthContext.Provider value={{ auth, setAuth, setAuthFromUser, logout }}>
+    <AuthContext.Provider
+      value={{ auth, setAuth, setAuthFromUser, logout, isLoading }}
+    >
       {isLoading ? (
         <div className="h-screen w-full flex items-center justify-center bg-white dark:bg-black">
           <div className="flex flex-col items-center gap-4 animate-in fade-in zoom-in duration-300">

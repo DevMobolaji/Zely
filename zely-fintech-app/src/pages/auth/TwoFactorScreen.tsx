@@ -54,6 +54,36 @@ const TwoFactorScreen: React.FC = () => {
     if (error) setError(null);
   };
 
+  const handleResend = async () => {
+    if (!email) {
+      setError("Email context missing — please go back and try again.");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      await authService.resendVerification(email);
+      setCountdown(60);
+      showToast("success", "Verification code resent to your email.");
+    } catch (err: any) {
+      const errData = err.response?.data?.error;
+      if (errData?.code === "RATE_LIMIT_EXCEEDED") {
+        setError(
+          `Too many attempts. Try again in ${errData.retryAfter} seconds.`,
+        );
+      } else {
+        setError(
+          err.response?.data?.message ||
+            "Failed to resend code. Please try again.",
+        );
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const requiredLength = mode === "backup" ? 8 : 6;
@@ -202,7 +232,8 @@ const TwoFactorScreen: React.FC = () => {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setCountdown(100)}
+                    onClick={handleResend}
+                    disabled={isLoading}
                     className="text-primary hover:underline"
                   >
                     Code expired? Resend email

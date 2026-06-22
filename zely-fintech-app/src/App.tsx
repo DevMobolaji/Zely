@@ -65,13 +65,17 @@ const App: React.FC = () => {
                   element={<ResetPasswordScreen />}
                 />
                 <Route path="/verify" element={<TwoFactorScreen />} />
-                <Route path="/unauthorized" element={<UnauthorizedScreen />} />
+                {/* <Route path="/unauthorized" element={<UnauthorizedScreen />} /> */}
 
                 {/* Protected Onboarding */}
                 <Route element={<RequireAuth />}>
                   <Route
                     path="/onboarding/provisioning"
                     element={<ProvisioningScreen />}
+                  />
+                  <Route
+                    path="/unauthorized"
+                    element={<UnauthorizedScreen />}
                   />
                 </Route>
 

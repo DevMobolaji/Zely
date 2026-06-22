@@ -1,7 +1,7 @@
 import { authService } from "@/services/auth.services";
 import { AlertCircle, Loader2, Lock, Mail, Unlock } from "lucide-react";
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/AuthProvider";
 import { useToast } from "../../context/ToastContext";
 import AuthLayout from "../../layouts/AuthLayout";
@@ -14,9 +14,18 @@ const LoginScreen: React.FC = () => {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const location = useLocation();
+  const { auth } = useAuth();
   const [errors, setErrors] = useState<{ email?: string; password?: string }>(
     {},
   );
+
+  useEffect(() => {
+    if (auth?.accessToken) {
+      const from = (location.state as any)?.from?.pathname || "/dashboard";
+      navigate(from, { replace: true });
+    }
+  }, [auth]);
 
   const validateEmail = (value: string) => {
     if (!value) return "Email is required";
@@ -53,7 +62,7 @@ const LoginScreen: React.FC = () => {
         if (!user.emailVerified) {
           localStorage.setItem("pendingEmail", email);
           showToast("error", "Please verify your email before logging in.");
-          navigate("/verify", { state: { email } });
+          navigate("/verify", { state: { email, mode: "email" } });
           return;
         }
 
@@ -62,8 +71,15 @@ const LoginScreen: React.FC = () => {
 
         showToast("success", `Welcome back, ${user.name}`);
 
-        const nextTarget = user.role === "admin" ? "/admin" : "/dashboard";
-        navigate(nextTarget);
+        const from = (location.state as any)?.from?.pathname;
+        const safePaths = ["/unauthorized", "/login", "/", undefined];
+        const redirectTo = safePaths.includes(from)
+          ? user.role === "ADMIN"
+            ? "/admin"
+            : "/dashboard"
+          : from;
+
+        navigate(redirectTo, { replace: true });
       } catch (error: any) {
         const msg =
           error.response?.data?.message ||
@@ -71,11 +87,19 @@ const LoginScreen: React.FC = () => {
         showToast("error", msg);
       }
     } catch (error: any) {
-      console.error("Login failed:", error);
-      const msg =
-        error.response?.data?.message ||
-        "Connection failed. Please check your credentials.";
-      showToast("error", msg);
+      const msg = error.response?.data?.message || "";
+
+      if (
+        msg.toLowerCase().includes("confirm your email") ||
+        (msg.toLowerCase().includes("email") &&
+          msg.toLowerCase().includes("verif"))
+      ) {
+        showToast("error", "Please verify your email first.");
+        navigate("/verify", { state: { email, mode: "email" } });
+        return;
+      }
+
+      showToast("error", msg || "Login failed. Please check your credentials.");
     } finally {
       setIsLoading(false);
     }
