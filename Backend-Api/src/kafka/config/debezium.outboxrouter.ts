@@ -10,12 +10,15 @@ const routerConsumer = kafka.consumer({ groupId: ROUTER_GROUP });
 const routerProducer = kafka.producer();
 
 const TOPIC_ROUTE_MAP: Record<string, string> = {
-  [TOPICS.TRANSACTION_EVENTS]: TOPICS.TRANSACTION_EVENTS,
+  [TOPICS.TRANSFER_EVENTS]: TOPICS.TRANSFER_EVENTS,
   [TOPICS.AUTH_EVENTS]: TOPICS.AUTH_EVENTS,
   [TOPICS.AUDIT_EVENTS]: TOPICS.AUDIT_EVENTS,
   [TOPICS.VAULT_EVENTS]: TOPICS.VAULT_EVENTS,
   [TOPICS.PASSWORD_EVENTS]: TOPICS.PASSWORD_EVENTS,
   [TOPICS.KYC_EVENTS]: TOPICS.KYC_EVENTS,
+  [TOPICS.PAYMENT_EVENTS]: TOPICS.PAYMENT_EVENTS,
+  [TOPICS.FUNDING_EVENTS]: TOPICS.FUNDING_EVENTS,
+  [TOPICS.CONFIRMED_TRANSFER_EVENTS]: TOPICS.CONFIRMED_TRANSFER_EVENTS,
 };
 
 export async function runOutboxRouter() {
@@ -30,20 +33,24 @@ export async function runOutboxRouter() {
         topics: [CDC_TOPIC],
       });
 
-      const hasNoCommits = committed.every((p: any) => p.offset === '-1');
+      const hasNoCommits = committed.every((p: any) => p.offset === "-1");
 
       if (hasNoCommits) {
-        logger.info('Outbox router: fresh group — seeking all partitions to latest');
+        logger.info(
+          "Outbox router: fresh group — seeking all partitions to latest",
+        );
         const topicOffsets = await admin.fetchTopicOffsets(CDC_TOPIC);
         for (const { partition, high } of topicOffsets) {
           routerConsumer.seek({ topic: CDC_TOPIC, partition, offset: high });
-          logger.info(`Outbox router: seeked partition ${partition} to offset ${high}`);
+          logger.info(
+            `Outbox router: seeked partition ${partition} to offset ${high}`,
+          );
         }
       } else {
-        logger.info('Outbox router: existing group — using committed offsets');
+        logger.info("Outbox router: existing group — using committed offsets");
       }
     } catch (err: any) {
-      logger.error('Outbox router: GROUP_JOIN error', { error: err.message });
+      logger.error("Outbox router: GROUP_JOIN error", { error: err.message });
     }
   });
 
@@ -65,9 +72,11 @@ export async function runOutboxRouter() {
       let cdcDoc: any;
       try {
         cdcDoc = JSON.parse(message.value.toString());
-
       } catch (e) {
-        logger.error("Outbox router: failed to parse CDC message", { partition, offset: message.offset });
+        logger.error("Outbox router: failed to parse CDC message", {
+          partition,
+          offset: message.offset,
+        });
         await commitOffset(topic, partition, message.offset);
         return;
       }
@@ -86,7 +95,6 @@ export async function runOutboxRouter() {
         return;
       }
 
-
       await routerProducer.send({
         topic: targetTopic,
         messages: [
@@ -98,8 +106,8 @@ export async function runOutboxRouter() {
       });
 
       await OutboxEvent.updateOne(
-        { eventId: cdcDoc.eventId, status: 'PENDING' },
-        { $set: { status: 'SENT', sentAt: new Date() } }
+        { eventId: cdcDoc.eventId, status: "PENDING" },
+        { $set: { status: "SENT", sentAt: new Date() } },
       );
 
       logger.info("Outbox router: routed event", {
@@ -114,19 +122,18 @@ export async function runOutboxRouter() {
 }
 
 async function commitOffset(topic: string, partition: number, offset: string) {
-  await routerConsumer.commitOffsets([{
-    topic,
-    partition,
-    offset: (parseInt(offset) + 1).toString(),
-  }]);
+  await routerConsumer.commitOffsets([
+    {
+      topic,
+      partition,
+      offset: (parseInt(offset) + 1).toString(),
+    },
+  ]);
 }
 
 export async function stopOutboxRouter() {
   await Promise.race([
-    Promise.all([
-      routerConsumer.disconnect(),
-      routerProducer.disconnect(),
-    ]),
+    Promise.all([routerConsumer.disconnect(), routerProducer.disconnect()]),
     new Promise<void>((resolve) => setTimeout(resolve, 3000)),
   ]);
   logger.info("✅ Outbox router disconnected");

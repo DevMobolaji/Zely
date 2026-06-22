@@ -33,6 +33,8 @@ import {
   UserBalanceSummaryModel,
   UserWalletModel,
 } from "@/kafka/projections/models/projectionModels";
+import { EmailOutboxModel } from "@/kafka/emails/email.Outbox";
+import { writeToEmailOutbox } from "@/kafka/emails/write.email";
 
 export const deriveOutboxEventId = (
   aggregateId: string,
@@ -65,16 +67,41 @@ export async function processAuthEvent(
     }
 
     switch (eventType) {
+      // USER_REGISTER_SUCCESS consumer — before emailQueue.add()
+
       case "USER_REGISTER_SUCCESS": {
         const otpManager = new OTPManager();
 
-        const { code } = await otpManager.create(
+        const { code, expiresAt } = await otpManager.create(
           payload.email,
           OTPPurpose.EMAIL_VERIFICATION,
           OTPConfigs.emailVerification,
           { bypassThrottle: true },
         );
 
+        const jobId = deriveOutboxEventId(
+          payload.email,
+          "VERIFICATION_EMAIL",
+          eventId,
+        );
+
+        await writeToEmailOutbox(
+          {
+            jobName: "sendVerification",
+            jobId,
+            eventId,
+            aggregateType: "AUTH",
+            envelope,
+            payload: {
+              email: payload.email,
+              name: payload.name,
+              otp: code,
+              expiresAt,
+              type: "VERIFICATION",
+            },
+          },
+          session,
+        );
         // ↑ OTP hash stored in DB — plaintext discarded intentionally
         // Worker will call otpManager.create() again with bypassThrottle
         // which invalidates this one and issues a fresh code at send time
@@ -112,9 +139,7 @@ export async function processAuthEvent(
   }
 );
 
-        logger.info(`[v${version}] Verification email queued`, {
-          email: payload.email,
-        });
+        logger.info(`[v${version}] Verification email queued`);
 
         break;
       }
@@ -122,26 +147,40 @@ export async function processAuthEvent(
       case "USER_EMAIL_RESEND_SUCCESS": {
         const otpManager = new OTPManager();
 
-        const { code } = await otpManager.create(
+        const { code, expiresAt } = await otpManager.create(
           payload.email,
           OTPPurpose.EMAIL_VERIFICATION,
           OTPConfigs.emailVerification,
         );
 
-        await emailQueue.add(
-          "sendVerification",
+        const jobId = deriveOutboxEventId(
+          payload.email,
+          "VERIFICATION_EMAIL_RESEND",
+          eventId,
+        );
+
+        await writeToEmailOutbox(
           {
-            email: payload.email,
-            name: payload.name,
-            otp: code,
-            type: "VERIFICATION",
+            jobName: "sendVerification",
+            jobId,
+            eventId,
+            aggregateType: "AUTH",
+            envelope,
+            payload: {
+              email: payload.email,
+              name: payload.name,
+              otp: code,
+              expiresAt,
+              type: "VERIFICATION",
+            },
           },
-          { attempts: 3, backoff: { type: "exponential", delay: 2000 } },
+          session,
         );
 
         logger.info(`[v${version}] Verification OTP resent`, {
           email: payload.email,
         });
+
         break;
       }
       case "USER_VERIFY_EMAIL_SUCCESS":
@@ -284,7 +323,7 @@ export async function processAuthEvent(
                       walletType: checkingWallet.type,
                       currency: checkingWallet.currency,
                       balance: 0,
-                      status: "active",
+                      status: WalletStatus.ACTIVE,
                     },
                   },
                   upsert: true,
@@ -300,7 +339,7 @@ export async function processAuthEvent(
                       walletType: savingsWallet.type,
                       currency: savingsWallet.currency,
                       balance: 0,
-                      status: "active",
+                      status: WalletStatus.ACTIVE,
                     },
                   },
                   upsert: true,

@@ -1,17 +1,17 @@
 import Controller from "@/config/interfaces/controller.interfaces";
 import { IAuthRequest } from "@/config/interfaces/request.interface";
+import BadRequestError from "@/shared/errors/badRequest";
 import asyncWrapper from "@/shared/middleware/async.wrapper";
+import { requireAuth } from "@/shared/middleware/auth.middleware";
+import { requireConsumerReady } from "@/shared/middleware/consumer.ready";
 import {
   getIdempotencyKey,
   getRequestContext,
 } from "@/shared/middleware/request.context";
-import { Router, Response } from "express";
-import TransferService from "./transfer.service";
 import { generateIdempotencyKey } from "@/shared/utils/id.generator";
-import { requireAuth } from "@/shared/middleware/auth.middleware";
-import { requireConsumerReady } from "@/shared/middleware/consumer.ready";
+import { Response, Router } from "express";
 import { calculateFeeBreakdown } from "../fee/transfer.fee.engine";
-import BadRequestError from "@/shared/errors/badRequest";
+import TransferService from "./transfer.service";
 
 class TransferController implements Controller {
   public path = "/transfer";
@@ -36,13 +36,14 @@ class TransferController implements Controller {
       this.internalTransfer,
     );
     this.route.post(
-      `${this.path}/to-vault`,
+      `${this.path}/:vaultId/deposit`,
       requireConsumerReady,
       requireAuth,
       this.saveToVault,
     );
     // In your router setup
     this.route.get(`${this.path}/fee`, this.getTransferFee);
+    this.route.get(`${this.path}/lookup`, requireAuth, this.lookupAccount);
   }
 
   private p2pTransfer = asyncWrapper(
@@ -59,14 +60,24 @@ class TransferController implements Controller {
         idempotencyKey: getIdempotencyKey(req) || generateIdempotencyKey(),
       };
 
-      const result = await this.transferService.p2pTransfer(
-        dto,
-        getRequestContext(req),
-      );
+      const { result, senderNewBalance } =
+        await this.transferService.p2pTransfer(dto, getRequestContext(req));
 
-      console.log("P2P Transfer result:", result);
+      if (!result) {
+        return res.status(200).json({
+          ok: true,
+          isDuplicate: true,
+          message: "Duplicate request — original transfer already processed",
+        });
+      }
 
-      return res.status(200).json({ ok: true, status: result });
+      return res.status(200).json({
+        ok: true,
+        status: {
+          ...result,
+          senderNewBalance,
+        },
+      });
     },
   );
 
@@ -126,7 +137,8 @@ class TransferController implements Controller {
   private saveToVault = asyncWrapper(
     async (req: IAuthRequest, res: Response): Promise<Response> => {
       const context = getRequestContext(req);
-      const { amount, currency, vaultId, fromType, toType } = req.body;
+      const { amount, currency, fromType, toType } = req.body;
+      const { vaultId } = req.params;
       const senderId = req.user!.userId;
 
       const dto = {
@@ -143,6 +155,23 @@ class TransferController implements Controller {
       return res.status(200).send({
         ok: true,
         status: result,
+      });
+    },
+  );
+
+  private lookupAccount = asyncWrapper(
+    async (req: IAuthRequest, res: Response): Promise<Response> => {
+      const { accountNumber } = req.query;
+
+      if (!accountNumber || typeof accountNumber !== "string") {
+        throw new BadRequestError("ACCOUNT_NUMBER_REQUIRED");
+      }
+
+      const result = await this.transferService.lookupAccount(accountNumber);
+
+      return res.status(200).json({
+        ok: true,
+        data: result,
       });
     },
   );

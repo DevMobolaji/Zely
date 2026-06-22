@@ -31,6 +31,7 @@ const ALL_SYSTEM_LEDGER_TYPES = [
   LedgerAccountType.SYSTEM_TREASURY,
   LedgerAccountType.SYSTEM_REVENUE,
   LedgerAccountType.EXTERNAL_FUNDING,
+  LedgerAccountType.RECONCILIATION_ADJUSTMENTS,
 ];
 
 export default async function ensureSystemLedger(currency: string) {

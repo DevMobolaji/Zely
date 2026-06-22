@@ -1,17 +1,21 @@
 import { IRequestContext } from "@/config/interfaces/request.interface";
-import { Account, AccountType } from "@/modules/account/account.model";
-import { accountStatus } from "@/modules/auth/authinterface";
-import { NotFoundError } from "@/shared/errors/notFoundError";
-import User from "@/modules/auth/authmodel";
-import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
+import redis from "@/infrastructure/cache/redis.cli";
 import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
-import BadRequestError from "@/shared/errors/badRequest";
-import { generateEventId } from "@/shared/utils/id.generator";
 import {
   UserBalanceSummaryModel,
   UserTransactionModel,
   UserWalletModel,
 } from "@/kafka/projections/models/projectionModels";
+import { Account, AccountType } from "@/modules/account/account.model";
+import { AuditAction, AuditStatus } from "@/modules/audit/audit.interface";
+import { accountStatus } from "@/modules/auth/authinterface";
+import User from "@/modules/auth/authmodel";
+import { LedgerAccountType } from "@/modules/ledger/ledger.account.model";
+import { Wallet } from "@/modules/wallet/wallet.model";
+import BadRequestError from "@/shared/errors/badRequest";
+import { NotFoundError } from "@/shared/errors/notFoundError";
+import { generateEventId } from "@/shared/utils/id.generator";
+import { logger } from "@/shared/utils/logger";
 
 class userService {
   private userModel = User;
@@ -159,36 +163,84 @@ class userService {
   };
 
   public getDashboardSummary = async (userPublicId: string) => {
+    // ─── Tier 1: Redis cache ───────────────────────────────────────────────
+    const cacheKey = `balance:summary:${userPublicId}`;
+    const cached = await redis.get(cacheKey);
+    if (cached && typeof cached === "string") {
+      return JSON.parse(cached);
+    }
+
+    logger.info("Dashboard summary cache miss, falling back to projection", {
+      userPublicId,
+    });
+
+    // ─── Tier 2: Projection ───────────────────────────────────────────────
     const summary = await UserBalanceSummaryModel.findOne({
       userId: userPublicId,
     }).lean();
 
-    if (!summary) {
-      return {
-        totalBalance: 0,
-        mainBalance: 0,
-        savingsBalance: 0,
-        vaultBalance: 0,
-        totalDebit: 0,
-        totalCredit: 0,
-        currency: "NGN",
+    console.log(summary);
+
+    if (summary) {
+      const result = {
+        totalBalance: summary.totalBalance,
+        mainBalance: summary.mainBalance,
+        savingsBalance: summary.savingsBalance,
+        vaultBalance: summary.vaultBalance,
+        totalDebit: summary.totalDebit,
+        totalCredit: summary.totalCredit,
+        currency: summary.currency,
       };
+
+      await redis.set(cacheKey, JSON.stringify(result), 30);
+      return result;
     }
 
+    logger.warn(
+      "UserBalanceSummary projection missing — falling back to source wallets",
+      {
+        userPublicId,
+      },
+    );
+
+    const wallets = await Wallet.find({ userPublicId }).lean();
+
+    const totalBalance = wallets.reduce(
+      (sum: number, w: { availableBalance?: number }) =>
+        sum + (w?.availableBalance ?? 0),
+      0,
+    );
+    const mainBalance =
+      wallets.find(
+        (w: { type?: string }) => w.type === LedgerAccountType.MAIN_CHECKINGS,
+      )?.availableBalance ?? 0;
+    const savingsBalance =
+      wallets.find(
+        (w: { type?: string }) => w.type === LedgerAccountType.SAVINGS,
+      )?.availableBalance ?? 0;
+    const vaultBalance = wallets
+      .filter((w: { type?: string }) => w.type === LedgerAccountType.VAULT)
+      .reduce(
+        (sum: number, w: { availableBalance?: number }) =>
+          sum + (w?.availableBalance ?? 0),
+        0,
+      );
+
     return {
-      totalBalance: summary.totalBalance,
-      mainBalance: summary.mainBalance,
-      savingsBalance: summary.savingsBalance,
-      vaultBalance: summary.vaultBalance,
-      totalDebit: summary.totalDebit,
-      totalCredit: summary.totalCredit,
-      currency: summary.currency,
+      totalBalance,
+      mainBalance,
+      savingsBalance,
+      vaultBalance,
+      totalDebit: summary?.totalDebit ?? 0,
+      totalCredit: summary?.totalCredit ?? 0,
+      currency: "NGN",
+      isLive: true,
     };
   };
 
   public getWallets = async (userPublicId: string) => {
-    const [wallets, accounts, transactionTotals] = await Promise.all([
-      UserWalletModel.find({ userId: userPublicId }).lean(),
+    // ─── Shared data needed for all tiers ─────────────────────────────────
+    const [accounts, transactionTotals] = await Promise.all([
       Account.find({ userPublicId, status: "ACTIVE" })
         .select("accountNumber type")
         .lean(),
@@ -203,32 +255,122 @@ class userService {
       ]),
     ]);
 
-    return wallets.map((w) => {
-      const account = accounts.find((a) => a.type === w.walletType);
-
-      const credit =
+    const getTotals = (walletType: string) => ({
+      totalCredit:
         transactionTotals.find(
           (t) =>
-            t._id.walletType === w.walletType && t._id.direction === "credit",
-        )?.total ?? 0;
-
-      const debit =
+            t._id.walletType === walletType && t._id.direction === "credit",
+        )?.total ?? 0,
+      totalDebit:
         transactionTotals.find(
-          (t) =>
-            t._id.walletType === w.walletType && t._id.direction === "debit",
-        )?.total ?? 0;
+          (t) => t._id.walletType === walletType && t._id.direction === "debit",
+        )?.total ?? 0,
+    });
 
+    // ─── Tier 1: Redis cache ───────────────────────────────────────────────
+    const cacheKey = `wallets:${userPublicId}`;
+    const cached = await redis.get(cacheKey);
+    if (cached && typeof cached === "string") {
+      return JSON.parse(cached);
+    }
+
+    // ─── Tier 2: Projection + version check ───────────────────────────────
+    const [projections, sourceWallets] = await Promise.all([
+      UserWalletModel.find({ userId: userPublicId }).lean(),
+      Wallet.find({ userPublicId }).lean(),
+    ]);
+
+    if (projections.length > 0) {
+      // Check each projection against source of truth version
+      const allFresh = projections.every((proj) => {
+        const source = sourceWallets.find((w) => w.walletId === proj.walletId);
+        return source && proj.version === source.version;
+      });
+
+      if (allFresh) {
+        const result = projections.map((w) => {
+          const account = accounts.find((a) => a.type === w.walletType);
+          return {
+            walletId: w.walletId,
+            walletType: w.walletType,
+            balance: w.balance,
+            currency: w.currency,
+            status: w.status,
+            limit: w.limit,
+            accountNumber: account?.accountNumber ?? null,
+            ...getTotals(w.walletType),
+          };
+        });
+
+        // Cache for 30 seconds
+        await redis.set(cacheKey, JSON.stringify(result), 30);
+        return result;
+      }
+
+      // Projection stale — log and fall through to Tier 3
+      logger.warn("Wallet projection stale — falling back to source of truth", {
+        userPublicId,
+      });
+    }
+
+    // ─── Tier 3: Source of truth ───────────────────────────────────────────
+    logger.warn("Wallet projection empty or stale — serving live data", {
+      userPublicId,
+    });
+
+    const result = sourceWallets.map((w) => {
+      const account = accounts.find((a) => a.type === w.type);
       return {
         walletId: w.walletId,
-        walletType: w.walletType,
-        balance: w.balance,
+        walletType: w.type,
+        balance: w.availableBalance,
         currency: w.currency,
         status: w.status,
         accountNumber: account?.accountNumber ?? null,
-        totalCredit: credit,
-        totalDebit: debit,
+        ...getTotals(w.type),
       };
     });
+
+    // Fire background projection refresh — don't await
+    this.refreshWalletProjections(userPublicId, sourceWallets).catch((err) => {
+      logger.error("Background wallet projection refresh failed", {
+        userPublicId,
+        error: err.message,
+      });
+    });
+
+    return result;
+  };
+
+  // ─── Background projection refresh ──────────────────────────────────────
+  private refreshWalletProjections = async (
+    userPublicId: string,
+    sourceWallets: any[],
+  ) => {
+    await UserWalletModel.bulkWrite(
+      sourceWallets.map((w) => ({
+        updateOne: {
+          filter: { walletId: w.walletId },
+          update: {
+            $set: {
+              walletId: w.walletId,
+              userId: userPublicId,
+              walletType: w.type,
+              currency: w.currency,
+              balance: w.availableBalance,
+              status: w.status,
+              version: w.version,
+            },
+          },
+          upsert: true,
+        },
+      })),
+    );
+
+    // Invalidate cache so next request gets fresh projection
+    await redis.delete(`wallets:${userPublicId}`);
+
+    logger.info("Wallet projections refreshed in background", { userPublicId });
   };
 
   public getTransactions = async (
@@ -251,6 +393,7 @@ class userService {
     if (query.walletType) filter.walletType = query.walletType;
     if (query.status) filter.status = query.status;
 
+    // Add to the filter
     const [transactions, total] = await Promise.all([
       UserTransactionModel.find(filter)
         .sort({ occurredAt: -1 })
@@ -259,18 +402,21 @@ class userService {
         .lean(),
       UserTransactionModel.countDocuments(filter),
     ]);
-
     return {
       transactions: transactions.map((t) => ({
-        transactionId: t.transactionId,
+        transactionId: t.transactionRef ?? t.eventId, // ← use eventId as transactionId
         direction: t.direction,
         amount: t.amount,
         currency: t.currency,
         walletType: t.walletType,
         status: t.status,
+        referenceId: t.referenceId,
         category: t.category,
-        counterpartyUserId: t.counterpartyUserId,
+        counterpartyName: t.counterpartyName,
+        counterpartyWalletType: t.counterpartyWalletType,
         name: t.name,
+        fee: t.fee,
+        penaltyReason: t.penaltyReason,
         occurredAt: t.occurredAt,
       })),
       pagination: {

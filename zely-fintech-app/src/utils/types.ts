@@ -34,6 +34,7 @@ export interface Account {
   cardProvider?: "VISA" | "Mastercard";
   cardExpiry?: string;
   cardLast4?: string;
+  limit: number;
 }
 
 export interface Notification {
@@ -58,16 +59,20 @@ export interface Session {
 // ─── Real API types — match backend projection models ────────────────────
 
 export interface ApiTransaction {
+  id: string;
   transactionId: string;
   direction: "debit" | "credit";
   amount: number;
   currency: string;
   walletType: string;
+  fee: number;
   status: string;
   category: string;
-  counterpartyUserId?: string;
+  counterpartyName?: string;
+  counterpartyWalletType?: string;
   occurredAt: string;
   name: string;
+  referenceId: string;
 }
 
 export interface ApiWallet {
@@ -75,10 +80,11 @@ export interface ApiWallet {
   walletType: "MAIN_CHECKINGS" | "SAVINGS" | "VAULT";
   balance: number;
   currency: string;
-  status: string;
+  status: "ACTIVE" | "FROZEN" | "CLOSED" | "RECONCILING";
   accountNumber: string | null;
   totalCredit: number;
   totalDebit: number;
+  limit: number;
 }
 export interface ApiBalanceSummary {
   totalBalance: number;

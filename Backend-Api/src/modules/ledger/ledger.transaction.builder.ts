@@ -1,125 +1,176 @@
 import BadRequestError from "@/shared/errors/badRequest";
 import { ClientSession, Types } from "mongoose";
 import { LedgerTransactionModel } from "./ledger.transaction.model";
-import { LedgerAccount } from "./ledger.account.model";
-import { AddCreditInput, AddDebitInput, LedgerEntryInput } from "@/config/interfaces/ledgerEntry.interface";
+import {
+  LedgerAccount,
+  LedgerAccountDocument,
+  LedgerAccountType,
+} from "./ledger.account.model";
+import {
+  AddCreditInput,
+  AddDebitInput,
+  LedgerEntryInput,
+} from "@/config/interfaces/ledgerEntry.interface";
 import { LedgerEntry } from "./ledger.entry.model";
 import { generateLedgerId } from "@/shared/utils/id.generator";
 
 export type LedgerTransactionType =
-  | 'INTERNAL_TRANSFER'
-  | 'FEE'
-  | 'REVERSAL'
-  | 'P2P_TRANSFER'
-  | 'VAULT_TRANSFER'
-  | 'DEPOSIT';
+  | "INTERNAL_TRANSFER"
+  | "FEE"
+  | "REVERSAL"
+  | "P2P_TRANSFER"
+  | "VAULT_TRANSFER"
+  | "DEPOSIT"
+  | "VAULT_PENALTY"
+  | "VAULT_WITHDRAWAL"
+  | "RECONCILIATION_CORRECTION";
+
+const NON_SPENDABLE_LEDGER_TYPES = [
+  LedgerAccountType.RECONCILIATION_ADJUSTMENTS,
+];
+
+// Transaction types allowed to touch a non-spendable account.
+// Only the reconciliation correction flow itself should ever be allowed in.
+const ALLOWED_TRANSACTION_TYPES_FOR_NON_SPENDABLE: LedgerTransactionType[] = [
+  "RECONCILIATION_CORRECTION",
+];
 
 class TransactionBuilder {
-  private entries: LedgerEntryInput[] = []
+  private entries: LedgerEntryInput[] = [];
   private type: LedgerTransactionType;
   private isCommitted = false;
 
   constructor(type: LedgerTransactionType) {
-    this.type = type
+    this.type = type;
   }
 
   private ensureNotCommitted() {
     if (this.isCommitted) {
-      throw new BadRequestError("Transaction already committed")
+      throw new BadRequestError("Transaction already committed");
     }
   }
 
-
   addCredit(input: AddCreditInput) {
-    this.ensureNotCommitted()
-    this.entries = [...this.entries, {
-      transactionRef: input.transactionRef,
-      ledgerAccountId: input.ledgerAccountId,
-      amount: input.amount,
-      currency: input.currency,
-      nature: 'CREDIT',
-      referenceId: input.referenceId,
-      referenceType: input.referenceType
-    }]
+    this.ensureNotCommitted();
+    this.entries = [
+      ...this.entries,
+      {
+        transactionRef: input.transactionRef,
+        ledgerAccountId: input.ledgerAccountId,
+        amount: input.amount,
+        currency: input.currency,
+        nature: "CREDIT",
+        referenceId: input.referenceId,
+        referenceType: input.referenceType,
+      },
+    ];
   }
 
   addDebit(input: AddDebitInput) {
-    this.ensureNotCommitted()
-    this.entries = [...this.entries, {
-      transactionRef: input.transactionRef,
-      ledgerAccountId: input.ledgerAccountId,
-      amount: input.amount,
-      currency: input.currency,
-      nature: 'DEBIT',
-      referenceId: input.referenceId,
-      referenceType: input.referenceType
-    }]
+    this.ensureNotCommitted();
+    this.entries = [
+      ...this.entries,
+      {
+        transactionRef: input.transactionRef,
+        ledgerAccountId: input.ledgerAccountId,
+        amount: input.amount,
+        currency: input.currency,
+        nature: "DEBIT",
+        referenceId: input.referenceId,
+        referenceType: input.referenceType,
+      },
+    ];
+  }
+
+  private guardNonSpendableAccounts(ledgerAccounts: LedgerAccountDocument[]) {
+    const accountsById = new Map(ledgerAccounts.map((a) => [String(a._id), a]));
+
+    for (const entry of this.entries) {
+      const account = accountsById.get(String(entry.ledgerAccountId));
+      if (!account) continue; // missing-account case already handled elsewhere in commit
+
+      const isNonSpendable = NON_SPENDABLE_LEDGER_TYPES.includes(account.type);
+      const isAllowedTxnType =
+        ALLOWED_TRANSACTION_TYPES_FOR_NON_SPENDABLE.includes(this.type);
+
+      if (isNonSpendable && !isAllowedTxnType) {
+        throw new BadRequestError(
+          `Ledger account type ${account.type} cannot be used outside of: ${ALLOWED_TRANSACTION_TYPES_FOR_NON_SPENDABLE.join(", ")}`,
+        );
+      }
+    }
   }
 
   private validate() {
     if (this.entries.length < 2) {
-      throw new BadRequestError("ledger entries must have 2 entries")
+      throw new BadRequestError("ledger entries must have 2 entries");
     }
 
-    const currency = this.entries[0].currency
-    let debit = 0
-    let credit = 0
+    const currency = this.entries[0].currency;
+    let debit = 0;
+    let credit = 0;
 
     for (const e of this.entries) {
       if (e.currency !== currency) {
-        throw new BadRequestError("Mixed currency in ledger transactions")
+        throw new BadRequestError("Mixed currency in ledger transactions");
       }
 
       if (e.amount < 0) {
-        throw new BadRequestError("Amount must be greater than 0")
+        throw new BadRequestError("Amount must be greater than 0");
       }
 
-      if (e.nature === "DEBIT") debit += e.amount
-      if (e.nature === "CREDIT") credit += e.amount
+      if (e.nature === "DEBIT") debit += e.amount;
+      if (e.nature === "CREDIT") credit += e.amount;
     }
 
     if (debit !== credit) {
-      throw new BadRequestError("Invalid Ledger Balance")
+      throw new BadRequestError("Invalid Ledger Balance");
     }
   }
 
   async commit(session: ClientSession) {
-    this.ensureNotCommitted()
+    this.ensureNotCommitted();
     if (!session?.inTransaction()) {
-      throw new BadRequestError('Ledger commit must be inside DB transaction');
+      throw new BadRequestError("Ledger commit must be inside DB transaction");
     }
 
     this.validate();
 
     const ledgerAccounts = await LedgerAccount.find({
-      _id: { $in: this.entries.map(e => e.ledgerAccountId) }
+      _id: { $in: this.entries.map((e) => e.ledgerAccountId) },
     })
       .session(session)
       .setOptions({ maxTimeMS: 5000 });
 
-    if (ledgerAccounts.length !== new Set(this.entries.map(e => e.ledgerAccountId.toString())).size) {
+    this.guardNonSpendableAccounts(ledgerAccounts);
+
+    if (
+      ledgerAccounts.length !==
+      new Set(this.entries.map((e) => e.ledgerAccountId.toString())).size
+    ) {
       throw new BadRequestError("One or more ledger accounts do not exist");
     }
 
-
     for (const entry of this.entries) {
       if (entry.nature === "DEBIT") {
-        const ledger = ledgerAccounts.find((l: { _id: { equals: (arg0: Types.ObjectId) => any; }; }) => l._id.equals(entry.ledgerAccountId));
+        const ledger = ledgerAccounts.find(
+          (l: { _id: { equals: (arg0: Types.ObjectId) => any } }) =>
+            l._id.equals(entry.ledgerAccountId),
+        );
         if (!ledger) throw new BadRequestError("Ledger account missing");
       }
     }
 
-    //This is only meant for locking of the trasaction document so no read or write op at that moment 
+    //This is only meant for locking of the trasaction document so no read or write op at that moment
     await LedgerAccount.updateMany(
-      { _id: { $in: this.entries.map(e => e.ledgerAccountId) } },
+      { _id: { $in: this.entries.map((e) => e.ledgerAccountId) } },
       { $inc: { version: 0 } }, // no-op write
-      { session }
+      { session },
     );
 
     const totalCreditAmount = this.entries
-      .filter(e => e.nature === "CREDIT")
+      .filter((e) => e.nature === "CREDIT")
       .reduce((sum, e) => sum + e.amount, 0);
-
 
     // Step 1: create transaction
     const [txn] = await LedgerTransactionModel.create(
@@ -127,17 +178,17 @@ class TransactionBuilder {
         {
           transactionRef: this.entries[0].transactionRef,
           type: this.type,
-          status: 'POSTED',
+          status: "POSTED",
           currency: this.entries[0].currency,
           amount: totalCreditAmount,
           createdAt: new Date(),
-        }
+        },
       ],
-      { session }
+      { session },
     );
 
     // Step 2: create ledger entries
-    const ledgerEntries = this.entries.map(e => ({
+    const ledgerEntries = this.entries.map((e) => ({
       transactionId: txn._id,
       transactionRef: txn.transactionRef,
       type: e.nature, // must be LedgerEntryNature
@@ -146,17 +197,14 @@ class TransactionBuilder {
       referenceId: e.referenceId,
       referenceType: e.referenceType,
       ledgerAccountId: e.ledgerAccountId,
-      ledgerId: generateLedgerId()
+      ledgerId: generateLedgerId(),
     }));
-
 
     await LedgerEntry.insertMany(ledgerEntries, { session });
 
-
-    this.isCommitted = true
-    return txn
+    this.isCommitted = true;
+    return txn;
   }
 }
 
-export default TransactionBuilder
-
+export default TransactionBuilder;

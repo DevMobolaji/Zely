@@ -1,3 +1,20 @@
+import { IRequestContext } from "@/config/interfaces/request.interface";
+import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
+import { Account } from "@/modules/account/account.model";
+import {
+  commitTransactionLimits,
+  enforceReceiverBalanceCap,
+  enforceTransactionLimits,
+  rollbackTransactionLimits,
+} from "@/modules/transactionLimit/transactionLimit.service";
+import BadRequestError from "@/shared/errors/badRequest";
+import { NotFoundError } from "@/shared/errors/notFoundError";
+import { logger } from "@/shared/utils/logger";
+import mongoose from "mongoose";
+import { AuditAction, AuditStatus } from "../audit/audit.interface";
+import UserModel from "../auth/authmodel";
+import { calculateFeeBreakdown } from "../fee/transfer.fee.engine";
+import { extEnsureIdempotence } from "../helpers/ext.idempotence";
 import {
   deductWalletFunds,
   ensureWalletsAreActive,
@@ -6,39 +23,27 @@ import {
   lockVaultToPreventConcurrency,
   lockWalletFunds,
   lookUpAccounts,
-  lookUpLedgerAccountforP2P,
   lookUpLedgerAccountForInternalTrx,
+  lookUpLedgerAccountforP2P,
   lookUpPrimaryWallets,
   LookUpVaultLedger,
   resolveAccountByUserId,
   unlockVault,
 } from "../helpers/resolvers";
-import BadRequestError from "@/shared/errors/badRequest";
+import { LedgerOwnerType } from "../ledger/ledger.account.model";
+import {
+  KycTier,
+  TransactionLimitConfig,
+} from "../transactionLimit/transaction.limit.model";
+import vaultModel, { VaultDocument } from "../vault/vault.model";
+import { Wallet, WalletDocument, WalletType } from "../wallet/wallet.model";
 import TransferEngine from "./transfer.engine";
-import { IRequestContext } from "@/config/interfaces/request.interface";
 import {
   internalTransferRequest,
   TransferRequestInput,
   vaultTransferRequest,
+  vaultWithrawalRequest,
 } from "./transfer.interface";
-import mongoose from "mongoose";
-import { Wallet, WalletDocument, WalletType } from "../wallet/wallet.model";
-import vaultModel, { VaultDocument } from "../vault/vault.model";
-import { LedgerOwnerType } from "../ledger/ledger.account.model";
-import { NotFoundError } from "@/shared/errors/notFoundError";
-import { AuditAction, AuditStatus } from "../audit/audit.interface";
-import { emitOutboxEvent } from "@/infrastructure/helpers/emit.audit.helper";
-import { logger } from "@/shared/utils/logger";
-import { extEnsureIdempotence } from "../helpers/ext.idempotence";
-import { calculateFeeBreakdown } from "../fee/transfer.fee.engine";
-import {
-  enforceTransactionLimits,
-  enforceReceiverBalanceCap,
-  commitTransactionLimits,
-  rollbackTransactionLimits,
-} from "@/modules/transactionLimit/transactionLimit.service";
-import { KycTier } from "../transactionLimit/transaction.limit.model";
-import UserModel from "../auth/authmodel";
 
 class TransferService {
   public async p2pTransfer(
@@ -69,11 +74,11 @@ class TransferService {
       );
 
       if (!senderAccount || !receiverAccount) {
-        throw new BadRequestError("ACCOUNTS_NOT_FOUND");
+        throw new NotFoundError("Account not found");
       }
 
       if (senderAccount.userId.equals(receiverAccount.userId)) {
-        throw new BadRequestError("USE_INTERNAL_TRANSFER");
+        throw new BadRequestError("Use internal transfer");
       }
 
       if (
@@ -81,7 +86,7 @@ class TransferService {
         typeof dto.amount !== "number" ||
         dto.amount <= 0
       ) {
-        throw new BadRequestError("INVALID_TRANSFER_REQUEST");
+        throw new BadRequestError("Invalid transfer request");
       }
 
       /** -------------------------
@@ -99,7 +104,7 @@ class TransferService {
       );
 
       if (!senderWallet || !receiverWallet) {
-        throw new BadRequestError("WALLETS_NOT_FOUND");
+        throw new NotFoundError("Wallets not found");
       }
 
       /** -------------------------
@@ -131,7 +136,7 @@ class TransferService {
       const senderTier = senderUser?.kycTier ?? KycTier.TIER_1;
       const receiverTier = receiverUser?.kycTier ?? KycTier.TIER_1;
 
-      await enforceTransactionLimits({
+      const tier = await enforceTransactionLimits({
         userId: senderAccount.userId.toString(),
         userPublicId: dto.senderId,
         kycTier: senderTier,
@@ -140,6 +145,8 @@ class TransferService {
         senderWallet,
         session,
       });
+
+      const config = await TransactionLimitConfig.findOne({ tier: tier });
 
       await enforceReceiverBalanceCap({
         receiverWallet,
@@ -212,7 +219,7 @@ class TransferService {
 
       const updatedReceiverWallet = await Wallet.findOneAndUpdate(
         { _id: receiverWallet._id },
-        { $inc: { availableBalance: dto.amount } },
+        { $inc: { availableBalance: dto.amount, version: 1 } },
         { session, new: true },
       );
 
@@ -221,7 +228,7 @@ class TransferService {
        * ------------------------- */
       await emitOutboxEvent(
         {
-          topic: "transaction.events",
+          topic: "transfer.events",
           eventId: result.transactionRef,
           eventType: AuditAction.TRANSACTION_COMPLETED,
           action: AuditAction.TRANSACTION_COMPLETED,
@@ -236,6 +243,7 @@ class TransferService {
               accountNumber: senderAccount.accountNumber,
               previousBalance: prevSenderBalance,
               currentBalance: updatedSenderWallet?.availableBalance,
+              version: updatedSenderWallet.version,
             },
             receiver: {
               walletId: receiverWallet.walletId,
@@ -246,6 +254,7 @@ class TransferService {
               accountNumber: receiverAccount.accountNumber,
               previousBalance: prevReceiverBalance,
               currentBalance: updatedReceiverWallet?.availableBalance,
+              version: updatedReceiverWallet?.version,
             },
             amount: dto.amount,
             fee: result.fee, // ← add
@@ -254,6 +263,7 @@ class TransferService {
             referenceId: result.referenceId,
             transactionRef: result.transactionRef,
             transferType: "P2P_TRANSFER",
+            limit: config?.maxPerDay,
           },
           aggregateType: "TRANSFER",
           aggregateId: result.transactionRef,
@@ -272,7 +282,10 @@ class TransferService {
         currency: dto.currency,
       });
 
-      return result;
+      return {
+        result,
+        senderNewBalance: updatedSenderWallet?.availableBalance,
+      };
     } catch (e) {
       if (!committed) {
         try {
@@ -421,7 +434,7 @@ class TransferService {
       );
       const updatedReceiverWallet = await Wallet.findOneAndUpdate(
         { _id: receiverWallet._id },
-        { $inc: { availableBalance: dto.amount } },
+        { $inc: { availableBalance: dto.amount, version: 1 } },
         { session, new: true },
       );
 
@@ -430,7 +443,7 @@ class TransferService {
        * ------------------------- */
       await emitOutboxEvent(
         {
-          topic: "transaction.events",
+          topic: "transfer.events",
           eventId: result.transactionRef,
           eventType: AuditAction.TRANSACTION_COMPLETED,
           action: AuditAction.TRANSACTION_COMPLETED,
@@ -445,6 +458,7 @@ class TransferService {
               accountNumber: checkingAccount.accountNumber,
               previousBalance: prevSenderBalance,
               currentBalance: updatedSenderWallet?.availableBalance,
+              version: updatedSenderWallet.version,
             },
             receiver: {
               walletId: receiverWallet.walletId,
@@ -455,6 +469,7 @@ class TransferService {
               accountNumber: savingsAccount.accountNumber,
               previousBalance: prevReceiverBalance,
               currentBalance: updatedReceiverWallet?.availableBalance,
+              version: updatedReceiverWallet?.version,
             },
             amount: dto.amount,
             currency: dto.currency,
@@ -524,28 +539,28 @@ class TransferService {
       );
 
       if (!senderAccount) {
-        throw new BadRequestError("ACCOUNT_NOT_FOUND");
+        throw new BadRequestError("Account not found");
       }
 
       if (senderAccount.userPublicId !== dto.senderId) {
-        throw new BadRequestError("UNAUTHORIZED_TO_TRANSFER_FROM_ACCOUNT");
+        throw new BadRequestError("Unauthorized transfer from account");
       }
 
       /** -------------------------
        * RESOLVE VAULT
        * ------------------------- */
-      vault = await findVault(dto.vaultId, dto.currency, dto.senderId, session);
+      vault = await findVault(dto.vaultId, dto.senderId, dto.currency, session);
 
       if (vault.userPublicId !== context.userId) {
-        throw new BadRequestError("UNAUTHORIZED_TO_TRANSFER_TO_VAULT");
+        throw new BadRequestError("Unauthorized transfer to vault");
       }
 
       if (vault.currency !== dto.currency) {
-        throw new BadRequestError("VAULT_CURRENCY_MISMATCH");
+        throw new BadRequestError("Vault currenct mismatch");
       }
 
       if (dto.amount <= 0) {
-        throw new BadRequestError("INVALID_AMOUNT");
+        throw new BadRequestError("Invalid amount");
       }
 
       /** -------------------------
@@ -557,7 +572,7 @@ class TransferService {
       );
 
       if (!vaultLocked) {
-        throw new BadRequestError("VAULT_LOCK_FAILED");
+        throw new BadRequestError("Vault locked failed");
       }
 
       /** -------------------------
@@ -577,7 +592,7 @@ class TransferService {
       );
 
       if (!senderWalletLocked) {
-        throw new BadRequestError("SENDER_WALLET_LOCK_FAILED");
+        throw new BadRequestError("Sender wallet lock failed");
       }
 
       /** -------------------------
@@ -587,7 +602,6 @@ class TransferService {
         senderAccount.ledgerAccountId,
         vault.ledgerAccountId,
         dto.fromType,
-        dto.toType,
         session,
       );
 
@@ -620,39 +634,69 @@ class TransferService {
       );
       const updatedVault = await vaultModel.findOneAndUpdate(
         { _id: vault._id },
-        { $inc: { currentBalanceMinor: dto.amount } },
+        {
+          $inc: {
+            currentBalanceMinor: dto.amount,
+            version: 1,
+          },
+        },
         { session, new: true },
       );
 
       await unlockVault(vault._id, session);
+
+      if (
+        vault.vaultType === "TARGET" &&
+        vault.targetAmountMinor > 0 &&
+        updatedVault &&
+        updatedVault.currentBalanceMinor >= vault.targetAmountMinor
+      ) {
+        await vaultModel.updateOne(
+          { _id: vault._id },
+          {
+            $set: {
+              "lock.state": "MATURED",
+              status: "COMPLETED",
+            },
+          },
+          { session },
+        );
+
+        logger.info("Target vault goal reached");
+      }
 
       /** -------------------------
        * OUTBOX / EVENT EMISSION
        * ------------------------- */
       await emitOutboxEvent(
         {
-          topic: "vault.events",
+          topic: "transfer.events", // ← same topic as internal transfer, not vault.events
           eventId: result.transactionRef,
-          eventType: AuditAction.VAULT_TRANSFER_COMPLETED,
-          action: AuditAction.VAULT_TRANSFER_COMPLETED,
+          eventType: AuditAction.TRANSACTION_COMPLETED, // ← reuse, not VAULT_TRANSFER_COMPLETED
+          action: AuditAction.TRANSACTION_COMPLETED,
           status: AuditStatus.PENDING,
           payload: {
             sender: {
               walletId: senderWallet.walletId,
               userId: senderWallet.userPublicId,
               name: senderWallet.userId.name,
+              email: senderWallet.userId.email,
               accountType: senderAccount.type,
               accountNumber: senderAccount.accountNumber,
               previousBalance: senderWallet.availableBalance,
               currentBalance: updatedSenderWallet?.availableBalance,
+              version: updatedSenderWallet.version,
             },
             receiver: {
-              accountType: "VAULT",
               walletId: vault.vaultId,
               userId: vault.userPublicId,
-              vaultId: vault.vaultId,
+              name: vault.title,
+              email: senderWallet.userId.email,
+              accountType: vault.vaultType,
+              accountNumber: vault.vaultId,
               previousBalance: vault.currentBalanceMinor,
               currentBalance: updatedVault?.currentBalanceMinor,
+              version: updatedVault?.version,
             },
             amount: dto.amount,
             currency: dto.currency,
@@ -660,7 +704,7 @@ class TransferService {
             transactionRef: result.transactionRef,
             transferType: "VAULT_TRANSFER",
           },
-          aggregateType: "VAULT_TRANSFER",
+          aggregateType: "TRANSFER", // ← matches your existing router case
           aggregateId: result.transactionRef,
           version: 1,
           context,
@@ -672,7 +716,15 @@ class TransferService {
        * COMMIT TRANSACTION
        * ------------------------- */
       await session.commitTransaction();
-      return result;
+      return {
+        vault,
+        amount: dto.amount,
+        newBalance: updatedVault?.currentBalanceMinor,
+        targetReached:
+          vault.vaultType === "TARGET" &&
+          updatedVault &&
+          updatedVault?.currentBalanceMinor >= vault.targetAmountMinor,
+      };
     } catch (e) {
       if (!committed) {
         try {
@@ -692,6 +744,34 @@ class TransferService {
       session.endSession();
     }
   }
+
+  public lookupAccount = async (accountNumber: string) => {
+    const account = await Account.findOne({
+      accountNumber,
+      status: "ACTIVE",
+      isPublic: true,
+    })
+      .select("accountNumber type userPublicId")
+      .lean();
+
+    if (!account) {
+      throw new NotFoundError("Account not found");
+    }
+
+    const user = await UserModel.findOne({ userId: account.userPublicId })
+      .select("name userId")
+      .lean();
+
+    if (!user) {
+      throw new NotFoundError("User not found");
+    }
+
+    return {
+      accountNumber: account.accountNumber,
+      name: user.name,
+      userId: user.userId,
+    };
+  };
 }
 
 export default TransferService;

@@ -1,21 +1,20 @@
+import BadRequestError from "@/shared/errors/badRequest";
+import { NotFoundError } from "@/shared/errors/notFoundError";
 import { ClientSession, Types } from "mongoose";
+import { AccountDocument } from "../account/account.interface";
+import { Account } from "../account/account.model";
 import {
   LedgerAccount,
-  LedgerAccountDocument,
   LedgerAccountType,
   LedgerOwnerType,
 } from "../ledger/ledger.account.model";
-import BadRequestError from "@/shared/errors/badRequest";
+import vaultModel, { VaultDocument } from "../vault/vault.model";
 import {
   IUser,
   Wallet,
   WalletDocument,
   WalletType,
 } from "../wallet/wallet.model";
-import { Account } from "../account/account.model";
-import { NotFoundError } from "@/shared/errors/notFoundError";
-import { AccountDocument } from "../account/account.interface";
-import vaultModel, { VaultDocument } from "../vault/vault.model";
 
 interface IWalletPopulated extends Omit<WalletDocument, "userId"> {
   userId: IUser;
@@ -109,13 +108,14 @@ export const lockWalletFunds = async (
       $inc: {
         availableBalance: -amount,
         lockedBalance: +amount,
+        version: 1,
       },
     },
     { session, new: true },
   );
 
   if (!res) {
-    throw new BadRequestError("INSUFFICIENT_BALANCE");
+    throw new BadRequestError("Insufficient Balance");
   }
 
   return res;
@@ -132,13 +132,13 @@ export const deductWalletFunds = async (
       lockedBalance: { $gte: amount },
     },
     {
-      $inc: { lockedBalance: -amount },
+      $inc: { lockedBalance: -amount, version: 1 },
     },
     { new: true, session },
   );
 
   if (!res) {
-    throw new BadRequestError("INSUFFICIENT_BALANCE");
+    throw new BadRequestError("Insufficient Balance");
   }
 
   return res;
@@ -157,7 +157,7 @@ export const unlockWalletFunds = async (
 
   const res = await Wallet.findOneAndUpdate(
     { _id: wallet._id, lockedBalance: { $gte: amount } },
-    { $inc: { availableBalance: amount, lockedBalance: -amount } },
+    { $inc: { availableBalance: amount, lockedBalance: -amount, version: 1 } },
     { new: true, session },
   ).session(session);
 
@@ -221,7 +221,7 @@ export const ensureWalletsAreActive = async (
 
   if (!senderWallet || senderWallet.status !== "ACTIVE") {
     throw new BadRequestError(
-      `Wallet ${senderWallet?.walletId} is frozen or inactive (Reason: ${senderWallet?.freezeReason})`,
+      `Wallet is frozen or inactive (Reason: ${senderWallet?.freezeReason})`,
     );
   }
 
@@ -339,7 +339,6 @@ export const LookUpVaultLedger = async (
   senderAccountId: Types.ObjectId,
   receiverAccountId: Types.ObjectId,
   fromType: string,
-  toType: string,
   session: ClientSession,
 ) => {
   const [senderLedger, receiverLedger] = await Promise.all([
@@ -350,7 +349,7 @@ export const LookUpVaultLedger = async (
 
     LedgerAccount.findOne({
       _id: receiverAccountId,
-      type: toType,
+      type: LedgerAccountType.VAULT,
     }).session(session),
   ]);
 
@@ -400,36 +399,10 @@ export const findWalletByType = async (
     .session(session);
 
   if (!wallet) {
-    throw new BadRequestError(`${type} wallet not found for ${currency}`);
+    throw new BadRequestError(`wallet not found for ${currency}`);
   }
 
   return wallet;
-};
-
-export const findVault = async (
-  vaultId: string,
-  currency: string,
-  userId: string,
-  session: ClientSession,
-): Promise<VaultDocument> => {
-  const vault = await vaultModel
-    .findOne({
-      vaultId,
-      currency,
-      userPublicId: userId,
-    })
-    .populate("userId", "email name -_id")
-    .session(session);
-
-  if (!vault) {
-    throw new BadRequestError(`vault not found for ${currency}`);
-  }
-
-  if (vault.status !== "ACTIVE") {
-    throw new BadRequestError("VAULT_NOT_ACTIVE");
-  }
-
-  return vault;
 };
 
 export const resolveAccountByUserId = async (
@@ -550,16 +523,73 @@ export const lookupVaultLedger = async (
   session: ClientSession,
 ) => {
   const vault = await vaultModel.findById(vaultId).session(session);
-  if (!vault) throw new BadRequestError("VAULT_NOT_FOUND");
+  if (!vault) throw new BadRequestError("Vault not found");
 
   if (!vault.ledgerAccountId)
-    throw new BadRequestError("VAULT_LEDGER_NOT_ASSIGNED");
+    throw new BadRequestError("Vault ledger not assigned");
 
   const receiverLedger = await LedgerAccount.findById(
     vault.ledgerAccountId,
   ).session(session);
 
-  if (!receiverLedger) throw new BadRequestError("RECEIVER_LEDGER_NOT_FOUND");
+  if (!receiverLedger) throw new BadRequestError("Reciever ledger not found");
 
   return receiverLedger;
+};
+
+//VAULT USAGE
+
+export const mainWallet = async (
+  userId: string,
+  currency: string,
+  type: string,
+  session: ClientSession,
+) => {
+  const wallet = await Wallet.findOne({
+    userPublicId: userId,
+    type,
+    currency,
+  }).session(session);
+
+  if (!wallet) throw new NotFoundError("Main wallet not found");
+
+  if (wallet.status !== "ACTIVE") {
+    throw new BadRequestError("Main wallet is not active");
+  }
+
+  return wallet;
+};
+
+export const findVault = async (
+  vaultId: string,
+  userId: string,
+  currency: string,
+  session: ClientSession,
+): Promise<VaultDocument> => {
+  const vault = await vaultModel
+    .findOne({
+      vaultId,
+      currency,
+      userPublicId: userId,
+    })
+    .populate("userId", "email name -_id")
+    .session(session);
+
+  if (!vault) {
+    throw new NotFoundError(`vault not found for ${currency}`);
+  }
+
+  const canWithdraw =
+    vault.status === "ACTIVE" ||
+    (vault.status === "COMPLETED" && vault.lock.state === "MATURED");
+
+  if (!canWithdraw) {
+    throw new BadRequestError("Vault not active");
+  }
+
+  if (vault.currency !== currency) {
+    throw new BadRequestError("Vault currenct mismatch");
+  }
+
+  return vault;
 };

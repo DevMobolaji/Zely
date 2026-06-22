@@ -1,4 +1,3 @@
-// src/modules/payments/payment.service.ts
 import mongoose, { Types } from "mongoose";
 import {
   PaymentInitialization,
@@ -267,7 +266,7 @@ class PaymentService {
       // Emit failure event for audit trail
       await emitOutboxEvent({
         topic: "payment.events",
-        eventId: generateEventId(),
+        eventId: initialization.reference,
         eventType: AuditAction.PAYMENT_FAILED,
         action: AuditAction.PAYMENT_FAILED,
         status: AuditStatus.FAILED,
@@ -307,7 +306,7 @@ class PaymentService {
     // ─── 9. Emit outbox event ─────────────────────────────────────────────
     await emitOutboxEvent({
       topic: "payment.events",
-      eventId: generateEventId(),
+      eventId: initialization.reference,
       eventType: AuditAction.PAYMENT_INITIATED,
       action: AuditAction.PAYMENT_INITIATED,
       status: AuditStatus.PENDING,
@@ -408,16 +407,19 @@ class PaymentService {
     // ─── 5. Validate amounts match ────────────────────────────────────────
     // Critical security check — webhook claims user paid X, our record says Y.
     // Mismatch could indicate tampering or bug. Refuse to credit.
-    if (parsedEvent.amount !== initialization.amount) {
+    const webhookAmountNaira = parsedEvent.amount / 100;
+
+    if (webhookAmountNaira !== initialization.amount) {
       logger.error("Webhook amount mismatch", {
         reference: initialization.reference,
         expectedAmount: initialization.amount,
         webhookAmount: parsedEvent.amount,
+        webhookAmountNaira,
       });
 
       await this.markInitializationFailed(
         initialization,
-        `AMOUNT_MISMATCH_EXPECTED_${initialization.amount}_GOT_${parsedEvent.amount}`,
+        `AMOUNT_MISMATCH_EXPECTED_${initialization.amount}_GOT_${webhookAmountNaira}`,
         parsedEvent.rawPayload,
       );
 

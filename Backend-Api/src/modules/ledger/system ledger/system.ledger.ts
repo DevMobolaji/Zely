@@ -150,13 +150,13 @@ class SystemLedger {
 
         await Wallet.updateOne(
           { userPublicId: "SYSTEM_USER", type: WalletType.SYSTEM_TREASURY },
-          { $inc: { availableBalance: -user.amount } },
+          { $inc: { availableBalance: -user.amount, version: 1 } },
           { session },
         );
 
         await Wallet.updateOne(
           { _id: wallet._id },
-          { $inc: { availableBalance: user.amount } },
+          { $inc: { availableBalance: user.amount, version: 1 } },
           { session },
         );
 
@@ -172,7 +172,7 @@ class SystemLedger {
 
         await emitOutboxEvent(
           {
-            topic: "transaction.events",
+            topic: "transfer.events",
             eventId: txn.transactionRef,
             eventType: AuditAction.TRANSACTION_COMPLETED,
             action: AuditAction.TRANSACTION_COMPLETED,
@@ -187,6 +187,7 @@ class SystemLedger {
                 accountNumber: "1234567899",
                 previousBalance: sysBalBefore?.availableBalance,
                 currentBalance: sysBalAfter?.availableBalance,
+                version: sysBalAfter?.version,
               },
               receiver: {
                 walletId: wallet.walletId,
@@ -197,6 +198,7 @@ class SystemLedger {
                 accountNumber: account.accountNumber,
                 previousBalance: userBalBefore?.availableBalance,
                 currentBalance: UserBalAfter?.availableBalance,
+                version: UserBalAfter?.version,
               },
 
               amount: user.amount,

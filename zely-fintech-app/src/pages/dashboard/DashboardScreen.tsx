@@ -6,21 +6,43 @@ import {
   Send,
   User,
 } from "lucide-react";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import StateRenderer from "../../components/common/StateRenderer";
 import TransactionDetailsModal from "../../components/TransactionDetailsModal";
-import { useAsync } from "../../hooks/useAsync";
-import { transactionService } from "../../services/transactionService";
 import {
   ApiTransaction,
   Transaction,
   TransactionStatus,
   TransactionType,
 } from "../../utils/types";
+import { useDashboardData } from "@/context/DashboardDataContext";
+import { useToast } from "@/context/ToastContext";
 
 const DashboardScreen: React.FC = () => {
+  const { showToast } = useToast();
   const navigate = useNavigate();
+  const {
+    wallets,
+    loadingWallets,
+    transactions,
+    loadingTransactions,
+    refreshWallets,
+
+    errorTransactions,
+    refreshTransactions,
+  } = useDashboardData();
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const trxref = params.get("trxref");
+
+    if (trxref) {
+      refreshWallets();
+      refreshTransactions();
+      showToast("success", "Payment received. Wallet has been credited.");
+    }
+  }, [location.search]);
 
   const toTransactionModal = (tx: ApiTransaction): Transaction => ({
     id: tx.transactionId,
@@ -30,7 +52,7 @@ const DashboardScreen: React.FC = () => {
     date: tx.occurredAt,
     status:
       tx.direction === "debit"
-        ? ((tx.status === "TRANSFER_COMPLETED"
+        ? ((tx.status === "TRANSACTION_COMPLETED"
             ? "success"
             : "pending") as TransactionStatus)
         : ("success" as TransactionStatus),
@@ -39,25 +61,8 @@ const DashboardScreen: React.FC = () => {
     notes: `${tx.walletType} • ${tx.currency}`,
   });
 
-  // Use Custom Hook for Data Fetching
-  const {
-    data: transactions,
-    loading: loadingTransactions,
-    error: errorTransactions,
-    execute: refreshTransactions,
-  } = useAsync<ApiTransaction[]>(
-    useCallback(() => transactionService.getRecent(10), []),
-  ); // Fetch more to get contacts
-
-  const { data: summary, loading: loadingSummary } = useAsync(
-    useCallback(() => transactionService.getDashboardSummary(), []),
-  );
-
-  const { data: wallets, loading: loadingWallets } = useAsync(
-    useCallback(() => transactionService.getWallets(), []),
-  );
-
-  const totalBalance = summary?.totalBalance ?? 0;
+  const totalBalance =
+    wallets?.reduce((sum: number, w: any) => sum + w.balance, 0) ?? 0;
 
   // Personalization State
   const [greeting, setGreeting] = useState("");
@@ -80,15 +85,17 @@ const DashboardScreen: React.FC = () => {
     return d.toLocaleDateString([], { month: "short", day: "numeric" });
   };
 
+  const safeTransactions = Array.isArray(transactions) ? transactions : [];
+
   // Derive Recent Contacts from Transactions
   const recentContacts = useMemo(() => {
     if (!transactions) return [];
     const contacts = new Map();
-    transactions.forEach((tx: ApiTransaction) => {
-      if (tx.direction === "debit" && tx.counterpartyUserId) {
-        if (!contacts.has(tx.counterpartyUserId)) {
-          contacts.set(tx.counterpartyUserId, {
-            name: tx.name,
+    safeTransactions.forEach((tx: ApiTransaction) => {
+      if (tx.direction === "debit" && tx.counterpartyName) {
+        if (!contacts.has(tx.counterpartyName)) {
+          contacts.set(tx.counterpartyName, {
+            name: tx.counterpartyName,
           });
         }
       }
@@ -273,7 +280,7 @@ const DashboardScreen: React.FC = () => {
                               </h3>
                               <span
                                 className={`text-xs font-bold uppercase tracking-wider ${
-                                  wallet.status === "active"
+                                  wallet.status === "ACTIVE"
                                     ? "text-green-400"
                                     : "text-red-400"
                                 }`}
@@ -327,7 +334,7 @@ const DashboardScreen: React.FC = () => {
                               </h3>
                               <span
                                 className={`text-xs font-bold uppercase tracking-wider ${
-                                  wallet.status === "active"
+                                  wallet.status === "ACTIVE"
                                     ? "text-green-500"
                                     : "text-red-400"
                                 }`}
@@ -364,13 +371,14 @@ const DashboardScreen: React.FC = () => {
               loading={loadingTransactions}
               error={errorTransactions}
               data={transactions}
+              isEmpty={!loadingTransactions && transactions.length === 0} // ← explicit empty check
               onRetry={refreshTransactions}
               emptyMessage="No recent transactions found."
             >
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {transactions?.slice(0, 6).map((tx) => (
+                {transactions?.slice(0, 6).map((tx: any) => (
                   <div
-                    key={tx.transactionId}
+                    key={tx.eventId}
                     onClick={() =>
                       setSelectedTransaction(toTransactionModal(tx))
                     }
@@ -392,10 +400,17 @@ const DashboardScreen: React.FC = () => {
                       </div>
                       <div>
                         <h4 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-primary transition-colors line-clamp-1">
-                          {tx.category}
+                          {tx.category === "INTERNAL_TRANSFER"
+                            ? tx.direction === "debit"
+                              ? `Moved to ${tx.counterpartyWalletType === "SAVINGS" ? "Savings" : "Main Checking"}`
+                              : `Moved from ${tx.counterpartyWalletType === "SAVINGS" ? "Savings" : "Main Checking"}`
+                            : tx.direction === "debit"
+                              ? `Payment Sent to ${tx.counterpartyName ?? "Unknown"}`
+                              : `Payment Received from ${tx.counterpartyName ?? "Unknown"}`}
                         </h4>
                         <p className="text-xs text-slate-500 font-medium">
-                          {formatDate(tx.occurredAt)}
+                          {formatDate(tx.occurredAt)} at{" "}
+                          {new Date(tx.occurredAt).toLocaleTimeString()}
                         </p>
                       </div>
                     </div>
@@ -415,14 +430,14 @@ const DashboardScreen: React.FC = () => {
                       </span>
                       <span
                         className={`text-[10px] font-bold uppercase tracking-wider ${
-                          tx.status === "TRANSFER_COMPLETED"
+                          tx.status === "TRANSACTION_COMPLETED"
                             ? "text-green-500"
                             : tx.status === "PENDING"
                               ? "text-yellow-500"
                               : "text-red-500"
                         }`}
                       >
-                        {tx.status === "TRANSFER_COMPLETED"
+                        {tx.status === "TRANSACTION_COMPLETED"
                           ? "SUCCESS"
                           : tx.status}
                       </span>

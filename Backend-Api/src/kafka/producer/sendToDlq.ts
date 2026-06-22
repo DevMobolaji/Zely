@@ -1,46 +1,13 @@
-// // dlq.producer.ts
-// import { producer } from "../config";
-// import { logger } from "@/shared/utils/logger";
-// import { RetryEnvelope } from "../consumer/helpers/retry.envelope";
-
-// export async function sendToDLQ(
-//   baseTopic: string,
-//   envelope: RetryEnvelope,
-//   error: Error
-// ) {
-//   const key = envelope.event.eventId || "unknown";
-//   console.log("This is the baseTopic from dlq", baseTopic)
-
-//   await producer.send({
-//     topic: `${baseTopic}.dlq`, // final sink per original topic
-//     messages: [
-//       {
-//         key,
-//         value: JSON.stringify(envelope), // full object
-//         headers: {
-//           "x-error": error.message,
-//           "x-failed-at": new Date().toISOString(),
-//           "x-retry-count": String(envelope.meta.retryCount ?? 0),
-//         },
-//       },
-//     ],
-//   });
-
-//   logger.error("Event sent to DLQ");
-// }
-
-
-
 import { producer } from "../config";
 import { logger } from "@/shared/utils/logger";
 import { RetryEnvelope } from "../retry.helpers/retry.envelope";
-import { withKafkaBreaker } from '@/infrastructure/resilience/breakers/kafka.breaker';
-import { kafkaMessagesFailedTotal } from '@/infrastructure/resilience/metrics';
+import { withKafkaBreaker } from "@/infrastructure/resilience/breakers/kafka.breaker";
+import { kafkaMessagesFailedTotal } from "@/infrastructure/resilience/metrics";
 
 export async function sendToDLQ(
   baseTopic: string,
   envelope: RetryEnvelope,
-  error: Error
+  error: Error,
 ) {
   const key = envelope.event.eventId || "unknown";
   const dlqTopic = `${baseTopic}.dlq`;
@@ -61,11 +28,11 @@ export async function sendToDLQ(
           },
         ],
       });
-    }, 'sendToDLQ');
+    }, "sendToDLQ");
 
     kafkaMessagesFailedTotal.inc({
       topic: dlqTopic,
-      consumer_group: 'dlq-producer',
+      consumer_group: "dlq-producer",
     });
 
     logger.error("Event sent to DLQ", {
@@ -73,7 +40,6 @@ export async function sendToDLQ(
       topic: dlqTopic,
       error: error.message,
     });
-
   } catch (dlqErr: any) {
     // DLQ publish failed — this is the last resort
     // Log everything so nothing is silently lost

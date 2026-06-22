@@ -1,3 +1,5 @@
+import NotificationController from "@/modules/notification/notification.controller";
+import { SessionController } from "@/modules/sessions/sesssion.controller";
 import UserController from "@/modules/users/user.controller";
 import "dotenv/config";
 import AuthController from "modules/auth/authcontroller";
@@ -13,6 +15,8 @@ import ReconciliationController from "./modules/reconciliation/reconciliation.co
 import vaultController from "./modules/vault/vault.controller";
 import WalletAdminController from "./modules/wallet/wallet.contoller";
 
+let isReady = false;
+
 const app = new App(
   [
     new AuthController(),
@@ -26,13 +30,18 @@ const app = new App(
     new PaymentController(),
     new WebhookController(),
     new UserController(),
+    new NotificationController(),
+    new SessionController(),
   ],
   Number(config.app.port),
 );
 
 const start = async () => {
-  await app.initialize();
   app.listen();
+
+  await app.initialize();
+
+  isReady = true;
 };
 
 start().catch((err) => {

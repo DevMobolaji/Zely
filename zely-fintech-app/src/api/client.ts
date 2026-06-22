@@ -27,40 +27,45 @@ axiosPrivate.interceptors.request.use(
 );
 
 // Response Interceptor that handles 401 errors and attempts token refresh
+// client.ts
+let refreshPromise: Promise<string> | null = null; // 👈 shared across all requests
+
 axiosPrivate.interceptors.response.use(
   (response) => response,
   async (error) => {
     const prevRequest = error?.config;
 
-    // 401 loop prevention
     if (error?.response?.status === 401 && !prevRequest?.sent) {
       prevRequest.sent = true;
 
       try {
-        // Attempt refresh
-        // Note: withCredentials: true implies cookies might be used for refresh token,
-        // but we also send it in body if available in storage as fallback/hybrid support.
-        const refreshToken = getRefreshToken();
+        // 👇 If a refresh is already in flight, wait for it — don't fire another
+        if (!refreshPromise) {
+          refreshPromise = axiosPrivate
+            .post("/auth/refresh", { refreshToken: getRefreshToken() })
+            .then((res) => {
+              const newAccessToken = res.data.user.accessToken;
+              const newRefreshToken = res.data.user.refreshToken;
+              setAccessToken(newAccessToken);
+              if (newRefreshToken) setRefreshToken(newRefreshToken);
+              return newAccessToken;
+            })
+            .finally(() => {
+              refreshPromise = null; // 👈 clear after done
+            });
+        }
 
-        const response = await axiosPrivate.post("/auth/refresh", {
-          refreshToken: refreshToken,
-        });
-
-        const newAccessToken = response.data.user.accessToken;
-        const newRefreshToken = response.data.user.refreshToken;
-
-        setAccessToken(newAccessToken);
-        if (newRefreshToken) setRefreshToken(newRefreshToken);
-
+        const newAccessToken = await refreshPromise; // all queued requests wait here
         prevRequest.headers["Authorization"] = `Bearer ${newAccessToken}`;
         return axiosPrivate(prevRequest);
       } catch (refreshError) {
-        // Logout on fail
+        refreshPromise = null;
         clearTokens();
-        window.location.href = "/login"; // Hard redirect
+        window.location.href = "/login";
         return Promise.reject(refreshError);
       }
     }
+
     return Promise.reject(error);
   },
 );

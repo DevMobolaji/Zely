@@ -1,7 +1,6 @@
-
-import React, { useState, useEffect } from 'react';
-import { Sun, Moon, ArrowLeft } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect } from "react";
+import { Sun, Moon, ArrowLeft } from "lucide-react";
+import { Link } from "react-router-dom";
 
 interface AuthLayoutProps {
   children: React.ReactNode;
@@ -13,9 +12,12 @@ const AuthLayout: React.FC<AuthLayoutProps> = ({ children, rightSection }) => {
 
   useEffect(() => {
     // Check for system preference or previously saved preference
-    if (document.documentElement.classList.contains('dark') || window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    if (
+      document.documentElement.classList.contains("dark") ||
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+    ) {
       setIsDark(true);
-      document.documentElement.classList.add('dark');
+      document.documentElement.classList.add("dark");
     }
   }, []);
 
@@ -23,26 +25,27 @@ const AuthLayout: React.FC<AuthLayoutProps> = ({ children, rightSection }) => {
     const newDark = !isDark;
     setIsDark(newDark);
     if (newDark) {
-      document.documentElement.classList.add('dark');
+      document.documentElement.classList.add("dark");
     } else {
-      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.remove("dark");
     }
   };
 
   return (
     <div className="flex h-[100dvh] w-full overflow-hidden bg-white dark:bg-slate-900 font-sans transition-colors duration-300">
       {/* Left Section - Form Container */}
-      <div className="w-full lg:w-1/2 relative bg-white dark:bg-slate-900 text-slate-900 dark:text-white transition-colors duration-300 h-full overflow-y-auto no-scrollbar">
+      <div className="w-full lg:w-1/2 relative bg-white dark:bg-slate-900 text-slate-900 dark:text-white transition-colors duration-300 h-full overflow-y-auto">
         {/* Scrollable inner container that allows vertical centering but respects overflow */}
         <div className="min-h-full flex flex-col justify-center p-6 sm:p-12 relative">
-          
           {/* Back to Home Button */}
-          <Link 
-            to="/" 
+          <Link
+            to="/"
             className="absolute top-6 left-6 p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors flex items-center gap-2 group z-50"
           >
             <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
-            <span className="text-sm font-bold hidden sm:inline">Back to Home</span>
+            <span className="text-sm font-bold hidden sm:inline">
+              Back to Home
+            </span>
           </Link>
 
           {/* Theme Toggle Switch - Visible on mobile/tablet, Hidden on Desktop (lg+) */}
@@ -58,9 +61,7 @@ const AuthLayout: React.FC<AuthLayoutProps> = ({ children, rightSection }) => {
             )}
           </button>
 
-          <div className="w-full max-w-md mx-auto z-10 py-12">
-            {children}
-          </div>
+          <div className="w-full max-w-md mx-auto z-10 py-12">{children}</div>
         </div>
       </div>
 
@@ -80,8 +81,12 @@ const AuthLayout: React.FC<AuthLayoutProps> = ({ children, rightSection }) => {
         <div className="absolute bottom-8 w-full px-12 flex justify-between items-center text-xs text-gray-600 font-medium z-10">
           <span>© 2024 Zely Inc.</span>
           <div className="flex gap-6">
-            <a href="#" className="hover:text-white transition-colors">Privacy Policy</a>
-            <a href="#" className="hover:text-white transition-colors">Terms of Service</a>
+            <a href="#" className="hover:text-white transition-colors">
+              Privacy Policy
+            </a>
+            <a href="#" className="hover:text-white transition-colors">
+              Terms of Service
+            </a>
           </div>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type UseAsyncState<T> = {
   data: T | null;
@@ -16,10 +16,17 @@ export const useAsync = <T>(
     error: null,
   });
 
+  // 👇 Store latest asyncFunction in a ref — never stale, never triggers re-runs
+  const asyncFunctionRef = useRef(asyncFunction);
+  useEffect(() => {
+    asyncFunctionRef.current = asyncFunction;
+  }, [asyncFunction]);
+
+  // 👇 execute is now stable forever — no deps needed
   const execute = useCallback(async () => {
-    setState((prev: any) => ({ ...prev, loading: true, error: null }));
+    setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const response = await asyncFunction();
+      const response = await asyncFunctionRef.current();
       setState({ data: response, loading: false, error: null });
       return response;
     } catch (err: any) {
@@ -28,13 +35,13 @@ export const useAsync = <T>(
       setState({ data: null, loading: false, error: errorMessage });
       throw err;
     }
-  }, [asyncFunction]);
+  }, []); // 👈 empty deps — execute never changes
 
   useEffect(() => {
     if (immediate) {
       execute();
     }
-  }, [execute, immediate]);
+  }, []); // 👈 empty deps — fires exactly once on mount
 
   return { ...state, execute };
 };

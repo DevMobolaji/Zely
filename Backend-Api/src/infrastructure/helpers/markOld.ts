@@ -4,7 +4,7 @@ import { config } from "@/config/index";
 
 export async function markOldTokenForDeletionAfter(
   oldToken: string,
-  graceMs: number
+  graceMs: number,
 ) {
   const hashed = hashToken(oldToken);
   const key = `${config.redis.hashPrefix}${hashed}`;

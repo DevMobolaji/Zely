@@ -1,13 +1,14 @@
-import { Worker, Queue } from "bullmq";
+import { EmailOutboxModel } from "@/kafka/emails/email.Outbox";
+import { logger } from "@/shared/utils/logger";
+import { Queue, Worker } from "bullmq";
+import mongoose from "mongoose";
+import { Counter, Gauge, Histogram, Pushgateway, Registry } from "prom-client";
 import { EmailService } from "../infrastructure/helpers/email.service.helper";
 import { EMAIL_QUEUE } from "../infrastructure/queues/email.queue";
 import { conn } from "./bullMq.config";
+import { config } from "@/config/index";
 
 console.log("🔥 EMAIL WORKER FILE LOADED");
-import { Registry, Counter, Histogram, Gauge, Pushgateway } from "prom-client";
-import { EmailOutboxModel } from "@/kafka/emails/email.Outbox";
-import { logger } from "@/shared/utils/logger";
-import mongoose from "mongoose";
 
 const workerRegistry = new Registry();
 
@@ -57,18 +58,25 @@ async function bootstrap(): Promise<void> {
 
   const emailQueueRef = new Queue(EMAIL_QUEUE, { connection });
 
+  /** -------------------------
+   * CONNECT TO MONGODB
+   * ------------------------- */
+  await mongoose.connect(config.database.mongodb.uri);
+  logger.info("worker connected to MongoDB");
+
   // ─── Worker ──────────────────────────────────────────────────────────────
   const emailWorker = new Worker(
     EMAIL_QUEUE,
     async (job) => {
       const timer = bullmqJobDuration.startTimer({ queue: EMAIL_QUEUE });
 
-      console.log("🟢 Processing job", job.id, "| type:", job.data?.type);
+      // console.log("🟢 Processing job", job.id, "| type:", job.data?.type);
 
       const {
         email,
         name,
         otp,
+        expiresAt,
         type,
         amount,
         currency,
@@ -94,6 +102,15 @@ async function bootstrap(): Promise<void> {
       } = job.data;
 
       const transactionDate = new Date().toLocaleString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
+      });
+
+      const formattedExpiry = new Date(expiresAt).toLocaleString("en-US", {
         year: "numeric",
         month: "long",
         day: "numeric",
@@ -170,9 +187,15 @@ async function bootstrap(): Promise<void> {
           case "EMAIL_VERIFICATION":
             if (!otp)
               throw new Error("OTP is required for verification emails");
-            await EmailService.sendVerificationEmail(email, name, otp, {
-              idempotencyKey: job.id,
-            });
+            await EmailService.sendVerificationEmail(
+              email,
+              name,
+              otp,
+              formattedExpiry,
+              {
+                idempotencyKey: job.id,
+              },
+            );
             break;
 
           case "WELCOME":
@@ -226,15 +249,7 @@ async function bootstrap(): Promise<void> {
         }
         const outboxId = job.data._id;
 
-        if (!outboxId) {
-          logger.error(
-            "Missing _outboxId in job payload — cannot mark DELIVERED",
-            {
-              jobId: job.id,
-            },
-          );
-          // Don't throw — email was sent. Decide: swallow or alert.
-        } else {
+        try {
           const normalizedOutboxId =
             mongoose.Types.ObjectId.createFromHexString(outboxId);
 
@@ -249,6 +264,18 @@ async function bootstrap(): Promise<void> {
               outboxId,
             });
           }
+        } catch (outboxErr: any) {
+          // ⚠️ Email sent — do NOT rethrow. Retrying would duplicate the send.
+          // Poller's STUCK_ENQUEUED_THRESHOLD will re-dispatch if doc stays
+          // ENQUEUED too long, but idempotencyKey blocks duplicate sends anyway.
+          logger.error(
+            "Failed to mark outbox DELIVERED — email was already sent",
+            {
+              jobId: job.id,
+              outboxId,
+              error: outboxErr.message,
+            },
+          );
         }
 
         bullmqJobTotal.inc({ queue: EMAIL_QUEUE, status: "success" });

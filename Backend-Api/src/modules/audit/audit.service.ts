@@ -1,13 +1,13 @@
-import { logger } from '@/shared/utils/logger';
-import { AuditModel } from './audit.model';
-import { v4 as uuidv4 } from 'uuid';
+import { logger } from "@/shared/utils/logger";
+import { AuditModel } from "./audit.model";
+import { v4 as uuidv4 } from "uuid";
 import {
   AuditSeverity,
   AuditEvent,
   AuditAction,
-  AuditStatus
-} from './audit.interface';
-import { IRequestContext } from '@/config/interfaces/request.interface';
+  AuditStatus,
+} from "./audit.interface";
+import { IRequestContext } from "@/config/interfaces/request.interface";
 
 class AuditLogger {
   private static readonly ATTEMPT_TRACKING_ACTIONS = [
@@ -27,33 +27,32 @@ class AuditLogger {
   static async logEvent(event: AuditEvent): Promise<void> {
     const entry = {
       ...event,
-      severity: event.severity || 'INFO' as AuditSeverity,
+      severity: event.severity || ("INFO" as AuditSeverity),
       requestId: event.requestId || uuidv4(),
-      trackedEmail: event.trackedEmail || 'SYSTEM', // For non-user events
+      trackedEmail: event.trackedEmail || "SYSTEM", // For non-user events
       createdAt: new Date(),
       lastAttempt: new Date(),
     };
 
     // Log to application logger (Winston)
     try {
-      logger.info('AUDIT_EVENT', entry);
+      logger.info("AUDIT_EVENT", entry);
     } catch (err) {
-      logger.error('Failed to write audit to app logger', err);
+      logger.error("Failed to write audit to app logger", err);
     }
 
     // Write to MongoDB
     try {
       await AuditModel.create(entry);
     } catch (err) {
-      logger.error('AUDIT_DB_WRITE_FAILED', {
+      logger.error("AUDIT_DB_WRITE_FAILED", {
         error: (err as Error).message,
-        entry
+        entry,
       });
     }
 
     // OPTIONAL: Send to Kafka for real-time processing
     // Uncomment when Kafka is ready
-
   }
 
   // context: IRequestContext,
@@ -65,17 +64,16 @@ class AuditLogger {
   //   userId?: string;
   // }
 
-
   static async logAttempt(
     context: IRequestContext,
     action: string | AuditAction,
     status: string = AuditStatus.PENDING,
     metadata: Record<string, any> = {},
-    severity: AuditSeverity = 'INFO',
+    severity: AuditSeverity = "INFO",
     userIdToLog?: string,
   ): Promise<void> {
     if (!context.email) {
-      logger.warn('Cannot log attempt without email in context', { context });
+      logger.warn("Cannot log attempt without email in context", { context });
       return;
     }
 
@@ -109,7 +107,7 @@ class AuditLogger {
 
     if (status === AuditStatus.SUCCESS) {
       update.$set.attemptCount = 0;
-    }    
+    }
 
     const options = { upsert: true, new: true };
 
@@ -117,7 +115,7 @@ class AuditLogger {
       const doc = await AuditModel.findOneAndUpdate(filter, update, options);
 
       if (!doc) {
-        logger.warn('AUDIT_LOGGED: Attempt upsert returned null', {
+        logger.warn("AUDIT_LOGGED: Attempt upsert returned null", {
           filter,
           update,
         });
@@ -126,18 +124,18 @@ class AuditLogger {
 
       // Log via Winston for audit visibility
       logger.info(`AUDIT_LOGGED: ${action} - ${status}`, {
-        auditedEmail: context.email,
-        auditedUserId: userIdToLog,
-        initialStatus: doc.initialStatus,
-        latestStatus: doc.status,
-        attemptCount: doc.attemptCount,
-        requestId: doc.requestId,
+        // auditedEmail: context.email,
+        // auditedUserId: userIdToLog,
+        // initialStatus: doc.initialStatus,
+        // latestStatus: doc.status,
+        // attemptCount: doc.attemptCount,
+        // requestId: doc.requestId,
       });
 
       // Check for suspicious activity
       await this.logSuspiciousActivity(doc);
     } catch (error) {
-      logger.error('AUDIT_LOG_FAILED: Attempt upsert error', {
+      logger.error("AUDIT_LOG_FAILED: Attempt upsert error", {
         error: (error as Error).message,
         filter,
         update,
@@ -151,7 +149,7 @@ class AuditLogger {
     status: string | AuditStatus = AuditStatus.PENDING,
     userIdToLog: string | null = null,
     metadata: Record<string, any> = {},
-    severity: AuditSeverity = 'INFO'
+    severity: AuditSeverity = "INFO",
   ): Promise<void> {
     const entry: AuditEvent = {
       action,
@@ -160,17 +158,23 @@ class AuditLogger {
       requestId: context.requestId || uuidv4(),
       ip: context.ip,
       userAgent: context.userAgent,
-      trackedEmail: context.email || 'UNKNOWN',
+      trackedEmail: context.email || "UNKNOWN",
       metadata,
       severity,
     };
 
     // Special handling for attempt tracking
     if (this.ATTEMPT_TRACKING_ACTIONS.includes(action as AuditAction)) {
-      await this.logAttempt(context, action, status, metadata, severity, userIdToLog ?? undefined);
+      await this.logAttempt(
+        context,
+        action,
+        status,
+        metadata,
+        severity,
+        userIdToLog ?? undefined,
+      );
       return;
     }
-
 
     // Otherwise, log normally
     await this.logEvent(entry);
@@ -202,14 +206,14 @@ class AuditLogger {
         userAgent: auditDoc.userAgent,
         requestId: auditDoc.requestId,
         metadata: {
-          reason: 'Multiple failed attempts',
+          reason: "Multiple failed attempts",
           originalAction: auditDoc.action,
           attemptCount: auditDoc.attemptCount,
         },
       },
       $setOnInsert: {
         createdAt: new Date(),
-        severity: 'CRITICAL',
+        severity: "CRITICAL",
       },
       $inc: { attemptCount: 1 }, // Initialize +1 on insert or increment on existing
     };
@@ -221,28 +225,28 @@ class AuditLogger {
       });
 
       if (doc) {
-        logger.warn('SUSPICIOUS_ACTIVITY logged', {
+        logger.warn("SUSPICIOUS_ACTIVITY logged", {
           email: auditDoc.trackedEmail,
           action: auditDoc.action,
           attemptCount: doc.attemptCount,
         });
       }
     } catch (error) {
-      logger.error('AUDIT_LOG_FAILED: Suspicious activity upsert error', {
+      logger.error("AUDIT_LOG_FAILED: Suspicious activity upsert error", {
         error: (error as Error).message,
         filter,
         update,
       });
     }
   }
-  
+
   /**
    * NEW: Get user's recent activity
    * WHY: Quick access to user's audit trail
    */
   static async getUserActivity(
     userId: string,
-    limit: number = 50
+    limit: number = 50,
   ): Promise<any[]> {
     try {
       return await AuditModel.find({ userId })
@@ -250,7 +254,7 @@ class AuditLogger {
         .limit(limit)
         .lean();
     } catch (error) {
-      logger.error('Failed to get user activity', { userId, error });
+      logger.error("Failed to get user activity", { userId, error });
       return [];
     }
   }
@@ -262,7 +266,7 @@ class AuditLogger {
   static async getFailedAttempts(
     email: string,
     action: string | AuditAction,
-    timeWindowMinutes: number = 15
+    timeWindowMinutes: number = 15,
   ): Promise<any | null> {
     try {
       const cutoffTime = new Date(Date.now() - timeWindowMinutes * 60 * 1000);
@@ -274,7 +278,7 @@ class AuditLogger {
         lastAttempt: { $gte: cutoffTime },
       });
     } catch (error) {
-      logger.error('Failed to get failed attempts', { email, action, error });
+      logger.error("Failed to get failed attempts", { email, action, error });
       return null;
     }
   }
@@ -287,13 +291,13 @@ class AuditLogger {
     email: string,
     action: string | AuditAction,
     maxAttempts: number = 5,
-    timeWindowMinutes: number = 15
+    timeWindowMinutes: number = 15,
   ): Promise<{ limited: boolean; attemptCount: number; resetAt: Date | null }> {
     try {
       const failedAttempts = await this.getFailedAttempts(
         email,
         action,
-        timeWindowMinutes
+        timeWindowMinutes,
       );
 
       if (!failedAttempts) {
@@ -302,7 +306,7 @@ class AuditLogger {
 
       const isLimited = failedAttempts.attemptCount >= maxAttempts;
       const resetAt = new Date(
-        failedAttempts.lastAttempt.getTime() + timeWindowMinutes * 60 * 1000
+        failedAttempts.lastAttempt.getTime() + timeWindowMinutes * 60 * 1000,
       );
 
       return {
@@ -311,20 +315,16 @@ class AuditLogger {
         resetAt: isLimited ? resetAt : null,
       };
     } catch (error) {
-      logger.error('Failed to check rate limit', { email, action, error });
+      logger.error("Failed to check rate limit", { email, action, error });
       return { limited: false, attemptCount: 0, resetAt: null };
     }
   }
- 
 
   /**
    * NEW: Get audit statistics
    * WHY: Dashboard, reporting, compliance
    */
-  static async getStatistics(
-    startDate: Date,
-    endDate: Date
-  ): Promise<any> {
+  static async getStatistics(startDate: Date, endDate: Date): Promise<any> {
     try {
       const stats = await AuditModel.aggregate([
         {
@@ -334,13 +334,13 @@ class AuditLogger {
         },
         {
           $group: {
-            _id: '$action',
+            _id: "$action",
             count: { $sum: 1 },
             successCount: {
-              $sum: { $cond: [{ $eq: ['$status', 'SUCCESS'] }, 1, 0] },
+              $sum: { $cond: [{ $eq: ["$status", "SUCCESS"] }, 1, 0] },
             },
             failedCount: {
-              $sum: { $cond: [{ $eq: ['$status', 'FAILED'] }, 1, 0] },
+              $sum: { $cond: [{ $eq: ["$status", "FAILED"] }, 1, 0] },
             },
           },
         },
@@ -351,7 +351,7 @@ class AuditLogger {
 
       return stats;
     } catch (error) {
-      logger.error('Failed to get audit statistics', { error });
+      logger.error("Failed to get audit statistics", { error });
       return [];
     }
   }

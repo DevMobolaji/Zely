@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Wallet,
@@ -11,25 +11,26 @@ import {
   History as HistoryIcon,
   Loader2,
 } from "lucide-react";
-import {
-  accountsData as initialAccounts,
-  generateMockData,
-} from "../../utils/mockData";
+
 import { useToast } from "../../context/ToastContext";
-import { useAsync } from "../../hooks/useAsync";
-import { useCallback } from "react";
-import { transactionService } from "../../services/transactionService";
-import {
-  ApiWallet,
-  ApiTransactionResponse,
-  ApiBalanceSummary,
-} from "../../utils/types";
+
+import { ApiTransaction, ApiWallet } from "../../utils/types";
+import { useDashboardData } from "@/context/DashboardDataContext";
+import { transactionService } from "@/services/transactionService";
+import { useAsync } from "@/hooks/useAsync";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "@/utils/queryKey";
 
 const getWalletTypeFromId = (
   walletId: string,
   wallets?: ApiWallet[] | null,
 ): string | undefined => {
   return wallets?.find((w) => w.walletId === walletId)?.walletType;
+};
+
+const formatDate = (isoDate: string) => {
+  const d = new Date(isoDate);
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
 };
 
 const getWalletMeta = (walletType: string) => {
@@ -65,44 +66,44 @@ const WalletsScreen: React.FC = () => {
   const { walletId } = useParams();
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { wallets, loadingWallets } = useDashboardData();
 
-  // Real data
-  const { data: wallets, loading: loadingWallets } = useAsync<ApiWallet[]>(
-    useCallback(() => transactionService.getWallets(), []),
-  );
+  // Find wallet — may be undefined if walletId not set
+  const wallet =
+    wallets?.find((w: any) => w.walletId === walletId) ?? wallets?.[0];
 
-  const { data: summary } = useAsync<ApiBalanceSummary>(
-    useCallback(() => transactionService.getDashboardSummary(), []),
-  );
+  // ─── Always call hooks at top level ──────────────────────────────────
+  const { data: walletTransactions, isLoading: loadingWalletTransactions } =
+    useQuery({
+      queryKey: queryKeys.transactions({ walletType: wallet?.walletType }),
+      queryFn: () =>
+        transactionService.getAll({
+          limit: 20,
+          page: 1,
+          walletType: wallet?.walletType,
+        }),
+      enabled: !!walletId && !!wallet?.walletType,
+      staleTime: 30 * 1000,
+    });
 
-  const { data: transactionData, loading: loadingTransactions } =
-    useAsync<ApiTransactionResponse>(
-      useCallback(
-        () =>
-          transactionService.getAll({
-            limit: 20,
-            page: 1,
-            ...(walletId
-              ? { walletType: getWalletTypeFromId(walletId, wallets) }
-              : {}),
-          }),
-        [walletId, wallets],
-      ),
-    );
-
-  const transactions = transactionData?.transactions ?? [];
+  const walletTxList = walletTransactions?.transactions ?? [];
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
     showToast("success", "Copied to clipboard");
   };
 
-  // If walletId is present, show details
-  if (walletId) {
-    const wallet =
-      wallets?.find((w) => w.walletId === walletId) ?? wallets?.[0];
+  // ─── Loading state ────────────────────────────────────────────────────
+  if (loadingWallets)
+    return (
+      <div className="flex justify-center py-20">
+        <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+      </div>
+    );
 
-    if (loadingWallets || !wallet)
+  // ─── Detail view ──────────────────────────────────────────────────────
+  if (walletId) {
+    if (!wallet)
       return (
         <div className="flex justify-center py-20">
           <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
@@ -217,7 +218,7 @@ const WalletsScreen: React.FC = () => {
                 <span className="text-sm text-slate-500">Total In</span>
                 <span className="text-sm font-bold text-green-500">
                   +₦
-                  {(wallet.totalCredit).toLocaleString("en-NG", {
+                  {wallet.totalCredit.toLocaleString("en-NG", {
                     minimumFractionDigits: 2,
                   })}
                 </span>
@@ -226,7 +227,7 @@ const WalletsScreen: React.FC = () => {
                 <span className="text-sm text-slate-500">Total Out</span>
                 <span className="text-sm font-bold text-slate-900 dark:text-white">
                   -₦
-                  {(wallet.totalDebit).toLocaleString("en-NG", {
+                  {wallet.totalDebit.toLocaleString("en-NG", {
                     minimumFractionDigits: 2,
                   })}
                 </span>
@@ -236,11 +237,12 @@ const WalletsScreen: React.FC = () => {
                 <span className="text-sm font-bold">Net Flow</span>
                 <span className="text-sm font-bold text-blue-500">
                   ₦
-                  {(
-                    (wallet.totalCredit - wallet.totalDebit)
-                  ).toLocaleString("en-NG", {
-                    minimumFractionDigits: 2,
-                  })}
+                  {(wallet.totalCredit - wallet.totalDebit).toLocaleString(
+                    "en-NG",
+                    {
+                      minimumFractionDigits: 2,
+                    },
+                  )}
                 </span>
               </div>
             </div>
@@ -255,33 +257,57 @@ const WalletsScreen: React.FC = () => {
             </h3>
           </div>
           <div>
-            {transactions.slice(0, 5).map((tx) => (
-              <div
-                key={tx.transactionId}
-                className="p-4 border-b border-slate-50 dark:border-slate-800 last:border-0 flex justify-between items-center hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
-              >
-                <div>
-                  <p className="font-bold text-sm text-slate-900 dark:text-white">
-                    {tx.category} - {tx.name}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {new Date(tx.occurredAt).toLocaleDateString()}
-                  </p>
-                </div>
-                <span
-                  className={`text-sm font-bold ${
-                    tx.direction === "credit"
-                      ? "text-green-500"
-                      : "text-slate-900 dark:text-white"
-                  }`}
-                >
-                  {tx.direction === "credit" ? "+" : "-"}₦
-                  {tx.amount.toLocaleString("en-NG", {
-                    minimumFractionDigits: 2,
-                  })}
-                </span>
+            {loadingWalletTransactions ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
               </div>
-            ))}
+            ) : walletTxList.length === 0 ? (
+              <div className="p-8 text-center">
+                <p className="text-sm text-slate-400 font-medium">
+                  No transactions yet
+                </p>
+              </div>
+            ) : (
+              walletTxList
+                .slice(0, 5)
+                .map((tx: ApiTransaction, index: number) => (
+                  <div
+                    key={tx.transactionId ?? `tx-${index}`}
+                    className="p-4 border-b border-slate-50 dark:border-slate-800 last:border-0 flex justify-between items-center hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                  >
+                    <div>
+                      <p className="font-bold text-sm text-slate-900 dark:text-white">
+                        {tx.category === "INTERNAL_TRANSFER"
+                          ? tx.direction === "debit"
+                            ? `Moved to ${tx.walletType === "MAIN_CHECKINGS" ? "Savings" : "Main Checking"}`
+                            : `Moved from ${tx.walletType === "MAIN_CHECKINGS" ? "Savings" : "Main Checking"}`
+                          : tx.direction === "debit"
+                            ? `Sent to ${tx.counterpartyName ?? "Unknown"}`
+                            : `Received from ${tx.counterpartyName ?? "Unknown"}`}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {new Date(tx.occurredAt).toLocaleDateString("en-NG", {
+                          month: "short",
+                          day: "numeric",
+                        })}{" "}
+                        at {new Date(tx.occurredAt).toLocaleTimeString()}
+                      </p>
+                    </div>
+                    <span
+                      className={`text-sm font-bold ${
+                        tx.direction === "credit"
+                          ? "text-green-500"
+                          : "text-slate-900 dark:text-white"
+                      }`}
+                    >
+                      {tx.direction === "credit" ? "+" : "-"}₦
+                      {tx.amount.toLocaleString("en-NG", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                ))
+            )}
           </div>
         </div>
       </div>
@@ -299,11 +325,11 @@ const WalletsScreen: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {(wallets ?? []).map((wallet) => {
+        {(wallets ?? []).map((wallet: any, index: any) => {
           const meta = getWalletMeta(wallet.walletType);
           return (
             <div
-              key={wallet.walletId}
+              key={wallet.walletId ?? `wallet-${index}`}
               onClick={() => navigate(`/wallets/${wallet.walletId}`)}
               className="group relative bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-100 dark:border-slate-800 shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer overflow-hidden"
             >
