@@ -89,8 +89,6 @@ const DashboardScreen: React.FC = () => {
 
   const safeTransactions = Array.isArray(transactions) ? transactions : [];
 
-  console.log(safeTransactions);
-
   // Derive Recent Contacts from Transactions
   const recentContacts = useMemo(() => {
     if (!transactions) return [];

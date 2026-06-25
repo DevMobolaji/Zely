@@ -80,6 +80,10 @@ const envSchema = z.object({
   DOJAH_API_KEY: z.string().min(1),
   DOJAH_APP_ID: z.string().min(1),
   DOJAH_BASE_URL: z.string().min(1),
+
+  CLOUDINARY_CLOUD_NAME: z.string().min(1),
+  CLOUDINARY_API_KEY: z.string().min(1),
+  CLOUDINARY_API_SECRET: z.string().min(1),
 });
 
 //node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
@@ -204,6 +208,11 @@ export const config = {
       process.env.CORS_ALLOWED_ORIGINS?.split(",")
         .map((origin) => origin.trim())
         .filter(Boolean) ?? [],
+  },
+  cloudinary: {
+    cloudName: env.CLOUDINARY_CLOUD_NAME,
+    apiKey: env.CLOUDINARY_API_KEY,
+    apiSecret: env.CLOUDINARY_API_SECRET,
   },
 
   pepper: env.PEPPER,
