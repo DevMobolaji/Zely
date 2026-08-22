@@ -1,51 +1,36 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
 import {
-  LayoutDashboard,
-  Users,
-  CreditCard,
-  Settings,
-  LogOut,
-  Bell,
-  Search,
-  MoreHorizontal,
-  ChevronDown,
-  CheckCircle2,
-  AlertCircle,
-  X,
-  Loader2,
-  Trash2,
-  Edit2,
-  Shield,
-  User as UserIcon,
-  ArrowUpRight,
-  ArrowDownLeft,
-  Filter,
-  Download,
-  Gauge,
-  Calendar,
-  Eye,
-  Wallet,
-  Clock,
   Activity,
-  ChevronUp,
-  History as HistoryIcon,
-  Info,
-  Menu,
-  DollarSign,
-  CheckSquare,
-  Square,
+  AlertCircle,
   AlertTriangle,
-  Lock,
+  ArrowUpRight,
+  CheckCircle2,
+  CheckSquare,
+  ChevronDown,
+  ChevronUp,
+  CreditCard,
+  DollarSign,
+  Download,
+  Edit2,
+  Filter,
   Globe,
-  BellRing,
-  Zap,
+  History as HistoryIcon,
+  Loader2,
+  Search,
+  Settings,
+  Shield,
+  Square,
+  Trash2,
+  User as UserIcon,
+  Users,
+  Wallet,
   XCircle,
+  Zap,
 } from "lucide-react";
+import React, { useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import CustomSelect from "../../components/common/CustomSelect";
 import { useToast } from "../../context/ToastContext";
 import { authService } from "../../services/auth.services";
-import CustomSelect from "../../components/common/CustomSelect";
-import AdminReconciliationScreen from "./AdminReconciliationScreen";
 
 type UserStatus = "active" | "suspended" | "pending";
 type UserRole = "user" | "admin";
@@ -531,8 +516,16 @@ const AdminDashboardScreen: React.FC = () => {
   };
 
   const sanitizeCsvField = (value: string | number | null | undefined) => {
-    const raw = String(value ?? "").replace(/\r?\n/g, " ").replace(/"/g, '""');
-    const escaped = raw.startsWith("=") || raw.startsWith("+") || raw.startsWith("-") || raw.startsWith("@") ? `'${raw}` : raw;
+    const raw = String(value ?? "")
+      .replace(/\r?\n/g, " ")
+      .replace(/"/g, '""');
+    const escaped =
+      raw.startsWith("=") ||
+      raw.startsWith("+") ||
+      raw.startsWith("-") ||
+      raw.startsWith("@")
+        ? `'${raw}`
+        : raw;
     return `"${escaped.replace(/,/g, ";")}"`;
   };
 
@@ -561,7 +554,11 @@ const AdminDashboardScreen: React.FC = () => {
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const safeUserName = user.name.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "") || "user";
+    const safeUserName =
+      user.name
+        .replace(/[^a-zA-Z0-9._-]+/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "") || "user";
     link.setAttribute(
       "download",
       `statement_${safeUserName}_${Date.now()}.csv`,
