@@ -6,7 +6,7 @@ import {
   KycSubmissionStatus,
 } from "./kyc.model";
 import { KycTier } from "../transactionLimit/transaction.limit.model";
-import User from "@/modules/auth/authmodel"
+import User from "@/modules/auth/authmodel";
 import BadRequestError from "@/shared/errors/badRequest";
 import { NotFoundError } from "@/shared/errors/notFoundError";
 import { IRequestContext } from "@/config/interfaces/request.interface";
@@ -15,15 +15,84 @@ import { AuditAction, AuditStatus } from "../audit/audit.interface";
 import { generateEventId } from "@/shared/utils/id.generator";
 import { logger } from "@/shared/utils/logger";
 import { getActiveKycVerifier } from "./kyc.verifier.factory";
+import {
+  DOCUMENT_CONSTRAINTS,
+  KycDocumentType,
+} from "@/modules/kyc/kyc.upload";
+import { config } from "@/config/index";
+import cloudinary from "@/config/cloudinary";
 
 class KycService {
   private userModel = User;
   private verifier = getActiveKycVerifier();
 
+  private async validateUploadedAsset(
+    url: string,
+    userPublicId: string,
+    documentType: KycDocumentType,
+  ): Promise<void> {
+    const expectedFolder = `kyc/${userPublicId}/${documentType.toLowerCase()}`;
+
+    // 1. Confirm it's genuinely a Cloudinary URL under YOUR cloud
+    const expectedPrefix = `https://res.cloudinary.com/${config.cloudinary.cloudName}/`;
+    if (!url.startsWith(expectedPrefix)) {
+      throw new BadRequestError("INVALID_DOCUMENT_SOURCE");
+    }
+
+    // 2. Confirm it's in the expected user-scoped folder —
+    //    prevents submitting someone else's uploaded file URL
+    if (!url.includes(expectedFolder)) {
+      throw new BadRequestError("DOCUMENT_NOT_IN_EXPECTED_LOCATION");
+    }
+
+    // 3. Extract the public_id from the URL and confirm the asset
+    //    genuinely exists on Cloudinary's side — catches tampered/fake URLs
+    const publicId = this.extractPublicId(url, expectedFolder);
+
+    try {
+      const resource = await cloudinary.api.resource(publicId, {
+        resource_type:
+          DOCUMENT_CONSTRAINTS[documentType].resourceType === "auto"
+            ? undefined
+            : DOCUMENT_CONSTRAINTS[documentType].resourceType,
+        type: "authenticated",
+      });
+
+      const constraints = DOCUMENT_CONSTRAINTS[documentType];
+
+      if (resource.bytes > constraints.maxBytes) {
+        throw new BadRequestError("FILE_EXCEEDS_MAX_SIZE");
+      }
+
+      if (!constraints.allowedFormats.includes(resource.format)) {
+        throw new BadRequestError("INVALID_FILE_FORMAT");
+      }
+    } catch (err: any) {
+      if (err instanceof BadRequestError) throw err;
+      logger.error("Cloudinary resource verification failed", {
+        publicId,
+        error: err.message,
+      });
+      throw new BadRequestError("COULD_NOT_VERIFY_UPLOADED_DOCUMENT");
+    }
+  }
+
+  private extractPublicId(url: string, expectedFolder: string): string {
+    // Cloudinary URLs look like:
+    // https://res.cloudinary.com/{cloud}/image/upload/v123456/{folder}/{filename}.{ext}
+    // or, for private/authenticated assets:
+    // https://res.cloudinary.com/{cloud}/image/authenticated/s--TOKEN--/v123456/{folder}/{filename}.{ext}
+    const match = url.match(
+      /\/(?:upload|authenticated)\/(?:s--[\w-]+--\/)?(?:v\d+\/)?(.+)\.\w+$/,
+    );
+    if (!match) throw new BadRequestError("MALFORMED_DOCUMENT_URL");
+    return match[1];
+  }
+
   public async submitForTier2(
     userPublicId: string,
     payload: any,
-    context: IRequestContext
+    context: IRequestContext,
   ) {
     const user = await this.userModel.findOne({ userId: userPublicId });
     if (!user) throw new NotFoundError("USER_NOT_FOUND");
@@ -45,11 +114,25 @@ class KycService {
     // BVN uniqueness — must not be linked to another approved user
     const bvnTaken = await KycSubmission.findOne({
       bvn: payload.bvn,
-      status: { $in: [KycSubmissionStatus.APPROVED, KycSubmissionStatus.AUTO_APPROVED] },
+      status: {
+        $in: [KycSubmissionStatus.APPROVED, KycSubmissionStatus.AUTO_APPROVED],
+      },
       userPublicId: { $ne: userPublicId },
     });
 
-    if (bvnTaken) throw new BadRequestError("BVN_ALREADY_LINKED_TO_ANOTHER_USER");
+    if (bvnTaken)
+      throw new BadRequestError("BVN_ALREADY_LINKED_TO_ANOTHER_USER");
+
+    await this.validateUploadedAsset(
+      payload.governmentId.documentUrl,
+      userPublicId,
+      KycDocumentType.GOVERNMENT_ID,
+    );
+    await this.validateUploadedAsset(
+      payload.address.proofOfAddressUrl,
+      userPublicId,
+      KycDocumentType.PROOF_OF_ADDRESS,
+    );
 
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -72,7 +155,7 @@ class KycService {
             submittedAt: new Date(),
           },
         ],
-        { session }
+        { session },
       );
       submission = created;
 
@@ -95,7 +178,7 @@ class KycService {
           version: 1,
           context,
         },
-        { session }
+        { session },
       );
 
       await session.commitTransaction();
@@ -120,7 +203,7 @@ class KycService {
   public async submitForTier3(
     userPublicId: string,
     payload: any,
-    context: IRequestContext
+    context: IRequestContext,
   ) {
     const user = await this.userModel.findOne({ userId: userPublicId });
     if (!user) throw new NotFoundError("USER_NOT_FOUND");
@@ -133,7 +216,19 @@ class KycService {
       userPublicId,
       status: KycSubmissionStatus.PENDING_REVIEW,
     });
-    if (existing) throw new BadRequestError("PENDING_SUBMISSION_ALREADY_EXISTS");
+    if (existing)
+      throw new BadRequestError("PENDING_SUBMISSION_ALREADY_EXISTS");
+
+    await this.validateUploadedAsset(
+      payload.selfieUrl,
+      userPublicId,
+      KycDocumentType.SELFIE,
+    );
+    await this.validateUploadedAsset(
+      payload.livenessVideoUrl,
+      userPublicId,
+      KycDocumentType.LIVENESS_VIDEO,
+    );
 
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -153,7 +248,7 @@ class KycService {
             submittedAt: new Date(),
           },
         ],
-        { session }
+        { session },
       );
       submission = created;
 
@@ -176,7 +271,7 @@ class KycService {
           version: 1,
           context,
         },
-        { session }
+        { session },
       );
 
       await session.commitTransaction();
@@ -214,21 +309,21 @@ class KycService {
       currentTier: user.kycTier,
       pendingSubmission: pending
         ? {
-          id: pending._id.toString(),
-          targetTier: pending.targetTier,
-          status: pending.status,
-          submittedAt: pending.submittedAt,
-        }
+            id: pending._id.toString(),
+            targetTier: pending.targetTier,
+            status: pending.status,
+            submittedAt: pending.submittedAt,
+          }
         : null,
       lastRejection:
         lastSubmission?.status === KycSubmissionStatus.REJECTED ||
-          lastSubmission?.status === KycSubmissionStatus.AUTO_REJECTED
+        lastSubmission?.status === KycSubmissionStatus.AUTO_REJECTED
           ? {
-            id: lastSubmission._id.toString(),
-            targetTier: lastSubmission.targetTier,
-            reason: lastSubmission.rejectionReason,
-            reviewedAt: lastSubmission.reviewedAt,
-          }
+              id: lastSubmission._id.toString(),
+              targetTier: lastSubmission.targetTier,
+              reason: lastSubmission.rejectionReason,
+              reviewedAt: lastSubmission.reviewedAt,
+            }
           : null,
     };
   }
@@ -238,11 +333,14 @@ class KycService {
   public async listPending() {
     return KycSubmission.find({ status: KycSubmissionStatus.PENDING_REVIEW })
       .sort({ submittedAt: 1 })
+      .populate("userId", "email name") // <-- add this
       .lean();
   }
 
   public async getSubmissionById(submissionId: string) {
-    const submission = await KycSubmission.findById(submissionId).lean();
+    const submission = await KycSubmission.findById(submissionId)
+      .populate("userId", "email name") // <-- add this
+      .lean();
     if (!submission) throw new NotFoundError("SUBMISSION_NOT_FOUND");
     return submission;
   }
@@ -250,7 +348,7 @@ class KycService {
   public async adminApprove(
     submissionId: string,
     adminUserId: string,
-    context: IRequestContext
+    context: IRequestContext,
   ) {
     return this.finalizeApproval({
       submissionId,
@@ -264,7 +362,7 @@ class KycService {
     submissionId: string,
     adminUserId: string,
     reason: string,
-    context: IRequestContext
+    context: IRequestContext,
   ) {
     return this.finalizeRejection({
       submissionId,
@@ -279,7 +377,7 @@ class KycService {
 
   private async runVerification(
     submission: KycSubmissionDocument,
-    context: IRequestContext
+    context: IRequestContext,
   ): Promise<void> {
     let result;
     try {
@@ -288,7 +386,9 @@ class KycService {
           ? await this.verifier.verifyTier2(submission)
           : await this.verifier.verifyTier3(submission);
     } catch (err) {
-      logger.error("KYC verifier threw — falling back to manual review", { err });
+      logger.error("KYC verifier threw — falling back to manual review", {
+        err,
+      });
       result = { status: "MANUAL_REVIEW_REQUIRED" as const };
     }
 
@@ -329,7 +429,9 @@ class KycService {
     session.startTransaction();
 
     try {
-      const submission = await KycSubmission.findById(opts.submissionId).session(session);
+      const submission = await KycSubmission.findById(
+        opts.submissionId,
+      ).session(session);
       if (!submission) throw new NotFoundError("SUBMISSION_NOT_FOUND");
 
       if (submission.status !== KycSubmissionStatus.PENDING_REVIEW) {
@@ -338,10 +440,11 @@ class KycService {
 
       submission.status = opts.finalStatus;
       submission.reviewedBy = opts.reviewedBy
-        ? mongoose.Types.ObjectId.createFromHexString(opts.reviewedBy) as any
+        ? (mongoose.Types.ObjectId.createFromHexString(opts.reviewedBy) as any)
         : undefined;
       submission.reviewedAt = new Date();
-      if (opts.providerReference) submission.providerReference = opts.providerReference;
+      if (opts.providerReference)
+        submission.providerReference = opts.providerReference;
       if (opts.rawResponse) submission.providerRawResponse = opts.rawResponse;
       await submission.save({ session });
 
@@ -349,7 +452,7 @@ class KycService {
       const user = await this.userModel.findByIdAndUpdate(
         submission.userId,
         { $set: { kycTier: submission.targetTier } },
-        { session, new: true }
+        { session, new: true },
       );
 
       if (!user) throw new NotFoundError("USER_NOT_FOUND");
@@ -367,14 +470,15 @@ class KycService {
             name: user.name,
             newTier: submission.targetTier,
             submissionId: submission._id.toString(),
-            autoApproved: opts.finalStatus === KycSubmissionStatus.AUTO_APPROVED,
+            autoApproved:
+              opts.finalStatus === KycSubmissionStatus.AUTO_APPROVED,
           },
           aggregateType: "KYC",
           aggregateId: submission._id.toString(),
           version: 1,
           context: opts.context,
         },
-        { session }
+        { session },
       );
 
       await session.commitTransaction();
@@ -402,7 +506,9 @@ class KycService {
     session.startTransaction();
 
     try {
-      const submission = await KycSubmission.findById(opts.submissionId).session(session);
+      const submission = await KycSubmission.findById(
+        opts.submissionId,
+      ).session(session);
       if (!submission) throw new NotFoundError("SUBMISSION_NOT_FOUND");
 
       if (submission.status !== KycSubmissionStatus.PENDING_REVIEW) {
@@ -411,15 +517,18 @@ class KycService {
 
       submission.status = opts.finalStatus;
       submission.reviewedBy = opts.reviewedBy
-        ? mongoose.Types.ObjectId.createFromHexString(opts.reviewedBy) as any
+        ? (mongoose.Types.ObjectId.createFromHexString(opts.reviewedBy) as any)
         : undefined;
       submission.reviewedAt = new Date();
       submission.rejectionReason = opts.reason;
-      if (opts.providerReference) submission.providerReference = opts.providerReference;
+      if (opts.providerReference)
+        submission.providerReference = opts.providerReference;
       if (opts.rawResponse) submission.providerRawResponse = opts.rawResponse;
       await submission.save({ session });
 
-      const user = await this.userModel.findById(submission.userId).session(session);
+      const user = await this.userModel
+        .findById(submission.userId)
+        .session(session);
       if (!user) throw new NotFoundError("USER_NOT_FOUND");
 
       await emitOutboxEvent(
@@ -436,14 +545,15 @@ class KycService {
             targetTier: submission.targetTier,
             submissionId: submission._id.toString(),
             reason: opts.reason,
-            autoRejected: opts.finalStatus === KycSubmissionStatus.AUTO_REJECTED,
+            autoRejected:
+              opts.finalStatus === KycSubmissionStatus.AUTO_REJECTED,
           },
           aggregateType: "KYC",
           aggregateId: submission._id.toString(),
           version: 1,
           context: opts.context,
         },
-        { session }
+        { session },
       );
 
       await session.commitTransaction();

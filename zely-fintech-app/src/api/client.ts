@@ -1,20 +1,12 @@
 import axios from "axios";
-import {
-  getAccessToken,
-  setAccessToken,
-  getRefreshToken,
-  setRefreshToken,
-  clearTokens,
-} from "../utils/api";
+import { getAccessToken, setAccessToken, clearTokens } from "../utils/api";
 
-// Defined as requested
 export const axiosPrivate = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://localhost:3000/api/v1",
   headers: { "Content-Type": "application/json" },
   withCredentials: true,
 });
 
-// Request Interceptor that binds the access token to each request
 axiosPrivate.interceptors.request.use(
   (config) => {
     const token = getAccessToken();
@@ -26,9 +18,7 @@ axiosPrivate.interceptors.request.use(
   (error) => Promise.reject(error),
 );
 
-// Response Interceptor that handles 401 errors and attempts token refresh
-// client.ts
-let refreshPromise: Promise<string> | null = null; // 👈 shared across all requests
+let refreshPromise: Promise<string> | null = null;
 
 axiosPrivate.interceptors.response.use(
   (response) => response,
@@ -39,23 +29,20 @@ axiosPrivate.interceptors.response.use(
       prevRequest.sent = true;
 
       try {
-        // 👇 If a refresh is already in flight, wait for it — don't fire another
         if (!refreshPromise) {
           refreshPromise = axiosPrivate
-            .post("/auth/refresh", { refreshToken: getRefreshToken() })
+            .post("/auth/refresh", {}) // cookie sent automatically
             .then((res) => {
               const newAccessToken = res.data.user.accessToken;
-              const newRefreshToken = res.data.user.refreshToken;
               setAccessToken(newAccessToken);
-              if (newRefreshToken) setRefreshToken(newRefreshToken);
               return newAccessToken;
             })
             .finally(() => {
-              refreshPromise = null; // 👈 clear after done
+              refreshPromise = null;
             });
         }
 
-        const newAccessToken = await refreshPromise; // all queued requests wait here
+        const newAccessToken = await refreshPromise;
         prevRequest.headers["Authorization"] = `Bearer ${newAccessToken}`;
         return axiosPrivate(prevRequest);
       } catch (refreshError) {
@@ -70,5 +57,4 @@ axiosPrivate.interceptors.response.use(
   },
 );
 
-// Default export for compatibility if needed, though mostly using axiosPrivate
 export default axiosPrivate;

@@ -152,6 +152,16 @@ const TransactionDetailsModal: React.FC<TransactionDetailsModalProps> = ({
                 </span>
               </div>
             )}
+            {transaction.penaltyReason !== undefined && (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-500 font-medium">
+                  Penalty Reason
+                </span>
+                <span className="text-sm font-bold text-slate-900 dark:text-white">
+                  {transaction.penaltyReason}
+                </span>
+              </div>
+            )}
             {transaction.merchantDetails && (
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
                 <p className="text-xs font-bold text-slate-400 uppercase mb-2">

@@ -46,7 +46,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const isActive = (path: string) => {
     if (path === activeTab) return true;
     // Ensure root paths don't catch sub-paths that have their own tabs
-    if (path === "/dashboard" || path === "/admin") {
+    if (path === "/dashboard" || path === "/ADMIN") {
       return activeTab === path;
     }
     return activeTab.startsWith(path + "/");
@@ -71,7 +71,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   // Add Admin links if user is admin
-  if (auth.user?.role === "admin") {
+  if (auth.user?.role === "ADMIN") {
     menuItems.length = 0; // Clear for admin focus
     menuItems.push(
       { path: "/admin", icon: Home, label: "Admin Dashboard" },

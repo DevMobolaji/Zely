@@ -1,39 +1,45 @@
 // src/modules/kyc/kyc.controller.ts
-import { Response, Router } from "express";
-import { StatusCodes } from "http-status-codes";
-import asyncWrapper from "@/shared/middleware/async.wrapper";
-import validateRequest from "@/shared/middleware/validation.middleware";
-import { requireAuth } from "@/shared/middleware/auth.middleware";
-import { getRequestContext } from "@/shared/middleware/request.context";
 import Controller from "@/config/interfaces/controller.interfaces";
 import { IAuthRequest } from "@/config/interfaces/request.interface";
+import { KycDocumentType, KycUploadService } from "@/modules/kyc/kyc.upload";
+import BadRequestError from "@/shared/errors/badRequest";
+import asyncWrapper from "@/shared/middleware/async.wrapper";
+import { requireAuth } from "@/shared/middleware/auth.middleware";
+import { getRequestContext } from "@/shared/middleware/request.context";
+import validateRequest from "@/shared/middleware/validation.middleware";
+import { Response, Router } from "express";
+import { StatusCodes } from "http-status-codes";
+import { UserRole } from "../auth/authinterface";
 import KycService from "./kyc.service";
 import kycValidation from "./kyc.validation";
-import { UserRole } from "../auth/authinterface";
-import BadRequestError from "@/shared/errors/badRequest";
 
 class KycController implements Controller {
   public path = "/kyc";
   public route = Router();
   private kycService = new KycService();
+  private kycUploadService = new KycUploadService();
 
   constructor() {
     this.initializeRoutes();
   }
 
   private initializeRoutes(): void {
-    // User endpoints
+    this.route.post(
+      `${this.path}/upload-signature`,
+      requireAuth,
+      this.getUploadSignature,
+    );
     this.route.post(
       `${this.path}/upgrade-to-tier-2`,
       requireAuth,
       validateRequest(kycValidation.submitTier2, "body"),
-      this.submitTier2
+      this.submitTier2,
     );
     this.route.post(
       `${this.path}/upgrade-to-tier-3`,
       requireAuth,
       validateRequest(kycValidation.submitTier3, "body"),
-      this.submitTier3
+      this.submitTier3,
     );
     this.route.get(`${this.path}/my-status`, requireAuth, this.getMyStatus);
 
@@ -42,26 +48,26 @@ class KycController implements Controller {
       `/admin${this.path}/pending`,
       requireAuth,
       this.requireAdmin,
-      this.listPending
+      this.listPending,
     );
     this.route.get(
       `/admin${this.path}/:submissionId`,
       requireAuth,
       this.requireAdmin,
-      this.getSubmission
+      this.getSubmission,
     );
     this.route.post(
       `/admin${this.path}/:submissionId/approve`,
       requireAuth,
       this.requireAdmin,
-      this.adminApprove
+      this.adminApprove,
     );
     this.route.post(
       `/admin${this.path}/:submissionId/reject`,
       requireAuth,
       this.requireAdmin,
       validateRequest(kycValidation.adminReject, "body"),
-      this.adminReject
+      this.adminReject,
     );
   }
 
@@ -73,56 +79,104 @@ class KycController implements Controller {
     next();
   };
 
-  private submitTier2 = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const ctx = getRequestContext(req);
-    if (!ctx.userId) throw new BadRequestError("USER_NOT_AUTHENTICATED");
-    const result = await this.kycService.submitForTier2(ctx.userId, req.body, ctx);
-    return res.status(StatusCodes.CREATED).json({ ok: true, data: result });
-  });
+  private submitTier2 = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const ctx = getRequestContext(req);
+      if (!ctx.userId) throw new BadRequestError("USER_NOT_AUTHENTICATED");
+      const result = await this.kycService.submitForTier2(
+        ctx.userId,
+        req.body,
+        ctx,
+      );
+      return res.status(StatusCodes.CREATED).json({ ok: true, data: result });
+    },
+  );
 
-  private submitTier3 = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const ctx = getRequestContext(req);
-    if (!ctx.userId) throw new BadRequestError("USER_NOT_AUTHENTICATED");
-    const result = await this.kycService.submitForTier3(ctx.userId, req.body, ctx);
-    return res.status(StatusCodes.CREATED).json({ ok: true, data: result });
-  });
+  private submitTier3 = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const ctx = getRequestContext(req);
+      if (!ctx.userId) throw new BadRequestError("USER_NOT_AUTHENTICATED");
+      const result = await this.kycService.submitForTier3(
+        ctx.userId,
+        req.body,
+        ctx,
+      );
+      return res.status(StatusCodes.CREATED).json({ ok: true, data: result });
+    },
+  );
 
-  private getMyStatus = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const ctx = getRequestContext(req);
-    if (!ctx.userId) throw new BadRequestError("USER_NOT_AUTHENTICATED");
-    const result = await this.kycService.getMyStatus(ctx.userId);
-    return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  });
+  private getMyStatus = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const ctx = getRequestContext(req);
+      if (!ctx.userId) throw new BadRequestError("USER_NOT_AUTHENTICATED");
+      const result = await this.kycService.getMyStatus(ctx.userId);
+      return res.status(StatusCodes.OK).json({ ok: true, data: result });
+    },
+  );
 
-  private listPending = asyncWrapper(async (_req: IAuthRequest, res: Response) => {
-    const result = await this.kycService.listPending();
-    return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  });
+  private listPending = asyncWrapper(
+    async (_req: IAuthRequest, res: Response) => {
+      const result = await this.kycService.listPending();
+      return res.status(StatusCodes.OK).json({ ok: true, data: result });
+    },
+  );
 
-  private getSubmission = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const result = await this.kycService.getSubmissionById(req.params.submissionId);
-    return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  });
+  private getSubmission = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const result = await this.kycService.getSubmissionById(
+        req.params.submissionId,
+      );
+      return res.status(StatusCodes.OK).json({ ok: true, data: result });
+    },
+  );
 
-  private adminApprove = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const ctx = getRequestContext(req);
-    const adminId = (req as any).user?.sub;
-    const result = await this.kycService.adminApprove(req.params.submissionId, adminId, ctx);
-    return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  });
+  private adminApprove = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const ctx = getRequestContext(req);
+      const adminId = (req as any).user?.sub;
+      const result = await this.kycService.adminApprove(
+        req.params.submissionId,
+        adminId,
+        ctx,
+      );
+      return res.status(StatusCodes.OK).json({ ok: true, data: result });
+    },
+  );
 
-  private adminReject = asyncWrapper(async (req: IAuthRequest, res: Response) => {
-    const ctx = getRequestContext(req);
-    const adminId = (req as any).user?.sub;
-    const { reason } = req.body;
-    const result = await this.kycService.adminReject(
-      req.params.submissionId,
-      adminId,
-      reason,
-      ctx
-    );
-    return res.status(StatusCodes.OK).json({ ok: true, data: result });
-  });
+  private adminReject = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const ctx = getRequestContext(req);
+      const adminId = (req as any).user?.sub;
+      const { reason } = req.body;
+      const result = await this.kycService.adminReject(
+        req.params.submissionId,
+        adminId,
+        reason,
+        ctx,
+      );
+      return res.status(StatusCodes.OK).json({ ok: true, data: result });
+    },
+  );
+
+  private getUploadSignature = asyncWrapper(
+    async (req: IAuthRequest, res: Response) => {
+      const userId = req.user?.userId;
+      if (!userId) throw new BadRequestError("User not authenticated");
+
+      const { documentType } = req.body;
+
+      if (!Object.values(KycDocumentType).includes(documentType)) {
+        throw new BadRequestError("INVALID_DOCUMENT_TYPE");
+      }
+
+      const signatureData = this.kycUploadService.generateSignature(
+        userId,
+        documentType,
+      );
+
+      return res.status(StatusCodes.OK).json({ ok: true, data: signatureData });
+    },
+  );
 }
 
 export default KycController;

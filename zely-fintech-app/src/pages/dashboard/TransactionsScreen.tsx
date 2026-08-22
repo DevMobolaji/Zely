@@ -90,7 +90,7 @@ const TransactionsScreen: React.FC = () => {
   };
 
   const toTransactionModal = (tx: ApiTransaction): Transaction => ({
-    id: tx.referenceId ?? tx.id ?? "",
+    id: tx.transactionId ?? tx.id ?? "",
     title:
       tx.category === "INTERNAL_TRANSFER"
         ? tx.direction === "debit"
@@ -117,6 +117,7 @@ const TransactionsScreen: React.FC = () => {
         ? (tx.counterpartyName ?? undefined)
         : (tx.counterpartyName ?? undefined),
     fee: tx.fee,
+    penaltyReason: tx.penaltyReason,
   });
 
   const handleExportCSV = () => {
@@ -245,69 +246,85 @@ const TransactionsScreen: React.FC = () => {
                   {date}
                 </h3>
                 <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                  {(txs as ApiTransaction[]).map((tx) => (
-                    <div
-                      key={tx.id}
-                      onClick={() =>
-                        setSelectedTransaction(toTransactionModal(tx))
-                      }
-                      className="p-3 sm:p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer border-b border-slate-100 dark:border-slate-800 last:border-0 transition-colors group"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
-                            tx.direction === "credit"
-                              ? "bg-green-100 text-green-600 dark:bg-green-900/20 dark:text-green-400"
-                              : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
-                          }`}
-                        >
-                          {tx.direction === "credit" ? (
-                            <ArrowDownLeft className="w-4 h-4" />
-                          ) : (
-                            <ArrowUpRight className="w-4 h-4" />
-                          )}
+                  {(txs as ApiTransaction[]).map((tx) => {
+                    const isVault = tx.category?.startsWith("VAULT");
+                    return (
+                      <div
+                        key={tx.id}
+                        onClick={() =>
+                          setSelectedTransaction(toTransactionModal(tx))
+                        }
+                        className="p-3 sm:p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer border-b border-slate-100 dark:border-slate-800 last:border-0 transition-colors group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
+                              tx.direction === "credit"
+                                ? "bg-green-100 text-green-600 dark:bg-green-900/20 dark:text-green-400"
+                                : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                            }`}
+                          >
+                            {tx.direction === "credit" ? (
+                              <ArrowDownLeft className="w-4 h-4" />
+                            ) : (
+                              <ArrowUpRight className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-primary transition-colors line-clamp-1">
+                              {tx.category === "INTERNAL_TRANSFER"
+                                ? tx.direction === "debit"
+                                  ? `Moved to ${
+                                      tx.counterpartyWalletType ===
+                                      "MAIN_CHECKINGS"
+                                        ? "Savings"
+                                        : "Main Checking"
+                                    }`
+                                  : `Moved from ${
+                                      tx.counterpartyWalletType === "SAVINGS"
+                                        ? "Savings"
+                                        : "Main Checking"
+                                    }`
+                                : tx.category === "VAULT_WITHDRAWAL"
+                                  ? "Vault Withdrawal"
+                                  : tx.category === "VAULT_DEPOSIT"
+                                    ? "Vault Deposit"
+                                    : tx.direction === "debit"
+                                      ? `Payment Sent to ${tx.counterpartyName ?? "Unknown"}`
+                                      : `Payment Received from ${tx.counterpartyWalletType ?? "Unknown"}`}
+                            </h4>
+                            <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 font-medium">
+                              {tx.category}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <h4 className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm group-hover:text-primary transition-colors">
-                            {tx.category === "INTERNAL_TRANSFER"
-                              ? tx.direction === "debit"
-                                ? `Moved to ${tx.counterpartyWalletType === "SAVINGS" ? "Savings" : "Main Checking"}`
-                                : `Moved from ${tx.counterpartyWalletType === "SAVINGS" ? "Savings" : "Main Checking"}`
-                              : tx.direction === "debit"
-                                ? `Sent to ${tx.counterpartyName ?? "Unknown"}`
-                                : `Received from ${tx.counterpartyName ?? "Unknown"}`}
-                          </h4>
-                          <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 font-medium">
-                            {tx.category}
+                        <div className="text-right">
+                          <p
+                            className={`font-bold text-xs sm:text-sm ${tx.direction === "credit" ? "text-green-600 dark:text-green-400" : "text-slate-900 dark:text-white"}`}
+                          >
+                            {tx.direction === "credit" ? "+" : "-"}₦
+                            {Math.abs(tx.amount).toLocaleString("en-NG", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </p>
+                          <p
+                            className={`text-[9px] sm:text-[10px] font-bold uppercase tracking-wider ${
+                              tx.status === "TRANSACTION_COMPLETED"
+                                ? "text-green-500"
+                                : tx.status === "PENDING"
+                                  ? "text-yellow-500"
+                                  : "text-red-500"
+                            }`}
+                          >
+                            {tx.status === "TRANSACTION_COMPLETED"
+                              ? "SUCCESS"
+                              : tx.status}
                           </p>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p
-                          className={`font-bold text-xs sm:text-sm ${tx.direction === "credit" ? "text-green-600 dark:text-green-400" : "text-slate-900 dark:text-white"}`}
-                        >
-                          {tx.direction === "credit" ? "+" : "-"}₦
-                          {Math.abs(tx.amount).toLocaleString("en-NG", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </p>
-                        <p
-                          className={`text-[9px] sm:text-[10px] font-bold uppercase tracking-wider ${
-                            tx.status === "TRANSACTION_COMPLETED"
-                              ? "text-green-500"
-                              : tx.status === "PENDING"
-                                ? "text-yellow-500"
-                                : "text-red-500"
-                          }`}
-                        >
-                          {tx.status === "TRANSACTION_COMPLETED"
-                            ? "SUCCESS"
-                            : tx.status}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}

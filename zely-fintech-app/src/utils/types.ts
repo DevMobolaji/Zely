@@ -19,6 +19,7 @@ export interface Transaction {
     address: string;
     mapPlaceholderColor?: string;
   };
+  penaltyReason: string;
 }
 
 export interface Account {
@@ -73,6 +74,7 @@ export interface ApiTransaction {
   occurredAt: string;
   name: string;
   referenceId: string;
+  penaltyReason: string;
 }
 
 export interface ApiWallet {

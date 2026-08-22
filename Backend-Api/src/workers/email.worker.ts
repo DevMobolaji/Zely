@@ -12,8 +12,6 @@ console.log("🔥 EMAIL WORKER FILE LOADED");
 
 const workerRegistry = new Registry();
 
-// ─── Worker-local metrics ─────────────────────────────────────────────────────
-// Defined here, registered only on workerRegistry — isolated from the main app.
 const bullmqJobTotal = new Counter({
   name: "bullmq_job_total",
   help: "Total BullMQ jobs processed",

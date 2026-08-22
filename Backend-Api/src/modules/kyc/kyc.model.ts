@@ -6,8 +6,8 @@ export enum KycSubmissionStatus {
   PENDING_REVIEW = "PENDING_REVIEW",
   AUTO_APPROVED = "AUTO_APPROVED",
   AUTO_REJECTED = "AUTO_REJECTED",
-  APPROVED = "APPROVED",       // admin approved (manual)
-  REJECTED = "REJECTED",       // admin rejected (manual)
+  APPROVED = "APPROVED", // admin approved (manual)
+  REJECTED = "REJECTED", // admin rejected (manual)
 }
 
 export enum GovernmentIdType {
@@ -32,7 +32,11 @@ export interface IAddress {
 }
 
 export interface KycSubmissionDocument extends Document {
-  userId: Types.ObjectId;
+  userId: {
+    type: Schema.Types.ObjectId;
+    ref: "User";
+    required: true;
+  };
   userPublicId: string;
   targetTier: KycTier;
   status: KycSubmissionStatus;
@@ -49,12 +53,12 @@ export interface KycSubmissionDocument extends Document {
   livenessVideoUrl?: string;
 
   // Verifier metadata
-  providerName?: string;          // ADMIN, DOJAH, SMILE_IDENTITY
-  providerReference?: string;     // reference returned by external provider
-  providerRawResponse?: any;      // raw response for debugging
+  providerName?: string; // ADMIN, DOJAH, SMILE_IDENTITY
+  providerReference?: string; // reference returned by external provider
+  providerRawResponse?: any; // raw response for debugging
 
   // Review metadata
-  reviewedBy?: Types.ObjectId;    // admin user (only for manual reviews)
+  reviewedBy?: Types.ObjectId; // admin user (only for manual reviews)
   reviewedAt?: Date;
   rejectionReason?: string;
 
@@ -116,7 +120,7 @@ const KycSubmissionSchema = new Schema(
 
     submittedAt: { type: Date, default: Date.now },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Prevent two pending submissions for same user
@@ -125,7 +129,7 @@ KycSubmissionSchema.index(
   {
     unique: true,
     partialFilterExpression: { status: KycSubmissionStatus.PENDING_REVIEW },
-  }
+  },
 );
 
 // BVN must be unique across approved submissions (one BVN = one identity)
@@ -134,13 +138,15 @@ KycSubmissionSchema.index(
   {
     unique: true,
     partialFilterExpression: {
-      status: { $in: [KycSubmissionStatus.APPROVED, KycSubmissionStatus.AUTO_APPROVED] },
+      status: {
+        $in: [KycSubmissionStatus.APPROVED, KycSubmissionStatus.AUTO_APPROVED],
+      },
       bvn: { $exists: true, $type: "string" },
     },
-  }
+  },
 );
 
 export const KycSubmission = mongoose.model<KycSubmissionDocument>(
   "KycSubmission",
-  KycSubmissionSchema
+  KycSubmissionSchema,
 );
