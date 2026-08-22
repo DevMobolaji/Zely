@@ -1,28 +1,24 @@
-import React, { useEffect, useState } from "react";
 import {
-  CheckCircle2,
-  XCircle,
-  Search,
-  Filter,
-  Eye,
-  Clock,
-  User as UserIcon,
-  Mail,
-  FileText,
-  ExternalLink,
-  ChevronRight,
-  X,
-  Loader2,
   AlertCircle,
-  ChevronDown,
-  Shield,
+  CheckCircle2,
+  Clock,
+  ExternalLink,
+  Eye,
+  FileText,
+  Filter,
+  Loader2,
   MapPin,
+  Search,
+  Shield,
+  User as UserIcon,
   Video,
+  X,
+  XCircle,
 } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { useToast } from "../../context/ToastContext";
 import { kycService } from "../../services/kycService";
 import { KYCSubmission, Tier2Payload, Tier3Payload } from "../../types";
-import { useToast } from "../../context/ToastContext";
-import StateRenderer from "../../components/common/StateRenderer";
 
 const AdminKYCScreen: React.FC = () => {
   const { showToast } = useToast();
@@ -72,7 +68,7 @@ const AdminKYCScreen: React.FC = () => {
     setActionLoading("reject");
     try {
       await kycService.rejectSubmission(id, rejectReason);
-      showToast("success", "thank you for submitting");
+      showToast("success", "Submission rejected successfully");
       setSelectedSub(null);
       setShowRejectInput(false);
       setRejectReason("");

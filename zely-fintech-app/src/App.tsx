@@ -1,6 +1,7 @@
 import { DashboardDataProvider } from "@/context/DashboardDataContext";
+import { NotificationProvider } from "@/context/notificationCOntext";
+import NotificationsScreen from "@/pages/dashboard/NotificationScreen";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import React from "react";
 import {
   Navigate,
@@ -31,8 +32,6 @@ import TransactionsScreen from "./pages/dashboard/TransactionsScreen";
 import TransfersScreen from "./pages/dashboard/TransfersScreen";
 import WalletsScreen from "./pages/dashboard/WalletsScreen";
 import ProvisioningScreen from "./pages/onboarding/ProvisioningScreen";
-import NotificationsScreen from "@/pages/dashboard/NotificationScreen";
-import { NotificationProvider } from "@/context/notificationCOntext";
 //import UtilityBillsScreen from './pages/dashboard/UtilityBillsScreen';
 
 const queryClient = new QueryClient({
@@ -80,7 +79,7 @@ const App: React.FC = () => {
                 </Route>
 
                 {/* All protected dashboard routes — NotificationProvider lives HERE */}
-                <Route element={<RequireAuth />}>
+                <Route element={<RequireAuth disallowedRoles={["ADMIN"]} />}>
                   <Route
                     element={
                       <NotificationProvider>
@@ -121,48 +120,6 @@ const App: React.FC = () => {
                       element={<NotificationsScreen />}
                     />{" "}
                     {/* ← moved inside */}
-                  </Route>
-                </Route>
-
-                {/* Admin Routes — untouched */}
-                <Route element={<RequireAuth disallowedRoles={["ADMIN"]} />}>
-                  <Route
-                    element={
-                      <NotificationProvider>
-                        <DashboardDataProvider>
-                          <DashboardLayout />
-                        </DashboardDataProvider>
-                      </NotificationProvider>
-                    }
-                  >
-                    <Route path="/dashboard" element={<DashboardScreen />} />
-                    <Route path="/wallets" element={<WalletsScreen />} />
-                    <Route
-                      path="/wallets/:walletId"
-                      element={<WalletsScreen />}
-                    />
-                    <Route path="/fund-wallet" element={<TransfersScreen />} />
-                    <Route path="/transfers" element={<TransfersScreen />} />
-                    <Route
-                      path="/transactions"
-                      element={<TransactionsScreen />}
-                    />
-                    <Route path="/savings" element={<SavingsScreen />} />
-                    <Route path="/profile" element={<ProfileScreen />} />
-                    <Route path="/settings" element={<SettingsScreen />} />
-                    <Route path="/kyc" element={<KYCStatusScreen />} />
-                    <Route
-                      path="/kyc/upgrade/tier-2"
-                      element={<KYCTier2Form />}
-                    />
-                    <Route
-                      path="/kyc/upgrade/tier-3"
-                      element={<KYCTier3Form />}
-                    />
-                    <Route
-                      path="/notifications"
-                      element={<NotificationsScreen />}
-                    />
                   </Route>
                 </Route>
 

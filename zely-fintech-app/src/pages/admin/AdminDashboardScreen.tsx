@@ -443,6 +443,19 @@ const AdminDashboardScreen: React.FC = () => {
   const [viewedUser, setViewedUser] = useState<UserData | null>(null);
   const [editFormData, setEditFormData] = useState<Partial<UserData>>({});
   const [selectedReconUser, setSelectedReconUser] = useState<any | null>(null);
+  const accountReportQueryRef = useRef<HTMLInputElement | null>(null);
+
+  const userDetailStats = useMemo(() => {
+    if (!viewedUser) {
+      return { vaultsLinked: "—", totalWallets: "—" };
+    }
+
+    const seed = Number.parseInt(viewedUser.id.replace(/\D/g, ""), 10) || 0;
+    return {
+      vaultsLinked: (seed % 3) + 1,
+      totalWallets: (seed % 4) + 1,
+    };
+  }, [viewedUser?.id]);
 
   const handleLogout = async () => {
     await authService.logout();
@@ -517,22 +530,18 @@ const AdminDashboardScreen: React.FC = () => {
     setIsViewUserModalOpen(true);
   };
 
+  const sanitizeCsvField = (value: string | number | null | undefined) => {
+    const raw = String(value ?? "").replace(/\r?\n/g, " ").replace(/"/g, '""');
+    const escaped = raw.startsWith("=") || raw.startsWith("+") || raw.startsWith("-") || raw.startsWith("@") ? `'${raw}` : raw;
+    return `"${escaped.replace(/,/g, ";")}"`;
+  };
+
   const handleDownloadStatement = (user: UserData) => {
-    let userTxs = transactions.filter((t) => t.userId === user.id);
+    const userTxs = transactions.filter((t) => t.userId === user.id);
 
     if (userTxs.length === 0) {
-      userTxs = [
-        {
-          id: `TX-${Date.now()}`,
-          userId: user.id,
-          userName: user.name,
-          amount: 0.0,
-          type: "refund",
-          flow: "in",
-          status: "success",
-          date: new Date().toISOString(),
-        },
-      ];
+      showToast("info", `No transactions found for ${user.name}`);
+      return;
     }
 
     const headers = ["Date", "Type", "Flow", "Amount", "Status"];
@@ -544,19 +553,24 @@ const AdminDashboardScreen: React.FC = () => {
       t.status,
     ]);
 
-    let csvContent =
-      headers.join(",") + "\n" + rows.map((e) => e.join(",")).join("\n");
+    const csvContent = [
+      headers.map(sanitizeCsvField).join(","),
+      ...rows.map((row) => row.map(sanitizeCsvField).join(",")),
+    ].join("\n");
+
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", url);
+    const safeUserName = user.name.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "") || "user";
     link.setAttribute(
       "download",
-      `statement_${user.name.replace(/\s+/g, "_")}_${Date.now()}.csv`,
+      `statement_${safeUserName}_${Date.now()}.csv`,
     );
+    link.setAttribute("href", url);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     showToast("success", "Statement downloaded successfully");
   };
   const handleSortUsers = (key: keyof UserData) =>
@@ -1801,20 +1815,14 @@ const AdminDashboardScreen: React.FC = () => {
               </h4>
               <div className="flex flex-col md:flex-row gap-4 max-w-2xl">
                 <input
+                  ref={accountReportQueryRef}
                   type="text"
-                  id="accountReportQuery"
                   placeholder="Enter User Email or ID..."
                   className="flex-1 px-4 py-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-sm focus:ring-2 focus:ring-primary outline-none text-slate-900 dark:text-white"
                 />
                 <button
                   onClick={() => {
-                    const query = (
-                      (
-                        document.getElementById(
-                          "accountReportQuery",
-                        ) as HTMLInputElement
-                      )?.value || ""
-                    )
+                    const query = (accountReportQueryRef.current?.value || "")
                       .toLowerCase()
                       .trim();
                     if (!query)
@@ -1822,26 +1830,19 @@ const AdminDashboardScreen: React.FC = () => {
                         "error",
                         "Please enter a user ID or email",
                       );
-                    let usr = users.find(
+
+                    const matchedUser = users.find(
                       (u) =>
                         u.email.toLowerCase() === query ||
                         u.id.toLowerCase() === query,
                     );
-                    if (!usr) {
-                      usr = {
-                        id: `USR-${Date.now().toString().slice(-4)}`,
-                        name: query.includes("@") ? query.split("@")[0] : query,
-                        email: query.includes("@")
-                          ? query
-                          : `${query}@example.com`,
-                        status: "active",
-                        role: "user",
-                        joinedDate: new Date().toISOString().split("T")[0],
-                        avatarSeed: query,
-                        balance: 0,
-                      };
+
+                    if (!matchedUser) {
+                      showToast("error", `No user found for "${query}"`);
+                      return;
                     }
-                    handleDownloadStatement(usr);
+
+                    handleDownloadStatement(matchedUser);
                   }}
                   className="px-6 py-3 bg-slate-900 dark:bg-slate-700 text-white rounded-xl font-bold text-sm shadow-lg hover:bg-slate-800 dark:hover:bg-slate-600 transition-colors flex items-center justify-center gap-2"
                 >
@@ -1850,8 +1851,6 @@ const AdminDashboardScreen: React.FC = () => {
               </div>
             </div>
           )}
-
-          {reconActiveTab === "reports" && <AdminReconciliationScreen />}
 
           {reconActiveTab === "setup" && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in">
@@ -2150,7 +2149,7 @@ const AdminDashboardScreen: React.FC = () => {
                     Vaults Linked
                   </p>
                   <p className="text-xl font-black text-slate-900 dark:text-white">
-                    {Math.floor(Math.random() * 3) + 1}
+                    {userDetailStats.vaultsLinked}
                   </p>
                 </div>
                 <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700/50 w-full overflow-hidden">
@@ -2158,7 +2157,7 @@ const AdminDashboardScreen: React.FC = () => {
                     Total Wallets
                   </p>
                   <p className="text-xl font-black text-slate-900 dark:text-white">
-                    {Math.floor(Math.random() * 4) + 1}
+                    {userDetailStats.totalWallets}
                   </p>
                 </div>
                 <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700/50 w-full overflow-hidden">

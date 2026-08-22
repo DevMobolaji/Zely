@@ -3,10 +3,11 @@ import { axiosPrivate } from "../api/client";
 
 import {
   KYCDocumentType,
+  KYCStatus,
   KYCSubmission,
   KYCTier,
-  KYCStatus,
   Tier2Payload,
+  Tier3Payload,
 } from "../types"; // adjust to your actual path
 
 export interface UploadSignatureResponse {
@@ -68,19 +69,21 @@ export interface KycSubmissionResponse {
 // (if population didn't run) or this populated shape (if it did).
 interface RawSubmissionDoc {
   _id: string;
-  userId: {
+  userId?: {
     _id: string;
     email?: string;
     name?: string;
-  };
+  } | null;
   userPublicId: string;
   targetTier: string;
   status: string;
-  bvn: string;
-  nin: string;
-  dateOfBirth: string;
-  governmentId: GovernmentIdPayload;
-  address: AddressPayload;
+  bvn?: string;
+  nin?: string;
+  dateOfBirth?: string;
+  governmentId?: GovernmentIdPayload;
+  address?: AddressPayload;
+  selfieUrl?: string;
+  livenessVideoUrl?: string;
   providerName: string;
   submittedAt: string;
   createdAt: string;
@@ -91,29 +94,35 @@ interface RawSubmissionDoc {
 /**
  * Maps the raw backend document (Mongoose shape, flat fields, `_id`,
  * populated `userId`) into the frontend's KYCSubmission type (`id`,
- * `tier`, nested `data`). Currently only handles tier-2 shaped docs —
- * extend the `data` branch if/when tier-3 admin review needs the same
- * treatment.
+ * `tier`, nested `data`).
  */
 function mapToKYCSubmission(doc: RawSubmissionDoc): KYCSubmission {
-  const tier2Data: Tier2Payload = {
-    bvn: doc.bvn,
-    nin: doc.nin,
-    dateOfBirth: doc.dateOfBirth,
-    governmentId: doc.governmentId as Tier2Payload["governmentId"],
-    address: doc.address,
+  const tier2Data: Tier2Payload | null =
+    doc.governmentId && doc.address
+      ? {
+          bvn: doc.bvn ?? "",
+          nin: doc.nin ?? "",
+          dateOfBirth: doc.dateOfBirth ?? "",
+          governmentId: doc.governmentId as Tier2Payload["governmentId"],
+          address: doc.address,
+        }
+      : null;
+
+  const tier3Data: Tier3Payload = {
+    selfieUrl: doc.selfieUrl ?? "",
+    livenessVideoUrl: doc.livenessVideoUrl ?? "",
   };
 
   return {
     id: doc._id,
     userId: doc.userPublicId,
-    userEmail: doc?.userId.email,
-    userName: doc?.userId.name,
+    userEmail: doc?.userId?.email,
+    userName: doc?.userId?.name,
     tier: doc.targetTier as KYCTier,
     status: doc.status as KYCStatus,
     submittedAt: doc.submittedAt,
     rejectionReason: doc.rejectionReason,
-    data: tier2Data,
+    data: doc.targetTier === "TIER_3" ? tier3Data : (tier2Data ?? tier3Data),
   };
 }
 

@@ -1,5 +1,5 @@
 // src/modules/kyc/kyc.model.ts
-import mongoose, { Schema, Document, Types } from "mongoose";
+import mongoose, { Document, Schema, Types } from "mongoose";
 import { KycTier } from "../transactionLimit/transaction.limit.model";
 
 export enum KycSubmissionStatus {
@@ -32,11 +32,7 @@ export interface IAddress {
 }
 
 export interface KycSubmissionDocument extends Document {
-  userId: {
-    type: Schema.Types.ObjectId;
-    ref: "User";
-    required: true;
-  };
+  userId: Types.ObjectId;
   userPublicId: string;
   targetTier: KycTier;
   status: KycSubmissionStatus;

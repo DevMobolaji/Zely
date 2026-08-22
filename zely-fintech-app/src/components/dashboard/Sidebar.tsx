@@ -1,26 +1,24 @@
-import React from "react";
-import { useNavigate } from "react-router-dom";
 import {
-  Home,
-  List,
-  Wallet,
-  CreditCard,
-  Settings,
-  TrendingUp,
-  LogOut,
   Activity,
-  X,
-  PiggyBank,
   ArrowLeftRight,
   Download,
-  UserCircle,
-  ShieldCheck,
-  Users,
   History as HistoryIcon,
-  Lightbulb,
+  Home,
+  List,
+  LogOut,
+  PiggyBank,
+  Settings,
+  ShieldCheck,
+  TrendingUp,
+  UserCircle,
+  Users,
+  Wallet,
+  X,
 } from "lucide-react";
-import { authService } from "../../services/auth.services";
+import React from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/AuthProvider";
+import { authService } from "../../services/auth.services";
 
 interface SidebarProps {
   activeTab: string;
@@ -46,7 +44,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const isActive = (path: string) => {
     if (path === activeTab) return true;
     // Ensure root paths don't catch sub-paths that have their own tabs
-    if (path === "/dashboard" || path === "/ADMIN") {
+    if (path === "/dashboard" || path === "/admin") {
       return activeTab === path;
     }
     return activeTab.startsWith(path + "/");
