@@ -333,11 +333,14 @@ class KycService {
   public async listPending() {
     return KycSubmission.find({ status: KycSubmissionStatus.PENDING_REVIEW })
       .sort({ submittedAt: 1 })
+      .populate("userId", "email name") // <-- add this
       .lean();
   }
 
   public async getSubmissionById(submissionId: string) {
-    const submission = await KycSubmission.findById(submissionId).lean();
+    const submission = await KycSubmission.findById(submissionId)
+      .populate("userId", "email name") // <-- add this
+      .lean();
     if (!submission) throw new NotFoundError("SUBMISSION_NOT_FOUND");
     return submission;
   }

@@ -71,13 +71,17 @@ const LoginScreen: React.FC = () => {
 
         showToast("success", `Welcome back, ${user.name}`);
 
+        // ─── REPLACED BLOCK STARTS HERE ───────────────────────────────
         const from = (location.state as any)?.from?.pathname;
         const safePaths = ["/unauthorized", "/login", "/", undefined];
-        const redirectTo = safePaths.includes(from)
-          ? user.role === "ADMIN"
-            ? "/admin"
-            : "/dashboard"
-          : from;
+
+        let redirectTo: string;
+        if (user.role === "ADMIN") {
+          redirectTo = "/admin"; // admins always land here, ignoring any `from`
+        } else {
+          redirectTo = safePaths.includes(from) ? "/dashboard" : from;
+        }
+        // ─── REPLACED BLOCK ENDS HERE ─────────────────────────────────
 
         navigate(redirectTo, { replace: true });
       } catch (error: any) {

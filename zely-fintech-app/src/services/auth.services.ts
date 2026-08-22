@@ -94,10 +94,8 @@ export const authService = {
     }
   },
 
-  refreshToken: async (refreshToken: string): Promise<AuthUser> => {
-    const response = await axiosPrivate.post("/auth/refresh-token", {
-      refreshToken,
-    });
+  refreshToken: async (): Promise<AuthUser> => {
+    const response = await axiosPrivate.post("/auth/refresh-token", {});
     return response.data.user;
   },
 

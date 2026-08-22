@@ -3,7 +3,13 @@ import { useLocation, Navigate, Outlet } from "react-router-dom";
 import { useAuth } from "./AuthProvider";
 import { Loader2 } from "lucide-react";
 
-const RequireAuth = ({ allowedRoles }: { allowedRoles?: string[] }) => {
+const RequireAuth = ({
+  allowedRoles,
+  disallowedRoles,
+}: {
+  allowedRoles?: string[];
+  disallowedRoles?: string[];
+}) => {
   const { auth, isLoading } = useAuth();
   const location = useLocation();
 
@@ -23,6 +29,14 @@ const RequireAuth = ({ allowedRoles }: { allowedRoles?: string[] }) => {
     allowedRoles &&
     auth?.user?.role &&
     !allowedRoles.includes(auth.user.role)
+  ) {
+    return <Navigate to="/unauthorized" state={{ from: location }} replace />;
+  }
+
+  if (
+    disallowedRoles &&
+    auth?.user?.role &&
+    disallowedRoles.includes(auth.user.role)
   ) {
     return <Navigate to="/unauthorized" state={{ from: location }} replace />;
   }

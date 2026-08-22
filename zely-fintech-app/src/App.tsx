@@ -125,8 +125,58 @@ const App: React.FC = () => {
                 </Route>
 
                 {/* Admin Routes — untouched */}
-                <Route element={<RequireAuth allowedRoles={["admin"]} />}>
-                  <Route element={<DashboardLayout />}>
+                <Route element={<RequireAuth disallowedRoles={["ADMIN"]} />}>
+                  <Route
+                    element={
+                      <NotificationProvider>
+                        <DashboardDataProvider>
+                          <DashboardLayout />
+                        </DashboardDataProvider>
+                      </NotificationProvider>
+                    }
+                  >
+                    <Route path="/dashboard" element={<DashboardScreen />} />
+                    <Route path="/wallets" element={<WalletsScreen />} />
+                    <Route
+                      path="/wallets/:walletId"
+                      element={<WalletsScreen />}
+                    />
+                    <Route path="/fund-wallet" element={<TransfersScreen />} />
+                    <Route path="/transfers" element={<TransfersScreen />} />
+                    <Route
+                      path="/transactions"
+                      element={<TransactionsScreen />}
+                    />
+                    <Route path="/savings" element={<SavingsScreen />} />
+                    <Route path="/profile" element={<ProfileScreen />} />
+                    <Route path="/settings" element={<SettingsScreen />} />
+                    <Route path="/kyc" element={<KYCStatusScreen />} />
+                    <Route
+                      path="/kyc/upgrade/tier-2"
+                      element={<KYCTier2Form />}
+                    />
+                    <Route
+                      path="/kyc/upgrade/tier-3"
+                      element={<KYCTier3Form />}
+                    />
+                    <Route
+                      path="/notifications"
+                      element={<NotificationsScreen />}
+                    />
+                  </Route>
+                </Route>
+
+                {/* Admin Routes — only admins allowed */}
+                <Route element={<RequireAuth allowedRoles={["ADMIN"]} />}>
+                  <Route
+                    element={
+                      <NotificationProvider>
+                        <DashboardDataProvider>
+                          <DashboardLayout />
+                        </DashboardDataProvider>
+                      </NotificationProvider>
+                    }
+                  >
                     <Route path="/admin" element={<AdminDashboardScreen />} />
                     <Route path="/admin/kyc" element={<AdminKYCScreen />} />
                     <Route

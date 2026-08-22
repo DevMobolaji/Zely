@@ -176,7 +176,7 @@ const KYCTier2Form: React.FC = () => {
 
     setLoading(true);
     try {
-      await kycService.submitTier2(formData);
+      await kycService.upgradeToTier2(formData);
       showToast("success", "Tier 2 application submitted successfully");
       await fetchStatus(); // Refresh status to transition UI immediately
       navigate("/kyc");
